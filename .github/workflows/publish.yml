@@ -39,6 +39,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          NAMESPACE=$(echo "${{ env.NAMESPACE }}" | tr '[:upper:]' '[:lower:]')
 
           SYSTEMS=("cl-oci" "cl-oci-client" "cl-repository-packager" "cl-repository-client" "cl-repository-ql-exporter")
 
@@ -68,10 +69,12 @@ jobs:
       - name: Verify published artifacts
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          NAMESPACE=$(echo "${{ env.NAMESPACE }}" | tr '[:upper:]' '[:lower:]')
 
           SYSTEMS=("cl-oci" "cl-oci-client" "cl-repository-packager" "cl-repository-client" "cl-repository-ql-exporter")
 
           for SYSTEM in "${SYSTEMS[@]}"; do
-            echo "Verifying ${SYSTEM}:${VERSION}"
-            oras manifest fetch "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${SYSTEM}:${VERSION}"
+            REF="${{ env.REGISTRY }}/${NAMESPACE}/${SYSTEM}:${VERSION}"
+            echo "Verifying ${REF}"
+            oras manifest fetch "${REF}" --registry-config <(echo '{"auths":{"ghcr.io":{"username":"${{ github.actor }}","password":"${{ secrets.GITHUB_TOKEN }}"}}}')
           done
