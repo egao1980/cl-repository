@@ -1,4 +1,4 @@
-# v0.3.0 — OCICL Compatibility + OCI Client Interop Fixes
+# v0.4.0 — OCICL Compatibility + OCI Client Interop Fixes
 
 ## OCICL Compatibility
 
@@ -15,7 +15,7 @@
 - **Mixed registries**: configure multiple registries with different types; client searches in order and handles each format transparently
 - **Smart name parsing**: correctly handles hyphenated system names (e.g., `cl-ppcre`) by detecting the date segment boundary
 
-## OCI Client Interop Fixes (v0.2.1)
+## OCI Client Interop Fixes (v0.3.0)
 
 - **`oras pull` support**: layer descriptors now include `org.opencontainers.image.title` annotations (e.g., `source.tar.gz`), allowing `oras pull` to correctly name downloaded files
 - **POSIX tar compliance**: tar entries with paths >100 characters use the ustar `prefix` field; checksum field trailing byte corrected to match POSIX spec — eliminates "Damaged tar archive" warnings on macOS/BSD tar
