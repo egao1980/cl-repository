@@ -41,14 +41,16 @@ exec ros -Q -- $0 "$@"
   (format t "  --registry <url>      Registry URL (default: ghcr.io)~%")
   (format t "  --namespace <ns>      Repository namespace (default: cl-systems)~%")
   (format t "  --quiet               Suppress informational output~%")
-  (format t "  --dry-run             Show what would be done without doing it~%"))
+  (format t "  --dry-run             Show what would be done without doing it~%")
+  (format t "  --remote              For 'list': query registries instead of local~%")
+  (format t "  --force               For 'load': re-resolve deps, allow upgrades~%"))
 
 (defun parse-options (args)
   "Parse --key value pairs from args. Returns (values command-args options-plist).
    Boolean flags (--quiet, --dry-run) don't consume the next argument."
   (let ((cmd-args nil)
         (options nil)
-        (boolean-flags '("quiet" "dry-run" "incremental")))
+        (boolean-flags '("quiet" "dry-run" "incremental" "remote" "force")))
     (loop with i = 0
           while (< i (length args))
           for arg = (nth i args)
@@ -85,7 +87,8 @@ exec ros -Q -- $0 "$@"
              (unless cmd-args
                (format *error-output* "~&Error: load requires system name(s)~%")
                (ros:quit 1))
-             (cl-repository-client/quickload:load-system cmd-args))
+             (cl-repository-client/quickload:load-system
+              cmd-args :force (getf opts :force)))
 
             ((string-equal command "install")
              (unless cmd-args
@@ -98,7 +101,7 @@ exec ros -Q -- $0 "$@"
              (cmd-update :registry-url registry-url :namespace namespace))
 
             ((string-equal command "list")
-             (cmd-list))
+             (cmd-list :remote (getf opts :remote)))
 
             ((string-equal command "search")
              (unless cmd-args
@@ -119,10 +122,9 @@ exec ros -Q -- $0 "$@"
                     (result (build-package spec))
                     (reg (or registry-url "ghcr.io"))
                     (ns (or namespace "cl-systems"))
-                    (repo (format nil "~a/~a" ns system-name))
                     (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
                              "latest")))
-               (publish-package reg repo tag result)))
+               (publish-package reg ns tag result spec)))
 
             ((string-equal command "lock")
              (format t "~&Lockfile generation not yet implemented~%"))

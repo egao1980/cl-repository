@@ -3,6 +3,9 @@
   (:use-reexport
    :cl-repository-client/platform-resolver
    :cl-repository-client/installer
+   :cl-repository-client/digest-cache
+   :cl-repository-client/solver
+   :cl-repository-client/constraint-builder
    :cl-repository-client/lockfile
    :cl-repository-client/asdf-integration
    :cl-repository-client/quickload

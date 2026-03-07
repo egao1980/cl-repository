@@ -14,7 +14,7 @@
                                 :license "MIT"
                                 :provides '("installable"))))
       (let ((result (build-package spec)))
-        (publish-package reg repo tag result))
+        (publish-package reg *test-namespace* tag result spec))
       (uiop:delete-directory-tree source-dir :validate t :if-does-not-exist :ignore))
     ;; Now install it using the client
     (let* ((install-root (uiop:ensure-directory-pathname

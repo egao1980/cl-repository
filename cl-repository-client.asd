@@ -15,6 +15,8 @@
   :components ((:file "platform-resolver-test")
                (:file "lockfile-test")
                (:file "installer-test")
+               (:file "solver-test")
+               (:file "digest-cache-test")
                (:file "all"))
   :perform (test-op (o c)
             (symbol-call :rove :run c)))

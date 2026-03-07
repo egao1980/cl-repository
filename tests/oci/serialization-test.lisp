@@ -49,3 +49,20 @@
          (cfg2 (from-json 'cl-system-config json)))
     (ok (string= (config-system-name cfg2) "test-system"))
     (ok (= (length (config-depends-on cfg2)) 2))))
+
+(deftest versioned-deps-round-trip
+  (let* ((cfg (make-cl-system-config :system-name "my-app"
+                                     :version "2.0.0"
+                                     :depends-on '("alexandria" ("babel" . "0.5") "cffi")))
+         (json (to-json-string cfg))
+         (cfg2 (from-json 'cl-system-config json))
+         (deps (config-depends-on cfg2)))
+    (ok (= (length deps) 3))
+    (ok (stringp (first deps)))
+    (ok (string= (first deps) "alexandria"))
+    ;; Second dep should be a cons with version
+    (ok (consp (second deps)))
+    (ok (string= (car (second deps)) "babel"))
+    (ok (string= (cdr (second deps)) "0.5"))
+    (ok (stringp (third deps)))
+    (ok (string= (third deps) "cffi"))))

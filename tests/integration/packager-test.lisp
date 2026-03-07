@@ -43,8 +43,8 @@
         (ok (plusp (length (build-result-manifests result))))
         (ok (stringp (build-result-index-json result)))
         (ok (search "sha256:" (build-result-index-digest result)))
-        ;; Publish
-        (let ((digest (publish-package reg repo tag result)))
+        ;; Publish (new API: registry namespace tag build-result spec)
+        (let ((digest (publish-package reg *test-namespace* tag result spec)))
           (ok (stringp digest))
           (ok (search "sha256:" digest))))
       ;; Verify: pull back the image index
@@ -92,7 +92,7 @@
                                                    :native-paths '("lib/linux-amd64/libhello.so"))))))
         ;; Build and publish
         (let* ((result (build-package spec))
-               (digest (publish-package reg repo tag result)))
+               (digest (publish-package reg *test-namespace* tag result spec)))
           (declare (ignore digest))
           ;; Pull image index - should have 2 manifests (universal + linux/amd64)
           (let ((idx (pull-manifest reg repo tag)))

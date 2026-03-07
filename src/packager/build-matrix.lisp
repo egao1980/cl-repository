@@ -3,7 +3,8 @@
   (:import-from :cl-oci/platform #:make-platform)
   (:import-from :cl-oci/annotations
                 #:+ann-title+ #:+ann-version+ #:+ann-licenses+ #:+ann-description+
-                #:+ann-created+ #:+ann-authors+ #:+cl-implementation+ #:+cl-layer-roles+)
+                #:+ann-created+ #:+ann-authors+ #:+cl-implementation+ #:+cl-layer-roles+
+                #:+cl-depends-on+ #:+cl-depends-on-versioned+ #:+cl-provides+)
   (:import-from :cl-oci/config #:+role-source+ #:+role-native-library+
                 #:+role-cffi-grovel-output+ #:+role-cffi-wrapper+ #:+role-headers+
                 #:+role-documentation+)
@@ -19,6 +20,9 @@
            #:package-spec-name
            #:package-spec-version
            #:package-spec-source-dir
+           #:package-spec-description
+           #:package-spec-depends-on
+           #:package-spec-provides
            #:package-spec-overlays
            #:overlay-spec
            #:parse-overlay-spec
@@ -65,6 +69,18 @@
    (blobs :type list :initarg :blobs :accessor build-result-blobs)
    (manifests :type list :initarg :manifests :accessor build-result-manifests)))
 
+(defun dep-flat-name (dep)
+  "Extract flat name from a dependency (string or cons)."
+  (etypecase dep
+    (string dep)
+    (cons (car dep))))
+
+(defun dep-versioned-string (dep)
+  "Format a dependency with version constraint: \"name\" or \"name@>=ver\"."
+  (etypecase dep
+    (string dep)
+    (cons (format nil "~a@>=~a" (car dep) (cdr dep)))))
+
 (defun make-annotations (spec)
   "Build OCI annotation hash-table from a package-spec."
   (let ((ann (make-hash-table :test 'equal)))
@@ -75,6 +91,14 @@
       (setf (gethash +ann-description+ ann) (package-spec-description spec)))
     (when (package-spec-author spec) (setf (gethash +ann-authors+ ann) (package-spec-author spec)))
     (setf (gethash +ann-created+ ann) (format-iso-time))
+    (when (package-spec-depends-on spec)
+      (setf (gethash +cl-depends-on+ ann)
+            (format nil "~{~a~^,~}" (mapcar #'dep-flat-name (package-spec-depends-on spec))))
+      (setf (gethash +cl-depends-on-versioned+ ann)
+            (format nil "~{~a~^,~}" (mapcar #'dep-versioned-string (package-spec-depends-on spec)))))
+    (when (package-spec-provides spec)
+      (setf (gethash +cl-provides+ ann)
+            (format nil "~{~a~^,~}" (package-spec-provides spec))))
     ann))
 
 (defun format-iso-time ()

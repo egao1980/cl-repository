@@ -10,13 +10,15 @@
   (:import-from :cl-oci/descriptor #:descriptor #:descriptor-digest #:descriptor-media-type)
   (:import-from :cl-oci/manifest #:manifest #:manifest-layers #:manifest-config)
   (:import-from :cl-oci/image-index #:image-index)
-  (:import-from :cl-oci/config #:cl-system-config #:config-system-name #:config-layer-roles)
+  (:import-from :cl-oci/config #:cl-system-config #:config-system-name #:config-layer-roles
+                #:config-provides #:config-version)
   (:import-from :cl-oci/serialization #:from-json)
   (:import-from :cl-repository-client/platform-resolver #:resolve-manifests)
   (:export #:install-system
            #:extract-layer
            #:systems-root
-           #:system-install-path))
+           #:system-install-path
+           #:create-provides-symlinks))
 (in-package :cl-repository-client/installer)
 
 (defvar *systems-root*
@@ -86,6 +88,9 @@
       ;; Generate cl-repo-init.lisp if needed
       (when (and config (cl-oci/config:config-cffi-libraries config))
         (generate-init-file install-dir config))
+      ;; Create symlinks for provided system names
+      (when config
+        (create-provides-symlinks name (config-provides config)))
       (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
       install-dir)))
 
@@ -104,8 +109,29 @@
       (let ((blob (pull-blob registry repository
                              (format-digest (descriptor-digest layer-desc)))))
         (extract-layer blob install-dir)))
+    (create-provides-symlinks name (config-provides config))
     (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
     install-dir))
+
+(defun create-provides-symlinks (canonical-name provides)
+  "Create symlinks for provided system names that differ from the canonical name.
+   E.g., systems/cffi-toolchain -> systems/cffi"
+  (when provides
+    (let ((canonical-dir (merge-pathnames (format nil "~a/" canonical-name) *systems-root*)))
+      (dolist (provided provides)
+        (unless (string= provided canonical-name)
+          (let ((link-path (merge-pathnames (format nil "~a" provided) *systems-root*)))
+            (unless (probe-file link-path)
+              (handler-case
+                  (progn
+                    (ensure-directories-exist *systems-root*)
+                    ;; Use uiop for portable symlink creation
+                    #+sbcl (sb-posix:symlink (namestring canonical-dir) (namestring link-path))
+                    #+(and (not sbcl) unix)
+                    (uiop:run-program (list "ln" "-s" (namestring canonical-dir) (namestring link-path)))
+                    (msg "~&  Symlink ~a -> ~a~%" provided canonical-name))
+                (error (e)
+                  (msg "~&  Warning: could not create symlink ~a: ~a~%" provided e))))))))))
 
 (defun role-subdirectory (role)
   "Map a layer role to its extraction subdirectory."

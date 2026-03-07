@@ -107,12 +107,22 @@
       (setf (gethash "annotations" ht) (image-index-annotations idx)))
     ht))
 
+(defun serialize-dep (dep)
+  "Serialize a dependency: string -> string, (name . version) -> {name, version}."
+  (etypecase dep
+    (string dep)
+    (cons (let ((ht (make-hash-table :test 'equal)))
+            (setf (gethash "name" ht) (car dep))
+            (setf (gethash "version" ht) (cdr dep))
+            ht))))
+
 (defmethod to-json-value ((cfg cl-system-config))
   (let ((ht (make-hash-table :test 'equal)))
     (setf (gethash "system-name" ht) (config-system-name cfg))
     (when (config-version cfg) (setf (gethash "version" ht) (config-version cfg)))
     (when (config-depends-on cfg)
-      (setf (gethash "depends-on" ht) (coerce (config-depends-on cfg) 'vector)))
+      (setf (gethash "depends-on" ht)
+            (coerce (mapcar #'serialize-dep (config-depends-on cfg)) 'vector)))
     (when (config-provides cfg)
       (setf (gethash "provides" ht) (coerce (config-provides cfg) 'vector)))
     (when (non-empty-hash-p (config-layer-roles cfg))
@@ -195,11 +205,18 @@
                     :subject (parse-descriptor-from-json (gethash* "subject" ht))
                     :annotations (parse-annotations ht)))
 
+(defun deserialize-dep (dep)
+  "Deserialize a dependency: string -> string, {name, version} -> (name . version)."
+  (etypecase dep
+    (string dep)
+    (hash-table (cons (gethash "name" dep) (gethash "version" dep)))))
+
 (defun parse-cl-system-config-from-json (ht)
   (make-cl-system-config
    :system-name (gethash "system-name" ht)
    :version (gethash* "version" ht)
-   :depends-on (when-let ((d (gethash* "depends-on" ht))) (coerce d 'list))
+   :depends-on (when-let ((d (gethash* "depends-on" ht)))
+                 (mapcar #'deserialize-dep (coerce d 'list)))
    :provides (when-let ((p (gethash* "provides" ht))) (coerce p 'list))
    :layer-roles (or (gethash* "layer-roles" ht) (make-hash-table :test 'equal))
    :cffi-libraries (gethash* "cffi-libraries" ht)

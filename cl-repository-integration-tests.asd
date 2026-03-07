@@ -16,6 +16,7 @@
                (:file "packager-test")
                (:file "installer-test")
                (:file "embedded-config-test")
+               (:file "multi-system-test")
                (:file "all"))
   :perform (test-op (o c)
             (symbol-call :rove :run c)))

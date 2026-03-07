@@ -34,34 +34,31 @@ jobs:
           ros install qlot
           qlot install
 
-      - name: Build and publish all systems
+      - name: Build and publish (single image, per-system repos)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           NAMESPACE=$(echo "${{ env.NAMESPACE }}" | tr '[:upper:]' '[:lower:]')
 
-          SYSTEMS=("cl-oci" "cl-oci-client" "cl-repository-packager" "cl-repository-client" "cl-repository-ql-exporter")
-
-          for SYSTEM in "${SYSTEMS[@]}"; do
-            echo "::group::Publishing ${SYSTEM}:${VERSION}"
-            qlot exec ros -e "
-              (asdf:load-system \"cl-repository-packager\")
-              (let* ((auth (cl-oci-client/auth:make-auth-config
-                             :username \"${{ github.actor }}\"
-                             :password (uiop:getenv \"GITHUB_TOKEN\")))
-                     (reg (cl-oci-client/registry:make-registry
-                            \"https://${REGISTRY}\" :auth auth))
-                     (spec (cl-repository-packager/asdf-plugin:auto-package-spec \"${SYSTEM}\"))
-                     (result (cl-repository-packager/build-matrix:build-package spec)))
+          qlot exec ros -e "
+            (asdf:load-system \"cl-repository-packager\")
+            (let* ((auth (cl-oci-client/auth:make-auth-config
+                           :username \"${{ github.actor }}\"
+                           :password (uiop:getenv \"GITHUB_TOKEN\")))
+                   (reg (cl-oci-client/registry:make-registry
+                          \"https://${REGISTRY}\" :auth auth))
+                   (spec (cl-repository-packager/asdf-plugin:auto-package-spec \"cl-oci\")))
+              ;; Override version from git tag; filter out test systems
+              (setf (cl-repository-packager/build-matrix:package-spec-version spec)
+                    \"${VERSION}\")
+              (setf (cl-repository-packager/build-matrix:package-spec-provides spec)
+                    (remove-if (lambda (s) (search \"test\" s))
+                               (cl-repository-packager/build-matrix:package-spec-provides spec)))
+              (let ((result (cl-repository-packager/build-matrix:build-package spec)))
                 (cl-repository-packager/publisher:publish-package
-                  reg
-                  \"${NAMESPACE}/${SYSTEM}\"
-                  \"${VERSION}\"
-                  result))
-            "
-            echo "::endgroup::"
-          done
+                  reg \"${NAMESPACE}\" \"${VERSION}\" result spec)))
+          "
 
       - name: Install ORAS
         uses: oras-project/setup-oras@v1
@@ -70,11 +67,16 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           NAMESPACE=$(echo "${{ env.NAMESPACE }}" | tr '[:upper:]' '[:lower:]')
+          ORAS_AUTH='{"auths":{"ghcr.io":{"username":"${{ github.actor }}","password":"${{ secrets.GITHUB_TOKEN }}"}}}'
 
-          SYSTEMS=("cl-oci" "cl-oci-client" "cl-repository-packager" "cl-repository-client" "cl-repository-ql-exporter")
-
-          for SYSTEM in "${SYSTEMS[@]}"; do
+          for SYSTEM in cl-oci cl-oci-client cl-repository-packager cl-repository-client cl-repository-ql-exporter; do
             REF="${{ env.REGISTRY }}/${NAMESPACE}/${SYSTEM}:${VERSION}"
-            echo "Verifying ${REF}"
-            oras manifest fetch "${REF}" --registry-config <(echo '{"auths":{"ghcr.io":{"username":"${{ github.actor }}","password":"${{ secrets.GITHUB_TOKEN }}"}}}')
+            echo "::group::Verifying ${REF}"
+            oras manifest fetch "${REF}" --registry-config <(echo "${ORAS_AUTH}")
+            echo "::endgroup::"
           done
+
+          echo "::group::Verifying ns-catalog anchor"
+          oras manifest fetch "${{ env.REGISTRY }}/${NAMESPACE}/ns-catalog:latest" \
+            --registry-config <(echo "${ORAS_AUTH}") || echo "No ns-catalog anchor (OK for first publish)"
+          echo "::endgroup::"

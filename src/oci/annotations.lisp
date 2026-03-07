@@ -25,7 +25,9 @@
            #:+cl-cffi-libraries+
            #:+cl-system-name+
            #:+cl-depends-on+
-           #:+cl-provides+))
+           #:+cl-provides+
+           #:+cl-alias-for+
+           #:+cl-depends-on-versioned+))
 (in-package :cl-oci/annotations)
 
 ;;; Standard OCI annotation keys (org.opencontainers.image.*)
@@ -54,3 +56,5 @@
 (define-constant +cl-system-name+ "dev.common-lisp.system.name" :test #'equal)
 (define-constant +cl-depends-on+ "dev.common-lisp.system.depends-on" :test #'equal)
 (define-constant +cl-provides+ "dev.common-lisp.system.provides" :test #'equal)
+(define-constant +cl-alias-for+ "dev.common-lisp.alias-for" :test #'equal)
+(define-constant +cl-depends-on-versioned+ "dev.common-lisp.system.depends-on.versioned" :test #'equal)

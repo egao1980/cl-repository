@@ -1,6 +1,6 @@
 # CL Repository OCI Artifact Format Specification
 
-**Version**: 0.1.0
+**Version**: 0.2.0
 
 ## Overview
 
@@ -37,10 +37,81 @@ Image Index
 | Config blob | `application/vnd.common-lisp.system.config.v1+json` |
 | Layers | `application/vnd.oci.image.layer.v1.tar+gzip` |
 | Artifact type | `application/vnd.common-lisp.system.v1` |
+| Namespace root | `application/vnd.common-lisp.namespace-root.v1` |
+| System-name anchor | `application/vnd.common-lisp.system-name.v1` |
+| System-name config | `application/vnd.common-lisp.system-name.config.v1+json` |
+| Empty config | `application/vnd.oci.empty.v1+json` |
 
 ### Manifest `artifactType`
 
 Every manifest in the index MUST set `artifactType` to `application/vnd.common-lisp.system.v1`.
+
+## Cross-Repo Blob Mounting for Multi-System Packages
+
+When a package provides multiple system names (e.g., `cffi` provides `cffi`, `cffi-toolchain`, `cffi-libffi`), each system name gets its own OCI repository containing the **full package**. This uses OCI cross-repo blob mounting for zero-copy sharing.
+
+### Registry Layout
+
+```
+<ns>/cffi/                    ← primary repo (full push)
+  tags: 0.24.1
+  blobs: sha256:aaa (source), sha256:bbb (config), ...
+
+<ns>/cffi-toolchain/          ← secondary repo (mounted blobs)
+  tags: 0.24.1
+  blobs: sha256:aaa (mounted), sha256:bbb (mounted), ...
+
+<ns>/cffi-libffi/             ← secondary repo (mounted blobs)
+  tags: 0.24.1
+  blobs: sha256:aaa (mounted), sha256:bbb (mounted), ...
+```
+
+All secondary repos contain identical content to the primary. External OCI clients get the same result pulling from any repo:
+
+```bash
+oras pull registry/cl-systems/cffi-toolchain:0.24.1  # full package
+oras pull registry/cl-systems/cffi:0.24.1             # identical content
+```
+
+### Publish Flow
+
+1. Push all blobs and manifests to primary repo `<ns>/<canonical-name>:<version>`
+2. For each secondary system name: mount all blobs via `POST /v2/<target>/blobs/uploads/?mount=<digest>&from=<source>`, then push manifests and image index
+
+## System-Name Anchors and Discovery
+
+### System-Name Anchor
+
+Each system name gets an anchor manifest at `<ns>/<system-name>:latest`:
+
+- `artifactType`: `application/vnd.common-lisp.system-name.v1`
+- Config blob: `{"system-name": "cffi-toolchain", "alias-for": "cffi", "version": "0.24.1"}`
+- Empty layers
+- Annotations: `dev.common-lisp.system.name`, `dev.common-lisp.alias-for`, `org.opencontainers.image.version`
+
+### Provider Referrer
+
+After publishing, a provider referrer is pushed into each system-name repo:
+
+- `subject`: system-name anchor digest
+- `artifactType`: `application/vnd.common-lisp.system.v1`
+- Annotations: package name, version, provides, depends-on
+
+Referrers are discoverable via `GET /v2/<ns>/<system-name>/referrers/<anchor-digest>`.
+
+## Namespace Root and Catalog
+
+A namespace root anchor at `<ns>/ns-catalog:latest` provides a catalog of all published systems:
+
+- `artifactType`: `application/vnd.common-lisp.namespace-root.v1`
+- Empty config, empty layers
+
+Each published system pushes a catalog referrer into `ns-catalog`:
+
+- `subject`: root anchor digest
+- Annotations: `dev.common-lisp.system.name`, `org.opencontainers.image.version`
+
+Browse catalog: `GET /v2/<ns>/ns-catalog/referrers/<root-digest>`
 
 ## Layer Roles
 
@@ -69,7 +140,7 @@ The config blob is a JSON object with media type `application/vnd.common-lisp.sy
 {
   "system-name": "cffi",
   "version": "0.24.1",
-  "depends-on": ["alexandria", "babel", "trivial-features"],
+  "depends-on": ["alexandria", {"name": "babel", "version": "0.5"}, "trivial-features"],
   "provides": ["cffi", "cffi-toolchain", "cffi-libffi"],
   "layer-roles": {
     "sha256:abc...": "source",
@@ -98,20 +169,22 @@ The config blob is a JSON object with media type `application/vnd.common-lisp.sy
 ### Optional Fields
 
 - `version` (string): System version.
-- `depends-on` (array of string): ASDF system dependencies.
+- `depends-on` (array): ASDF system dependencies. Each element is either a string (plain dep) or `{"name": "pkg", "version": "ver"}` (versioned constraint).
 - `provides` (array of string): ASDF system names provided by this package.
 - `layer-roles` (object): Maps layer digest strings to role strings (see Layer Roles).
 - `cffi-libraries` (object): Maps foreign library names to metadata objects.
 - `grovel-systems` (array of string): ASDF systems containing grovel-file components.
 - `build-requires` (object): System-level build requirements. Keys: `headers` (array), `tools` (array).
 
-### CFFI Library Metadata
+### Version Constraints in Dependencies
 
-Each entry in `cffi-libraries` contains:
+Dependencies with version constraints are serialized as objects:
 
-- `define-foreign-library` (string): Fully qualified symbol of the CFFI foreign library definition.
-- `canary` (string): Function name to detect if the library is already loaded.
-- `search-path` (string): Relative path (from system root) added to `cffi:*foreign-library-directories*`.
+```json
+{"name": "babel", "version": "0.5"}
+```
+
+The version string is interpreted as a minimum version using `asdf:version-satisfies` (prefix matching). Plain string dependencies have no version constraint.
 
 ## Annotations
 
@@ -131,19 +204,84 @@ Used on both the Image Index and individual manifest descriptors:
 
 ### CL-Specific Annotations
 
-Used on platform overlay descriptors within the Image Index:
-
 | Key | Description | Example |
 |-----|-------------|---------|
 | `dev.common-lisp.implementation` | Target CL implementation | `sbcl` |
 | `dev.common-lisp.implementation.version` | Version constraint | `>=2.0.0` |
 | `dev.common-lisp.features` | Required `*features*` keywords | `:sb-thread,:sb-unicode` |
-| `dev.common-lisp.layer.roles` | Comma-separated layer roles in this manifest | `native-library,cffi-grovel-output` |
-| `dev.common-lisp.has-native-deps` | Whether the project has native deps | `true` |
-| `dev.common-lisp.cffi-libraries` | Comma-separated foreign library names | `libfoo,libbar` |
+| `dev.common-lisp.layer.roles` | Comma-separated layer roles | `native-library,cffi-grovel-output` |
+| `dev.common-lisp.has-native-deps` | Native deps flag | `true` |
+| `dev.common-lisp.cffi-libraries` | Foreign library names | `libfoo,libbar` |
 | `dev.common-lisp.system.name` | Primary system name | `cffi` |
-| `dev.common-lisp.system.depends-on` | Comma-separated dependencies | `alexandria,babel` |
-| `dev.common-lisp.system.provides` | Comma-separated provided systems | `cffi,cffi-toolchain` |
+| `dev.common-lisp.system.depends-on` | Flat comma-separated deps | `alexandria,babel` |
+| `dev.common-lisp.system.depends-on.versioned` | Deps with version constraints | `alexandria,babel@>=0.5,cffi` |
+| `dev.common-lisp.system.provides` | Provided system names | `cffi,cffi-toolchain` |
+| `dev.common-lisp.alias-for` | Canonical system name (on anchors) | `cffi` |
+
+## Client Resolution Algorithm
+
+### System Installation
+
+1. Try direct pull: `GET <ns>/<system-name>/manifests/<version>`
+2. If result is an image-index: install directly (full package)
+3. If pulled `:latest` and result is a system-name anchor:
+   - a. Try Referrers API: `GET /v2/<ns>/<system-name>/referrers/<anchor-digest>?artifactType=application/vnd.common-lisp.system.v1`
+   - b. If referrers found: filter by version constraints, pick latest
+   - c. If empty/404: read anchor config `alias-for`, install `<ns>/<alias-for>:<version>`
+
+### Dependency Resolution (SAT-based)
+
+The client uses a pure CL SAT solver for transitive dependency resolution:
+
+1. **Scan installed systems**: Build `{name -> version}` map of local installations
+2. **Gather universe**: BFS from root, fetch config blobs for reachable packages, enumerate available versions
+3. **Build formula**: Variables = `<pkg>-v<ver>` pairs. Constraints = root (must be true), implications (deps), mutual exclusion (one version per package), pins (installed systems)
+4. **Solve**: SAT solver with latest-version heuristic returns an assignment
+5. **Extract plan**: Filter true bindings, exclude already-installed
+
+Installed systems are pinned as ground truths unless `:force t` is passed.
+
+### Install Deduplication
+
+- **Canonical name + symlinks**: Install to `systems/<config.system-name>/<version>/`, create symlinks for secondary provided names
+- **Digest cache**: `systems/.digest-cache.sexp` maps manifest digests to install paths
+- **Per-install ASDF refresh**: `configure-asdf-source-registry` after each install so symlinked systems are immediately visible
+
+## Extracted Directory Structure
+
+After installation:
+
+```
+~/.local/share/cl-repository/systems/
+  cffi/0.24.1/                    ← canonical install
+    cffi.asd
+    src/...
+    native/
+    cl-repo-init.lisp
+  cffi-toolchain -> cffi           ← symlink
+  cffi-libffi -> cffi              ← symlink
+  .digest-cache.sexp               ← digest dedup cache
+```
+
+### Post-Install Integration
+
+For systems with native dependencies, `cl-repo-init.lisp` is generated:
+
+```lisp
+(when (find-package :cffi)
+  (pushnew #p"<system-root>/native/"
+           (symbol-value (find-symbol "*FOREIGN-LIBRARY-DIRECTORIES*" :cffi))
+           :test #'equal))
+```
+
+The ASDF source registry includes the systems tree:
+
+```lisp
+(asdf:initialize-source-registry
+  '(:source-registry
+    (:tree (:home ".local/share/cl-repository/systems/"))
+    :inherit-configuration))
+```
 
 ## Platform Selection
 
@@ -153,33 +291,15 @@ The first manifest in the Image Index MUST NOT have a `platform` field. It conta
 
 ### Platform Overlay Manifests
 
-Subsequent manifests use the standard OCI `platform` field on their descriptor in the index:
-
-```json
-{
-  "mediaType": "application/vnd.oci.image.manifest.v1+json",
-  "digest": "sha256:...",
-  "size": 1234,
-  "platform": {
-    "os": "linux",
-    "architecture": "amd64"
-  },
-  "annotations": {
-    "dev.common-lisp.implementation": "sbcl",
-    "dev.common-lisp.layer.roles": "native-library,cffi-grovel-output"
-  }
-}
-```
+Subsequent manifests use the standard OCI `platform` field on their descriptor in the index.
 
 ### Resolution Algorithm
 
-A CL Repository client resolves manifests as follows:
-
 1. Pull the Image Index.
-2. Detect local platform via `trivial-features` (`*features*` keywords: `:linux`, `:darwin`, `:windows`, `:x86-64`, `:arm64`, etc.).
+2. Detect local platform via `trivial-features`.
 3. **Always** select the universal manifest (no `platform` field).
 4. Match overlay descriptors by `platform.os` + `platform.architecture`.
-5. If `dev.common-lisp.implementation` annotation is present, match against the running CL implementation.
+5. If `dev.common-lisp.implementation` annotation is present, match against the running CL.
 6. Pull and extract all matched manifests.
 
 ### Build Matrix Dimensions
@@ -190,46 +310,6 @@ A CL Repository client resolves manifests as follows:
 | Architecture | amd64, arm64, 386 | Always for platform overlays |
 | CL Implementation | sbcl, ccl, ecl | Only for impl-specific compiled code |
 | OS Version | ubuntu-20.04, macos-14 | For ABI-sensitive native libs |
-
-## Extracted Directory Structure
-
-After installation, the directory is immediately ASDF-loadable:
-
-```
-~/.local/share/cl-repository/systems/<name>/<version>/
-  <name>.asd              # Original .asd from source layer
-  src/...                 # CL source files
-  native/                 # From native-library overlay
-    libfoo.so
-  grovel-cache/           # From cffi-grovel-output overlay
-    <system>--<name>.cffi.lisp
-  headers/                # From headers overlay
-    foo.h
-  docs/                   # From documentation layer
-    manual.html
-  cl-repo-init.lisp       # Auto-generated CFFI integration (if applicable)
-```
-
-### Post-Install Integration
-
-For systems with native dependencies, `cl-repo-init.lisp` is generated:
-
-```lisp
-;; Push native library directory to CFFI search path
-(when (find-package :cffi)
-  (pushnew #p"<system-root>/native/"
-           (symbol-value (find-symbol "*FOREIGN-LIBRARY-DIRECTORIES*" :cffi))
-           :test #'equal))
-```
-
-The ASDF source registry is configured to include the systems tree:
-
-```lisp
-(asdf:initialize-source-registry
-  '(:source-registry
-    (:tree (:home ".local/share/cl-repository/systems/"))
-    :inherit-configuration))
-```
 
 ## Lockfile Format
 
@@ -253,7 +333,7 @@ The ASDF source registry is configured to include the systems tree:
 Systems are pushed to registries using the naming pattern:
 
 ```
-<registry>/<namespace>/<project-name>:<version>
+<registry>/<namespace>/<system-name>:<version>
 ```
 
 Examples:
@@ -263,62 +343,39 @@ Examples:
 
 ## ASDF Embedded Configuration
 
-OCI packaging metadata can be embedded directly in a `.asd` file using ASDF's `:properties` plist. The packager's `auto-package-spec` reads the `:cl-repo` key and merges it with standard ASDF system fields.
+OCI packaging metadata can be embedded directly in a `.asd` file using ASDF's `:properties` plist.
 
 ### Format
 
 ```lisp
 (defsystem "my-lib"
   :version "2.0.0"
-  :description "A library with native deps"
-  :author "Author"
-  :license "MIT"
-  :depends-on ("alexandria" "cffi")
+  :depends-on ("alexandria" (:version "cffi" "0.24"))
   :properties (:cl-repo (:cffi-libraries ("libfoo")
                           :provides ("my-lib" "my-lib/utils")
                           :overlays ((:platform (:os "linux" :arch "amd64")
-                                      :native-paths ("lib/linux-amd64/libfoo.so"))
-                                     (:platform (:os "darwin" :arch "arm64")
-                                      :native-paths ("lib/darwin-arm64/libfoo.dylib")))))
-  :components (...))
+                                      :native-paths ("lib/linux-amd64/libfoo.so"))))))
 ```
 
-### Supported `:cl-repo` Keys
+### Provides Resolution
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `:cffi-libraries` | list of strings | Foreign library names used by CFFI |
-| `:provides` | list of strings | ASDF system names this package provides (defaults to the system name) |
-| `:overlays` | list of plists | Platform-specific overlay specifications |
-
-### Overlay Plist Format
-
-```lisp
-(:platform (:os "linux" :arch "amd64" :lisp "sbcl")  ; :lisp is optional
- :native-paths ("path/to/lib.so" ...)
- :run-groveler t                                       ; optional, run CFFI groveler
- :cffi-wrapper-systems ("my-wrapper-system"))           ; optional
-```
+1. Explicit `:cl-repo :provides` from `.asd` `:properties`
+2. Auto-discovered from `*.asd` files in source directory
+3. Fallback: `(list system-name)`
 
 ### Field Resolution
-
-`auto-package-spec` merges fields from two sources:
 
 | Field | Source |
 |-------|--------|
 | `name` | `asdf:component-name` |
 | `version` | `asdf:component-version` |
-| `description` | `asdf:system-description` |
-| `author` | `asdf:system-author` |
-| `license` | `asdf:system-licence` |
-| `depends-on` | `asdf:system-depends-on` |
-| `source-dir` | `asdf:system-source-directory` |
-| `provides` | `:cl-repo :provides` (fallback: system name) |
+| `depends-on` | `asdf:system-depends-on` (preserves version constraints) |
+| `provides` | `:cl-repo :provides` or auto-detected or fallback |
 | `cffi-libraries` | `:cl-repo :cffi-libraries` |
 | `overlays` | `:cl-repo :overlays` |
 
 ## Compatibility
 
-- **OCI clients**: Any OCI-compliant tool can pull these artifacts. Without platform selection, the universal source manifest is returned.
-- **Backward compatibility**: The format is designed so pure-Lisp systems (no native deps) require only a single universal manifest, which is a valid OCI artifact usable by any tool.
+- **OCI clients**: Any OCI-compliant tool can pull these artifacts. Each provided system name is a full package.
+- **Backward compatibility**: Pure-Lisp systems require only a single universal manifest.
 - **CFFI integration**: Pre-groveled output and native libraries are additive overlays. Systems always remain buildable from source as a fallback.

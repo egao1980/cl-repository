@@ -14,7 +14,10 @@
            #:+docker-manifest-list-v2+
            ;; CL Repository media types
            #:+cl-system-config-v1+
-           #:+cl-system-artifact-type+))
+           #:+cl-system-artifact-type+
+           #:+cl-namespace-root-v1+
+           #:+cl-system-name-anchor-v1+
+           #:+cl-system-name-config-v1+))
 (in-package :cl-oci/media-types)
 
 ;;; OCI Image Spec media types
@@ -35,3 +38,6 @@
 ;;; CL Repository specific media types
 (define-constant +cl-system-config-v1+ "application/vnd.common-lisp.system.config.v1+json" :test #'equal)
 (define-constant +cl-system-artifact-type+ "application/vnd.common-lisp.system.v1" :test #'equal)
+(define-constant +cl-namespace-root-v1+ "application/vnd.common-lisp.namespace-root.v1" :test #'equal)
+(define-constant +cl-system-name-anchor-v1+ "application/vnd.common-lisp.system-name.v1" :test #'equal)
+(define-constant +cl-system-name-config-v1+ "application/vnd.common-lisp.system-name.config.v1+json" :test #'equal)

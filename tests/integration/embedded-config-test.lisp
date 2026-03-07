@@ -42,9 +42,9 @@
                  (ok (typep result 'build-result))
                  (ok (plusp (length (build-result-blobs result))))
                  ;; Publish
-                 (let* ((reg (make-registry *registry-url*))
-                        (repo (format nil "~a/embed-test" *test-namespace*))
-                        (digest (publish-package reg repo "3.0.0" result)))
+                (let* ((reg (make-registry *registry-url*))
+                       (repo (format nil "~a/embed-test" *test-namespace*))
+                       (digest (publish-package reg *test-namespace* "3.0.0" result spec)))
                    (ok (stringp digest))
                    (ok (search "sha256:" digest))
                    ;; Verify image index round-trip
