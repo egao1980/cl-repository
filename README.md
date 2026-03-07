@@ -103,6 +103,26 @@ sbcl --eval "(asdf:initialize-source-registry
 
 This works with any OCI client (`oras`, `crane`, `skopeo`) and any CL implementation with ASDF.
 
+### Loading OCICL Packages
+
+`cl-repo` can pull packages from [OCICL](https://github.com/ocicl/ocicl) registries (`ghcr.io/ocicl/*`). Register the OCICL namespace with `:type :ocicl`:
+
+```lisp
+(asdf:load-system "cl-repository-client")
+(cl-repo:add-registry "https://ghcr.io" :namespace "ocicl" :type :ocicl)
+(cl-repo:load-system "alexandria")
+```
+
+Mix cl-repo and OCICL registries — the client searches in order:
+
+```lisp
+(cl-repo:add-registry "https://ghcr.io" :namespace "egao1980/cl-systems")         ; cl-repo format (default)
+(cl-repo:add-registry "https://ghcr.io" :namespace "ocicl" :type :ocicl)          ; OCICL format
+(cl-repo:load-system "alexandria")  ; tries cl-repo first, falls back to OCICL
+```
+
+OCICL differences handled automatically: empty config blobs, tarball prefix stripping, date-commit version tags.
+
 ## Examples
 
 | Example | Description |

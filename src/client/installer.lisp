@@ -7,18 +7,22 @@
   (:import-from :cl-oci-client/registry #:registry #:make-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-blob)
   (:import-from :cl-oci/digest #:format-digest)
-  (:import-from :cl-oci/descriptor #:descriptor #:descriptor-digest #:descriptor-media-type)
+  (:import-from :cl-oci/descriptor #:descriptor #:descriptor-digest #:descriptor-media-type
+                #:descriptor-annotations)
   (:import-from :cl-oci/manifest #:manifest #:manifest-layers #:manifest-config)
   (:import-from :cl-oci/image-index #:image-index)
   (:import-from :cl-oci/config #:cl-system-config #:config-system-name #:config-layer-roles
                 #:config-provides #:config-version)
   (:import-from :cl-oci/serialization #:from-json)
+  (:import-from :cl-oci/annotations #:+ann-title+)
   (:import-from :cl-repository-client/platform-resolver #:resolve-manifests)
   (:export #:install-system
            #:extract-layer
+           #:extract-layer-stripping-prefix
            #:systems-root
            #:system-install-path
-           #:create-provides-symlinks))
+           #:create-provides-symlinks
+           #:parse-ocicl-layer-info))
 (in-package :cl-repository-client/installer)
 
 (defvar *systems-root*
@@ -31,8 +35,9 @@
   "Path where a system version gets installed."
   (merge-pathnames (format nil "~a/~a/" name version) *systems-root*))
 
-(defun install-system (registry-url repository reference)
+(defun install-system (registry-url repository reference &key (type :cl-repo))
   "Install a CL system from an OCI registry.
+   TYPE is :cl-repo (default) or :ocicl for OCICL-format packages.
    Respects *dry-run* and *quiet*.  Returns the installation path."
   (let ((reg (make-registry registry-url)))
     (msg "~&Pulling ~a:~a from ~a...~%" repository reference registry-url)
@@ -40,9 +45,11 @@
       (msg "~&[dry-run] Would install ~a:~a~%" repository reference)
       (return-from install-system (system-install-path repository reference)))
     (let ((obj (pull-manifest reg repository reference)))
-      (etypecase obj
-        (image-index (install-from-index reg repository obj))
-        (manifest (install-from-manifest reg repository obj))))))
+      (if (eq type :ocicl)
+          (install-from-ocicl-manifest reg repository obj reference)
+          (etypecase obj
+            (image-index (install-from-index reg repository obj))
+            (manifest (install-from-manifest reg repository obj)))))))
 
 (defun install-from-index (registry repository index)
   "Install from an image index - resolve platform and pull appropriate manifests."
@@ -113,6 +120,59 @@
     (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
     install-dir))
 
+;;; --- OCICL compatibility ---
+
+(defun parse-ocicl-layer-info (title)
+  "Parse an OCICL layer title annotation like \"alexandria-20240503-8514d8e.tar.gz\"
+   into (values system-name version strip-prefix).
+   Version segment starts with an 8-digit date after a dash.
+   Returns NIL if TITLE is NIL."
+  (when title
+    (let ((base (if (search ".tar.gz" title)
+                    (subseq title 0 (search ".tar.gz" title))
+                    title)))
+      (let ((version-pos nil))
+        ;; Scan for a dash followed by 8 digits (date like 20240503)
+        (loop for i from 0 below (length base)
+              when (and (char= (char base i) #\-)
+                        (< (+ i 8) (length base))
+                        (every #'digit-char-p (subseq base (1+ i) (+ i 9))))
+                do (setf version-pos i) (return))
+        (if version-pos
+            (values (subseq base 0 version-pos)
+                    (subseq base (1+ version-pos))
+                    (format nil "~a/" base))
+            (values base "latest" (format nil "~a/" base)))))))
+
+(defun install-from-ocicl-manifest (registry repository manifest reference)
+  "Install from an OCICL-format manifest. Skips empty config, strips tarball prefix."
+  (let* ((layers (manifest-layers manifest))
+         (layer-desc (first layers))
+         (ann (when layer-desc (descriptor-annotations layer-desc)))
+         (title (when ann (gethash +ann-title+ ann))))
+    (multiple-value-bind (name version strip-prefix)
+        (parse-ocicl-layer-info title)
+      (let* ((name (or name (let ((pos (position #\/ repository :from-end t)))
+                                (if pos (subseq repository (1+ pos)) repository))))
+             (version (or version reference))
+             (install-dir (system-install-path name version)))
+        (ensure-directories-exist (merge-pathnames "x" install-dir))
+        (dolist (ld layers)
+          (let ((blob (pull-blob registry repository
+                                 (format-digest (descriptor-digest ld)))))
+            (if strip-prefix
+                (extract-layer-stripping-prefix blob install-dir strip-prefix)
+                (extract-layer blob install-dir))))
+        (msg "~&Installed ~a ~a to ~a (ocicl)~%" name version install-dir)
+        install-dir))))
+
+(defun extract-layer-stripping-prefix (tar-gz-data target-dir prefix)
+  "Extract a tar+gzip layer to TARGET-DIR, stripping PREFIX from entry names."
+  (let ((input (flexi-streams:make-in-memory-input-stream tar-gz-data)))
+    (let ((decompressed (chipz:make-decompressing-stream 'chipz:gzip input)))
+      (extract-tar-stream decompressed target-dir :strip-prefix prefix)
+      (close decompressed))))
+
 (defun create-provides-symlinks (canonical-name provides)
   "Create symlinks for provided system names that differ from the canonical name.
    E.g., systems/cffi-toolchain -> systems/cffi"
@@ -153,40 +213,45 @@
       (extract-tar-stream decompressed target-dir)
       (close decompressed))))
 
-(defun extract-tar-stream (stream target-dir)
-  "Extract tar entries from STREAM to TARGET-DIR."
+(defun extract-tar-stream (stream target-dir &key strip-prefix)
+  "Extract tar entries from STREAM to TARGET-DIR.
+   When STRIP-PREFIX is given, remove that prefix from each entry name."
   (loop
     (let ((header (make-array 512 :element-type '(unsigned-byte 8))))
       (let ((bytes-read (read-sequence header stream)))
         (when (or (< bytes-read 512) (every #'zerop header))
           (return)))
-      (let* ((name (parse-tar-name header))
+      (let* ((raw-name (parse-tar-name header))
+             (name (if (and strip-prefix
+                            (>= (length raw-name) (length strip-prefix))
+                            (string= raw-name strip-prefix :end1 (length strip-prefix)))
+                       (subseq raw-name (length strip-prefix))
+                       raw-name))
              (size (parse-tar-size header))
              (type (aref header 156)))
-        (cond
-          ((or (= type (char-code #\5))
-               (and (or (= type (char-code #\0)) (= type 0))
-                    (plusp (length name))
-                    (char= (char name (1- (length name))) #\/)))
-           ;; Directory (type '5', or type 0/null with trailing slash)
-           (ensure-directories-exist (merge-pathnames (format nil "~a/" name) target-dir))
-           (skip-tar-data stream size))
-          ((or (= type (char-code #\0)) (= type 0))
-           ;; Regular file
-           (let* ((content (make-array size :element-type '(unsigned-byte 8)))
-                  (path (merge-pathnames name target-dir)))
-             (read-sequence content stream)
-             (let ((remainder (mod size 512)))
-               (when (plusp remainder)
-                 (let ((pad (make-array (- 512 remainder) :element-type '(unsigned-byte 8))))
-                   (read-sequence pad stream))))
-             (ensure-directories-exist path)
-             (with-open-file (out path :direction :output :element-type '(unsigned-byte 8)
-                                       :if-exists :supersede)
-               (write-sequence content out))))
-          (t
-           ;; Skip unknown types
-           (skip-tar-data stream size)))))))
+        (if (or (zerop (length name)) (string= name "./"))
+            (skip-tar-data stream size)
+            (cond
+              ((or (= type (char-code #\5))
+                   (and (or (= type (char-code #\0)) (= type 0))
+                        (plusp (length name))
+                        (char= (char name (1- (length name))) #\/)))
+               (ensure-directories-exist (merge-pathnames (format nil "~a/" name) target-dir))
+               (skip-tar-data stream size))
+              ((or (= type (char-code #\0)) (= type 0))
+               (let* ((content (make-array size :element-type '(unsigned-byte 8)))
+                      (path (merge-pathnames name target-dir)))
+                 (read-sequence content stream)
+                 (let ((remainder (mod size 512)))
+                   (when (plusp remainder)
+                     (let ((pad (make-array (- 512 remainder) :element-type '(unsigned-byte 8))))
+                       (read-sequence pad stream))))
+                 (ensure-directories-exist path)
+                 (with-open-file (out path :direction :output :element-type '(unsigned-byte 8)
+                                           :if-exists :supersede)
+                   (write-sequence content out))))
+              (t
+               (skip-tar-data stream size))))))))
 
 (defun skip-tar-data (stream size)
   (let ((blocks (ceiling size 512)))

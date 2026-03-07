@@ -28,17 +28,22 @@
 
 (defvar *registries* nil
   "Ordered list of OCI registries to search.
-   Each entry is (URL &key namespace).
+   Each entry is (URL &key namespace type).
+   TYPE is :cl-repo (default) or :ocicl.
    Example:
      ((\"http://localhost:5050\" :namespace \"cl-systems\")
-      (\"https://ghcr.io\" :namespace \"cl-systems\"))")
+      (\"https://ghcr.io\" :namespace \"ocicl\" :type :ocicl))")
 
-(defun add-registry (url &key (namespace "cl-systems") (priority :append))
+(defun add-registry (url &key (namespace "cl-systems") (priority :append) (type :cl-repo))
   "Add a registry to *registries*.
    PRIORITY is :prepend (search first) or :append (search last).
-   Avoids duplicates by URL."
-  (let ((entry (list url :namespace namespace)))
-    (unless (find url *registries* :key #'first :test #'string=)
+   TYPE is :cl-repo (default) or :ocicl for OCICL-format registries.
+   Avoids duplicates by URL+namespace."
+  (let ((entry (list url :namespace namespace :type type)))
+    (unless (find-if (lambda (e)
+                       (and (string= (first e) url)
+                            (string= (registry-namespace e) namespace)))
+                     *registries*)
       (ecase priority
         (:prepend (push entry *registries*))
         (:append (setf *registries* (append *registries* (list entry)))))))
@@ -46,6 +51,7 @@
 
 (defun registry-url (entry) (first entry))
 (defun registry-namespace (entry) (getf (rest entry) :namespace "cl-systems"))
+(defun registry-type (entry) (getf (rest entry) :type :cl-repo))
 
 ;;; System presence checks
 
@@ -72,24 +78,25 @@
 
 ;;; Direct system install (for single system, bypasses SAT)
 
-(defun find-system-in-registry (reg-url namespace system-name &key version)
+(defun find-system-in-registry (reg-url namespace system-name &key version (type :cl-repo))
   "Find SYSTEM-NAME in a registry. Returns (values repo tag) or NIL.
-   If VERSION given, uses it directly. Otherwise discovers via tags or anchor."
-  (let* ((repo (format nil "~a/~a" namespace system-name))
+   If VERSION given, uses it directly. Otherwise discovers via tags or anchor.
+   For :ocicl registries, the repo is just the system name (no namespace nesting)."
+  (let* ((repo (if (eq type :ocicl)
+                   (format nil "~a/~a" namespace system-name)
+                   (format nil "~a/~a" namespace system-name)))
          (reg (make-registry reg-url)))
     (handler-case
         (if version
             (values repo version)
-            ;; Try to get tags first
             (let ((tags (list-tags reg repo)))
               (if tags
-                  ;; Filter out "latest" tag, pick highest version
                   (let ((version-tags (remove "latest" tags :test #'string=)))
                     (if version-tags
                         (values repo (car (last (sort (copy-list version-tags) #'string<))))
                         (values repo (first tags))))
-                  ;; No tags -- try anchor-based discovery
-                  (find-via-anchor reg repo system-name))))
+                  (unless (eq type :ocicl)
+                    (find-via-anchor reg repo system-name)))))
       (error () nil))))
 
 (defun find-via-anchor (registry repo system-name)
@@ -114,13 +121,15 @@
   "Install NAME from configured registries. Returns install path or NIL."
   (dolist (entry *registries* nil)
     (let ((url (registry-url entry))
-          (ns (registry-namespace entry)))
+          (ns (registry-namespace entry))
+          (type (registry-type entry)))
       (handler-case
           (multiple-value-bind (repo tag)
-              (find-system-in-registry url ns name :version version)
+              (find-system-in-registry url ns name :version version :type type)
             (when (and repo tag)
-              (msg "~&; cl-repo: found ~a:~a in ~a~%" name tag url)
-              (return-from ensure-system-installed (install-system url repo tag))))
+              (msg "~&; cl-repo: found ~a:~a in ~a (~a)~%" name tag url type)
+              (return-from ensure-system-installed
+                (install-system url repo tag :type type))))
         (error (e)
           (msg "~&; cl-repo: ~a not in ~a (~a)~%" name url e))))))
 
