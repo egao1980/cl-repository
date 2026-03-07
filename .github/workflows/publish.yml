@@ -41,24 +41,25 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           NAMESPACE=$(echo "${{ env.NAMESPACE }}" | tr '[:upper:]' '[:lower:]')
 
-          qlot exec ros -e "
-            (asdf:load-system \"cl-repository-packager\")
-            (let* ((auth (cl-oci-client/auth:make-auth-config
-                           :username \"${{ github.actor }}\"
-                           :password (uiop:getenv \"GITHUB_TOKEN\")))
-                   (reg (cl-oci-client/registry:make-registry
-                          \"https://${REGISTRY}\" :auth auth))
-                   (spec (cl-repository-packager/asdf-plugin:auto-package-spec \"cl-oci\")))
-              ;; Override version from git tag; filter out test systems
-              (setf (cl-repository-packager/build-matrix:package-spec-version spec)
-                    \"${VERSION}\")
-              (setf (cl-repository-packager/build-matrix:package-spec-provides spec)
-                    (remove-if (lambda (s) (search \"test\" s))
-                               (cl-repository-packager/build-matrix:package-spec-provides spec)))
-              (let ((result (cl-repository-packager/build-matrix:build-package spec)))
-                (cl-repository-packager/publisher:publish-package
-                  reg \"${NAMESPACE}\" \"${VERSION}\" result spec)))
-          "
+          cat > /tmp/publish.lisp <<LISP
+          (asdf:load-system "cl-repository-packager")
+          (let* ((auth (cl-oci-client/auth:make-auth-config
+                         :username "${{ github.actor }}"
+                         :password (uiop:getenv "GITHUB_TOKEN")))
+                 (reg (cl-oci-client/registry:make-registry
+                        "https://${REGISTRY}" :auth auth))
+                 (spec (cl-repository-packager/asdf-plugin:auto-package-spec "cl-oci")))
+            (setf (cl-repository-packager/build-matrix:package-spec-version spec)
+                  "${VERSION}")
+            (setf (cl-repository-packager/build-matrix:package-spec-provides spec)
+                  (remove-if (lambda (s) (search "test" s))
+                             (cl-repository-packager/build-matrix:package-spec-provides spec)))
+            (let ((result (cl-repository-packager/build-matrix:build-package spec)))
+              (cl-repository-packager/publisher:publish-package
+                reg "${NAMESPACE}" "${VERSION}" result spec)))
+          LISP
+
+          qlot exec ros -l /tmp/publish.lisp
 
       - name: Install ORAS
         uses: oras-project/setup-oras@v1
