@@ -1,0 +1,41 @@
+# .github/workflows/test.yml
+# Run tests after installing deps from OCI registry.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5050:5000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Roswell
+        uses: 40ants/setup-lisp@v4
+        with:
+          roswell-version: latest
+
+      - name: Install dependencies
+        run: |
+          ros install qlot
+          qlot install
+
+      - name: Install CL deps from OCI and run tests
+        run: |
+          qlot exec ros -e "
+            (asdf:load-system \"cl-repository-client\")
+            (cl-repo:add-registry \"http://localhost:5050\" :namespace \"cl-systems\")
+            ;; Install project-specific deps from OCI
+            (cl-repo:load-system '(\"dep-a\" \"dep-b\"))
+            ;; Run tests
+            (asdf:test-system \"my-system\")
+          "

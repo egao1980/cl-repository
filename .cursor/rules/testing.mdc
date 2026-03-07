@@ -1,0 +1,14 @@
+---
+description: Testing conventions for the project
+globs: "tests/**/*.lisp"
+alwaysApply: false
+---
+
+# Testing
+
+- Framework: `rove`. Each test file uses `(:use :cl :rove)`.
+- Test systems use explicit `:components` in `.asd` (NOT `package-inferred-system`).
+- Import class symbols if passing them to `from-json` or similar symbol-dispatched functions.
+- Run tests: `qlot exec ros -e '(asdf:test-system "cl-oci")'`
+- Integration tests assume a local OCI registry at `http://localhost:5050`.
+- Use `(sb-ext:disable-debugger)` when running tests non-interactively.

@@ -1,0 +1,14 @@
+*.fasl
+*.fas
+*.lib
+*.o
+*.so
+*.dylib
+*.dll
+*.dx64fsl
+*.lx64fsl
+*.x86f
+*~
+\#*\#
+.qlot/
+qlfile.lock

@@ -1,0 +1,149 @@
+#!/bin/sh
+#|-*- mode:lisp -*-|#
+#|
+exec ros -Q -- $0 "$@"
+|#
+
+(progn
+  (ros:ensure-asdf)
+  #+quicklisp (ql:quickload '("cl-repository-client" "cl-repository-packager") :silent t))
+
+(defpackage :ros.script.cl-repo
+  (:use :cl)
+  (:import-from :cl-oci/runtime #:*quiet* #:*dry-run*)
+  (:import-from :cl-repository-client/commands
+                #:cmd-install #:cmd-list #:cmd-search #:cmd-info #:cmd-update)
+  (:import-from :cl-repository-client/quickload
+                #:*registries* #:add-registry)
+  (:import-from :cl-repository-packager/build-matrix
+                #:build-package)
+  (:import-from :cl-repository-packager/publisher
+                #:publish-package)
+  (:import-from :cl-repository-packager/asdf-plugin
+                #:auto-package-spec))
+
+(in-package :ros.script.cl-repo)
+
+(defun usage ()
+  (format t "~&cl-repo - OCI-based Common Lisp package manager~%~%")
+  (format t "Usage: cl-repo <command> [options]~%~%")
+  (format t "Commands:~%")
+  (format t "  load <names...>       Install (if needed) and load systems~%")
+  (format t "  install <ref>         Install a system (name, name:version, or full ref)~%")
+  (format t "  update                Update all installed systems~%")
+  (format t "  list                  List installed systems~%")
+  (format t "  search <query>        Search for systems~%")
+  (format t "  info <ref>            Show system info~%")
+  (format t "  publish               Package and push current project~%")
+  (format t "  lock                  Generate/update lockfile~%")
+  (format t "  ql-export <url>       Export Quicklisp dist to OCI registry~%")
+  (format t "~%Options:~%")
+  (format t "  --registry <url>      Registry URL (default: ghcr.io)~%")
+  (format t "  --namespace <ns>      Repository namespace (default: cl-systems)~%")
+  (format t "  --quiet               Suppress informational output~%")
+  (format t "  --dry-run             Show what would be done without doing it~%"))
+
+(defun parse-options (args)
+  "Parse --key value pairs from args. Returns (values command-args options-plist).
+   Boolean flags (--quiet, --dry-run) don't consume the next argument."
+  (let ((cmd-args nil)
+        (options nil)
+        (boolean-flags '("quiet" "dry-run" "incremental")))
+    (loop with i = 0
+          while (< i (length args))
+          for arg = (nth i args)
+          do (cond
+               ((and (>= (length arg) 2) (string= "--" arg :end2 2))
+                (let* ((flag-name (subseq arg 2))
+                       (key (intern (string-upcase flag-name) :keyword)))
+                  (if (member flag-name boolean-flags :test #'string-equal)
+                      (progn (push t options) (push key options) (incf i))
+                      (let ((val (when (< (1+ i) (length args))
+                                   (nth (1+ i) args))))
+                        (push val options)
+                        (push key options)
+                        (incf i 2)))))
+               (t (push arg cmd-args)
+                  (incf i))))
+    (values (nreverse cmd-args) options)))
+
+(defun main (&rest argv)
+  (when (or (null argv) (member "--help" argv :test #'string=) (member "-h" argv :test #'string=))
+    (usage)
+    (ros:quit 0))
+  (multiple-value-bind (cmd-args opts) (parse-options (rest argv))
+    (let* ((command (first argv))
+           (registry-url (getf opts :registry))
+           (namespace (getf opts :namespace))
+           (*quiet* (or *quiet* (getf opts :quiet)))
+           (*dry-run* (or *dry-run* (getf opts :dry-run))))
+      (handler-case
+          (when registry-url
+            (add-registry registry-url :namespace (or namespace "cl-systems")))
+          (cond
+            ((string-equal command "load")
+             (unless cmd-args
+               (format *error-output* "~&Error: load requires system name(s)~%")
+               (ros:quit 1))
+             (cl-repository-client/quickload:load-system cmd-args))
+
+            ((string-equal command "install")
+             (unless cmd-args
+               (format *error-output* "~&Error: install requires a reference~%")
+               (ros:quit 1))
+             (dolist (ref cmd-args)
+               (cmd-install ref :registry-url registry-url :namespace namespace)))
+
+            ((string-equal command "update")
+             (cmd-update :registry-url registry-url :namespace namespace))
+
+            ((string-equal command "list")
+             (cmd-list))
+
+            ((string-equal command "search")
+             (unless cmd-args
+               (format *error-output* "~&Error: search requires a query~%")
+               (ros:quit 1))
+             (cmd-search (first cmd-args) :registry-url registry-url :namespace namespace))
+
+            ((string-equal command "info")
+             (unless cmd-args
+               (format *error-output* "~&Error: info requires a reference~%")
+               (ros:quit 1))
+             (cmd-info (first cmd-args) :registry-url registry-url :namespace namespace))
+
+            ((string-equal command "publish")
+             (let* ((system-name (or (first cmd-args)
+                                     (pathname-name (first (directory "*.asd")))))
+                    (spec (auto-package-spec system-name))
+                    (result (build-package spec))
+                    (reg (or registry-url "ghcr.io"))
+                    (ns (or namespace "cl-systems"))
+                    (repo (format nil "~a/~a" ns system-name))
+                    (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
+                             "latest")))
+               (publish-package reg repo tag result)))
+
+            ((string-equal command "lock")
+             (format t "~&Lockfile generation not yet implemented~%"))
+
+            ((string-equal command "ql-export")
+             (unless cmd-args
+               (format *error-output* "~&Error: ql-export requires a dist URL~%")
+               (ros:quit 1))
+             (cl-oci/runtime:msg "~&Loading ql-exporter...~%")
+             #+quicklisp (ql:quickload "cl-repository-ql-exporter" :silent t)
+             (let ((export-fn (find-symbol "EXPORT-DIST" :cl-repository-ql-exporter/exporter)))
+               (when export-fn
+                 (funcall export-fn (first cmd-args)
+                          (or registry-url "ghcr.io")
+                          :namespace (or namespace "cl-systems")
+                          :incremental (not (null (getf opts :incremental)))))))
+
+            (t
+             (format *error-output* "~&Unknown command: ~a~%~%" command)
+             (usage)
+             (ros:quit 1)))
+        (error (e)
+          (format *error-output* "~&Error: ~a~%" e)
+          (ros:quit 1))))))

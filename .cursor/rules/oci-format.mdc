@@ -1,0 +1,16 @@
+---
+description: OCI artifact format conventions
+alwaysApply: true
+---
+
+# OCI Artifact Format
+
+- CL packages are OCI Image Indexes with universal + platform overlay manifests.
+- `artifactType`: `application/vnd.common-lisp.system.v1`
+- Config mediaType: `application/vnd.common-lisp.system.config.v1+json`
+- Layers: standard `application/vnd.oci.image.layer.v1.tar+gzip`
+- CL-specific metadata uses `dev.common-lisp.*` annotation namespace.
+- Universal manifest: no `platform` field, always first in index.
+- Platform overlays: use OCI `platform` field + `dev.common-lisp.implementation` annotation.
+- Layer roles tracked in config blob `layer-roles` map (digest -> role string).
+- See `docs/spec.md` for the full specification.

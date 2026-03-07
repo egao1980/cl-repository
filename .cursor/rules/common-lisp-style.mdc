@@ -1,0 +1,18 @@
+---
+description: Common Lisp coding conventions for this project
+globs: "**/*.lisp"
+alwaysApply: false
+---
+
+# Common Lisp Style
+
+- Use `package-inferred-system`: each file starts with `defpackage`, one package per file.
+- Declare dependencies via `:import-from` in `defpackage` (not `:use` except for `:cl`).
+- Use `alexandria:define-constant` with `:test #'equal` for string constants (SBCL compat).
+- Use `alexandria:when-let` instead of custom macros.
+- JSON: `yason:parse` to decode, `(with-output-to-string (s) (yason:encode obj s))` to encode.
+- Constructors: `make-<class>` keyword functions (not raw `make-instance`).
+- Conditions: define with `define-condition`, signal with `error`/`signal`.
+- Exports: list in `defpackage :export`, aggregate in `all.lisp` via `uiop:define-package :use-reexport`.
+- Register external packages in `.asd`: `(register-system-packages "lib" '(:lib))`.
+- Line length: 120 chars max.

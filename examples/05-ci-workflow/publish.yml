@@ -1,0 +1,50 @@
+# .github/workflows/publish.yml
+# Publish a CL system to GHCR on version tag push.
+name: Publish CL Package
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: ${{ github.repository_owner }}/cl-systems
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Roswell
+        uses: 40ants/setup-lisp@v4
+        with:
+          roswell-version: latest
+
+      - name: Install dependencies
+        run: |
+          ros install qlot
+          qlot install
+
+      - name: Build and publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          qlot exec ros -e "
+            (asdf:load-system \"cl-repository-packager\")
+            (let* ((spec (cl-repository-packager/asdf-plugin:auto-package-spec \"MY-SYSTEM\"))
+                   (result (cl-repository-packager/build-matrix:build-package spec)))
+              (cl-repository-packager/publisher:publish-package
+                \"https://${{ env.REGISTRY }}\"
+                \"${{ env.NAMESPACE }}/MY-SYSTEM\"
+                \"${VERSION}\"
+                result))
+          "
+
+      - name: Verify
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          oras manifest fetch ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/MY-SYSTEM:${VERSION}

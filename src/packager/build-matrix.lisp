@@ -1,0 +1,181 @@
+(defpackage :cl-repository-packager/build-matrix
+  (:use :cl)
+  (:import-from :cl-oci/platform #:make-platform)
+  (:import-from :cl-oci/annotations
+                #:+ann-title+ #:+ann-version+ #:+ann-licenses+ #:+ann-description+
+                #:+ann-created+ #:+ann-authors+ #:+cl-implementation+ #:+cl-layer-roles+)
+  (:import-from :cl-oci/config #:+role-source+ #:+role-native-library+
+                #:+role-cffi-grovel-output+ #:+role-cffi-wrapper+ #:+role-headers+
+                #:+role-documentation+)
+  (:import-from :cl-repository-packager/layer-builder
+                #:build-layer-from-directory #:build-layer-from-files
+                #:layer-result #:layer-result-data #:layer-result-digest
+                #:layer-result-size #:layer-result-role)
+  (:import-from :cl-repository-packager/manifest-builder
+                #:build-config-blob #:build-manifest-for-layers #:build-image-index
+                #:built-manifest #:built-manifest-descriptor)
+  (:export #:package-spec
+           #:define-package-spec
+           #:package-spec-name
+           #:package-spec-version
+           #:package-spec-source-dir
+           #:package-spec-overlays
+           #:overlay-spec
+           #:parse-overlay-spec
+           #:build-package
+           #:build-result
+           #:build-result-index-json
+           #:build-result-index-digest
+           #:build-result-blobs
+           #:build-result-manifests))
+(in-package :cl-repository-packager/build-matrix)
+
+(defclass package-spec ()
+  ((name :type string :initarg :name :accessor package-spec-name)
+   (version :type (or null string) :initarg :version :accessor package-spec-version :initform nil)
+   (source-dir :type pathname :initarg :source-dir :accessor package-spec-source-dir)
+   (license :type (or null string) :initarg :license :accessor package-spec-license :initform nil)
+   (description :type (or null string) :initarg :description :accessor package-spec-description
+                :initform nil)
+   (author :type (or null string) :initarg :author :accessor package-spec-author :initform nil)
+   (depends-on :type list :initarg :depends-on :accessor package-spec-depends-on :initform nil)
+   (provides :type list :initarg :provides :accessor package-spec-provides :initform nil)
+   (cffi-libraries :type list :initarg :cffi-libraries :accessor package-spec-cffi-libraries
+                   :initform nil)
+   (grovel-systems :type list :initarg :grovel-systems :accessor package-spec-grovel-systems
+                   :initform nil)
+   (header-paths :type list :initarg :header-paths :accessor package-spec-header-paths :initform nil)
+   (build-requires :type list :initarg :build-requires :accessor package-spec-build-requires
+                   :initform nil)
+   (overlays :type list :initarg :overlays :accessor package-spec-overlays :initform nil)))
+
+(defclass overlay-spec ()
+  ((platform-os :type string :initarg :os :accessor overlay-spec-os)
+   (platform-arch :type string :initarg :arch :accessor overlay-spec-arch)
+   (lisp :type (or null string) :initarg :lisp :accessor overlay-spec-lisp :initform nil)
+   (native-paths :type list :initarg :native-paths :accessor overlay-spec-native-paths :initform nil)
+   (run-groveler :type boolean :initarg :run-groveler :accessor overlay-spec-run-groveler
+                 :initform nil)
+   (cffi-wrapper-systems :type list :initarg :cffi-wrapper-systems
+                         :accessor overlay-spec-cffi-wrapper-systems :initform nil)))
+
+(defclass build-result ()
+  ((index-json :type string :initarg :index-json :accessor build-result-index-json)
+   (index-digest :type string :initarg :index-digest :accessor build-result-index-digest)
+   (blobs :type list :initarg :blobs :accessor build-result-blobs)
+   (manifests :type list :initarg :manifests :accessor build-result-manifests)))
+
+(defun make-annotations (spec)
+  "Build OCI annotation hash-table from a package-spec."
+  (let ((ann (make-hash-table :test 'equal)))
+    (setf (gethash +ann-title+ ann) (package-spec-name spec))
+    (when (package-spec-version spec) (setf (gethash +ann-version+ ann) (package-spec-version spec)))
+    (when (package-spec-license spec) (setf (gethash +ann-licenses+ ann) (package-spec-license spec)))
+    (when (package-spec-description spec)
+      (setf (gethash +ann-description+ ann) (package-spec-description spec)))
+    (when (package-spec-author spec) (setf (gethash +ann-authors+ ann) (package-spec-author spec)))
+    (setf (gethash +ann-created+ ann) (format-iso-time))
+    ann))
+
+(defun format-iso-time ()
+  (multiple-value-bind (sec min hr day mon yr)
+      (decode-universal-time (get-universal-time) 0)
+    (format nil "~4,'0d-~2,'0d-~2,'0dT~2,'0d:~2,'0d:~2,'0dZ" yr mon day hr min sec)))
+
+(defun parse-overlay-spec (plist)
+  "Parse an overlay spec from a plist like (:platform (:os \"linux\" :arch \"amd64\") ...)."
+  (let ((plat (getf plist :platform)))
+    (make-instance 'overlay-spec
+                   :os (getf plat :os)
+                   :arch (getf plat :arch)
+                   :lisp (getf plat :lisp)
+                   :native-paths (getf plist :native-paths)
+                   :run-groveler (getf plist :run-groveler)
+                   :cffi-wrapper-systems (getf plist :cffi-wrapper-systems))))
+
+(defmacro define-package-spec (name &rest args)
+  "Define a package specification for OCI packaging."
+  `(make-instance 'package-spec
+                  :name ,name
+                  :version ,(getf args :version)
+                  :source-dir ,(or (getf args :source-dir) `(uiop:getcwd))
+                  :license ,(getf args :license)
+                  :description ,(getf args :description)
+                  :author ,(getf args :author)
+                  :depends-on (list ,@(getf args :depends-on))
+                  :provides (list ,@(getf args :provides))
+                  :cffi-libraries ',(getf args :cffi-libraries)
+                  :grovel-systems (list ,@(getf args :grovel-systems))
+                  :header-paths (list ,@(getf args :header-paths))
+                  :build-requires ',(getf args :build-requires)
+                  :overlays (mapcar #'parse-overlay-spec ',(getf args :overlays))))
+
+(defun build-package (spec)
+  "Build a complete OCI package from SPEC. Returns a BUILD-RESULT."
+  (let ((all-blobs nil)
+        (all-manifests nil)
+        (manifest-descriptors nil)
+        (ann (make-annotations spec)))
+    ;; 1. Build source layer
+    (let ((source-layer (build-layer-from-directory
+                         (package-spec-source-dir spec) +role-source+)))
+      (push (cons (layer-result-digest source-layer) (layer-result-data source-layer)) all-blobs)
+      ;; 2. Build universal config + manifest
+      (multiple-value-bind (cfg-octets cfg-digest cfg-size)
+          (build-config-blob (package-spec-name spec)
+                             :version (package-spec-version spec)
+                             :depends-on (package-spec-depends-on spec)
+                             :provides (package-spec-provides spec)
+                             :layers (list source-layer)
+                             :cffi-libraries (package-spec-cffi-libraries spec)
+                             :grovel-systems (package-spec-grovel-systems spec)
+                             :build-requires (package-spec-build-requires spec))
+        (push (cons cfg-digest cfg-octets) all-blobs)
+        (let ((bm (build-manifest-for-layers cfg-octets cfg-digest cfg-size
+                                             (list source-layer)
+                                             :annotations ann)))
+          (push bm all-manifests)
+          (push (built-manifest-descriptor bm) manifest-descriptors))))
+    ;; 3. Build overlay manifests for each platform
+    (dolist (overlay (package-spec-overlays spec))
+      (let ((overlay-layers nil)
+            (plat (make-platform :os (overlay-spec-os overlay)
+                                 :architecture (overlay-spec-arch overlay))))
+        ;; Native library layer
+        (when (overlay-spec-native-paths overlay)
+          (let* ((pairs (mapcar (lambda (p)
+                                  (let ((path (merge-pathnames p (package-spec-source-dir spec))))
+                                    (cons (file-namestring path) path)))
+                                (overlay-spec-native-paths overlay)))
+                 (layer (build-layer-from-files pairs +role-native-library+)))
+            (push layer overlay-layers)
+            (push (cons (layer-result-digest layer) (layer-result-data layer)) all-blobs)))
+        ;; Build overlay config + manifest
+        (when overlay-layers
+          (multiple-value-bind (cfg-octets cfg-digest cfg-size)
+              (build-config-blob (package-spec-name spec)
+                                 :version (package-spec-version spec)
+                                 :layers overlay-layers)
+            (push (cons cfg-digest cfg-octets) all-blobs)
+            (let* ((overlay-ann (make-hash-table :test 'equal))
+                   (_ (when (overlay-spec-lisp overlay)
+                        (setf (gethash +cl-implementation+ overlay-ann)
+                              (overlay-spec-lisp overlay))))
+                   (roles (format nil "~{~a~^,~}" (mapcar #'layer-result-role overlay-layers)))
+                   (_2 (setf (gethash +cl-layer-roles+ overlay-ann) roles))
+                   (bm (build-manifest-for-layers cfg-octets cfg-digest cfg-size
+                                                  overlay-layers
+                                                  :annotations overlay-ann
+                                                  :platform plat)))
+              (declare (ignore _ _2))
+              (push bm all-manifests)
+              (push (built-manifest-descriptor bm) manifest-descriptors))))))
+    ;; 4. Build Image Index
+    (multiple-value-bind (idx-json idx-digest idx-size)
+        (build-image-index (nreverse manifest-descriptors) :annotations ann)
+      (declare (ignore idx-size))
+      (make-instance 'build-result
+                     :index-json idx-json
+                     :index-digest idx-digest
+                     :blobs (nreverse all-blobs)
+                     :manifests (nreverse all-manifests)))))

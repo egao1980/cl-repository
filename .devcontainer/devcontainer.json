@@ -1,0 +1,18 @@
+{
+  "name": "CL Repository",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/egao1980/features/roswell:1": {
+      "version": "latest",
+      "buildSBCL": false,
+      "qlot": true,
+      "ultralisp": true
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["rheller.alive"]
+    }
+  },
+  "postCreateCommand": "qlot install"
+}
