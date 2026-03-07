@@ -1,0 +1,61 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        system:
+          - cl-oci
+          - cl-oci-client
+          - cl-repository-packager
+          - cl-repository-client
+          - cl-repository-ql-exporter
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Roswell
+        uses: 40ants/setup-lisp@v4
+        with:
+          roswell-version: latest
+
+      - name: Install dependencies
+        run: |
+          ros install qlot
+          qlot install
+
+      - name: Test ${{ matrix.system }}
+        run: |
+          qlot exec ros -e '(asdf:test-system "${{ matrix.system }}")'
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5050:5000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Roswell
+        uses: 40ants/setup-lisp@v4
+        with:
+          roswell-version: latest
+
+      - name: Install dependencies
+        run: |
+          ros install qlot
+          qlot install
+
+      - name: Run integration tests
+        run: |
+          qlot exec ros -e '(asdf:test-system "cl-repository-integration-tests")'

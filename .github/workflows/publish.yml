@@ -1,0 +1,66 @@
+name: Publish to GHCR
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: ${{ github.repository_owner }}/cl-systems
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Roswell
+        uses: 40ants/setup-lisp@v4
+        with:
+          roswell-version: latest
+
+      - name: Install dependencies
+        run: |
+          ros install qlot
+          qlot install
+
+      - name: Build and publish all systems
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          SYSTEMS=("cl-oci" "cl-oci-client" "cl-repository-packager" "cl-repository-client" "cl-repository-ql-exporter")
+
+          for SYSTEM in "${SYSTEMS[@]}"; do
+            echo "::group::Publishing ${SYSTEM}:${VERSION}"
+            qlot exec ros -e "
+              (asdf:load-system \"cl-repository-packager\")
+              (let* ((spec (cl-repository-packager/asdf-plugin:auto-package-spec \"${SYSTEM}\"))
+                     (result (cl-repository-packager/build-matrix:build-package spec)))
+                (cl-repository-packager/publisher:publish-package
+                  \"https://${REGISTRY}\"
+                  \"${NAMESPACE}/${SYSTEM}\"
+                  \"${VERSION}\"
+                  result))
+            "
+            echo "::endgroup::"
+          done
+
+      - name: Install ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Verify published artifacts
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          SYSTEMS=("cl-oci" "cl-oci-client" "cl-repository-packager" "cl-repository-client" "cl-repository-ql-exporter")
+
+          for SYSTEM in "${SYSTEMS[@]}"; do
+            echo "Verifying ${SYSTEM}:${VERSION}"
+            oras manifest fetch "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${SYSTEM}:${VERSION}"
+          done
