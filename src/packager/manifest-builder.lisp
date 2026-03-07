@@ -63,11 +63,15 @@
                                        :digest (parse-digest config-digest)
                                        :size config-size))
          (layer-descs (mapcar (lambda (lr)
-                                (make-descriptor
-                                 :media-type +oci-image-layer-tar-gzip+
-                                 :digest (parse-digest (layer-result-digest lr))
-                                 :size (layer-result-size lr)))
-                              layers))
+                               (let ((ann (make-hash-table :test 'equal)))
+                                 (setf (gethash +ann-title+ ann)
+                                       (format nil "~a.tar.gz" (layer-result-role lr)))
+                                 (make-descriptor
+                                  :media-type +oci-image-layer-tar-gzip+
+                                  :digest (parse-digest (layer-result-digest lr))
+                                  :size (layer-result-size lr)
+                                  :annotations ann)))
+                             layers))
          (manifest (make-manifest :config config-desc
                                   :layers layer-descs
                                   :artifact-type (or artifact-type +cl-system-artifact-type+)

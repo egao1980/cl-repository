@@ -55,11 +55,11 @@ See [docs/spec.md](docs/spec.md) for the full specification.
 Packages are standard OCI artifacts — pull with any OCI client, then point ASDF at the extracted directory.
 
 ```sh
-# Pull and extract with oras
-oras pull ghcr.io/egao1980/cl-systems/cl-oci:latest -o ~/.local/share/cl-systems/cl-oci/
-
-# Or with crane
-crane export ghcr.io/egao1980/cl-systems/cl-oci:latest - | tar -xf - -C ~/.local/share/cl-systems/cl-oci/
+# Pull the source layer
+oras pull ghcr.io/egao1980/cl-systems/cl-oci:0.2.0 -o /tmp/
+# Extract
+mkdir -p ~/.local/share/cl-systems/cl-oci/
+tar -xzf /tmp/source.tar.gz -C ~/.local/share/cl-systems/cl-oci/
 ```
 
 Then in your Lisp:
@@ -80,17 +80,18 @@ export CL_SOURCE_REGISTRY="(:source-registry (:tree (:home \".local/share/cl-sys
 sbcl --eval '(asdf:load-system "cl-oci")'
 ```
 
-For scripting, pull + load in one shot:
+For scripting, pull + extract + load in one shot:
 
 ```sh
 #!/bin/sh
 REGISTRY=ghcr.io/egao1980/cl-systems
 SYSTEM=cl-oci
-TAG=latest
+TAG=0.2.0
 DEST=~/.local/share/cl-systems/${SYSTEM}
 
 mkdir -p "${DEST}"
-oras pull "${REGISTRY}/${SYSTEM}:${TAG}" -o "${DEST}/"
+oras pull "${REGISTRY}/${SYSTEM}:${TAG}" -o /tmp/
+tar -xzf /tmp/source.tar.gz -C "${DEST}/"
 
 sbcl --eval "(asdf:initialize-source-registry
                '(:source-registry
@@ -100,7 +101,7 @@ sbcl --eval "(asdf:initialize-source-registry
      --eval "(format t \"~a loaded OK~%\" \"${SYSTEM}\")"
 ```
 
-This works with any OCI client (`oras`, `crane`, `skopeo`, `docker`) and any CL implementation with ASDF.
+This works with any OCI client (`oras`, `crane`, `skopeo`) and any CL implementation with ASDF.
 
 ## Examples
 
