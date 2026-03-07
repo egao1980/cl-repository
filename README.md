@@ -50,6 +50,58 @@ cl-repo ql-export https://beta.quicklisp.org/dist/quicklisp.txt --registry ghcr.
 
 See [docs/spec.md](docs/spec.md) for the full specification.
 
+### Using a Standard OCI Client (no cl-repo needed)
+
+Packages are standard OCI artifacts — pull with any OCI client, then point ASDF at the extracted directory.
+
+```sh
+# Pull and extract with oras
+oras pull ghcr.io/egao1980/cl-systems/cl-oci:latest -o ~/.local/share/cl-systems/cl-oci/
+
+# Or with crane
+crane export ghcr.io/egao1980/cl-systems/cl-oci:latest - | tar -xf - -C ~/.local/share/cl-systems/cl-oci/
+```
+
+Then in your Lisp:
+
+```lisp
+(asdf:initialize-source-registry
+  '(:source-registry
+    (:tree (:home ".local/share/cl-systems/"))
+    :inherit-configuration))
+
+(asdf:load-system "cl-oci")
+```
+
+Or set the `CL_SOURCE_REGISTRY` environment variable instead:
+
+```sh
+export CL_SOURCE_REGISTRY="(:source-registry (:tree (:home \".local/share/cl-systems/\")) :inherit-configuration)"
+sbcl --eval '(asdf:load-system "cl-oci")'
+```
+
+For scripting, pull + load in one shot:
+
+```sh
+#!/bin/sh
+REGISTRY=ghcr.io/egao1980/cl-systems
+SYSTEM=cl-oci
+TAG=latest
+DEST=~/.local/share/cl-systems/${SYSTEM}
+
+mkdir -p "${DEST}"
+oras pull "${REGISTRY}/${SYSTEM}:${TAG}" -o "${DEST}/"
+
+sbcl --eval "(asdf:initialize-source-registry
+               '(:source-registry
+                 (:tree (:home \".local/share/cl-systems/\"))
+                 :inherit-configuration))" \
+     --eval "(asdf:load-system \"${SYSTEM}\")" \
+     --eval "(format t \"~a loaded OK~%\" \"${SYSTEM}\")"
+```
+
+This works with any OCI client (`oras`, `crane`, `skopeo`, `docker`) and any CL implementation with ASDF.
+
 ## Examples
 
 | Example | Description |
