@@ -11,7 +11,7 @@
 
 - **Registry type parameter**: `add-registry` accepts `:type :ocicl` (default `:cl-repo`) to declare the format
 - **OCICL manifest handling**: skips empty config blobs, parses system name and version from layer title annotations (e.g., `alexandria-20240503-8514d8e.tar.gz`)
-- **Tarball prefix stripping**: `extract-tar-stream` gains `:strip-prefix` support to flatten OCICL's nested directory structure during extraction
+- **Tarball prefix stripping**: `extract-tar-stream` gains `:strip-prefix` support for OCICL's nested directory structure during extraction
 - **Mixed registries**: configure multiple registries with different types; client searches in order and handles each format transparently
 - **Smart name parsing**: correctly handles hyphenated system names (e.g., `cl-ppcre`) by detecting the date segment boundary
 
