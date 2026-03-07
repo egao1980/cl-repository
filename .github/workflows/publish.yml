@@ -46,10 +46,15 @@ jobs:
             echo "::group::Publishing ${SYSTEM}:${VERSION}"
             qlot exec ros -e "
               (asdf:load-system \"cl-repository-packager\")
-              (let* ((spec (cl-repository-packager/asdf-plugin:auto-package-spec \"${SYSTEM}\"))
+              (let* ((auth (cl-oci-client/auth:make-auth-config
+                             :username \"${{ github.actor }}\"
+                             :password (uiop:getenv \"GITHUB_TOKEN\")))
+                     (reg (cl-oci-client/registry:make-registry
+                            \"https://${REGISTRY}\" :auth auth))
+                     (spec (cl-repository-packager/asdf-plugin:auto-package-spec \"${SYSTEM}\"))
                      (result (cl-repository-packager/build-matrix:build-package spec)))
                 (cl-repository-packager/publisher:publish-package
-                  \"https://${REGISTRY}\"
+                  reg
                   \"${NAMESPACE}/${SYSTEM}\"
                   \"${VERSION}\"
                   result))
