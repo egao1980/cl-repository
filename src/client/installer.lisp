@@ -138,12 +138,18 @@
              (size (parse-tar-size header))
              (type (aref header 156)))
         (cond
+          ((or (= type (char-code #\5))
+               (and (or (= type (char-code #\0)) (= type 0))
+                    (plusp (length name))
+                    (char= (char name (1- (length name))) #\/)))
+           ;; Directory (type '5', or type 0/null with trailing slash)
+           (ensure-directories-exist (merge-pathnames (format nil "~a/" name) target-dir))
+           (skip-tar-data stream size))
           ((or (= type (char-code #\0)) (= type 0))
            ;; Regular file
            (let* ((content (make-array size :element-type '(unsigned-byte 8)))
                   (path (merge-pathnames name target-dir)))
              (read-sequence content stream)
-             ;; Skip padding
              (let ((remainder (mod size 512)))
                (when (plusp remainder)
                  (let ((pad (make-array (- 512 remainder) :element-type '(unsigned-byte 8))))
@@ -152,11 +158,6 @@
              (with-open-file (out path :direction :output :element-type '(unsigned-byte 8)
                                        :if-exists :supersede)
                (write-sequence content out))))
-          ((= type (char-code #\5))
-           ;; Directory - ensure it exists
-           (ensure-directories-exist (merge-pathnames (format nil "~a/" name) target-dir))
-           ;; Skip data blocks
-           (skip-tar-data stream size))
           (t
            ;; Skip unknown types
            (skip-tar-data stream size)))))))
