@@ -198,13 +198,19 @@ The client automatically selects the matching overlay at install time — pure-L
 Packages are standard OCI artifacts — pull with any OCI client, then point ASDF at the extracted directory.
 
 ```sh
-# Pull the source layer (downloads cl-oci-0.2.0.tar.gz)
+# Pure-Lisp package (source only)
 oras pull ghcr.io/egao1980/cl-systems/cl-oci:0.2.0 -o /tmp/
-# Extract — tarball has a root directory cl-oci-0.2.0/ (OCICL-compatible)
 mkdir -p ~/.local/share/cl-systems/
 tar -xzf /tmp/cl-oci-0.2.0.tar.gz -C ~/.local/share/cl-systems/
-# Resulting directory: ~/.local/share/cl-systems/cl-oci-0.2.0/
+
+# Package with native libs — all layers use the same prefix, so extract in order
+oras pull --platform linux/amd64 ghcr.io/cl-systems/my-cffi-lib:1.0.0
+for f in *.tar.gz; do tar xzf "$f" -C ~/.local/share/cl-systems/; done
+# -> ~/.local/share/cl-systems/my-cffi-lib-1.0.0/         (source)
+# -> ~/.local/share/cl-systems/my-cffi-lib-1.0.0/native/  (platform libs)
 ```
+
+Without `--platform`, `oras` selects the universal manifest (source-only, any platform). With `--platform`, you get a self-contained artifact including source + native libs. All layers share the same OCICL-compatible `<name>-<version>/` prefix, so they overlay cleanly.
 
 Then in your Lisp:
 

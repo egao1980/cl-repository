@@ -26,7 +26,8 @@
                 #:build-result-blobs #:build-result-manifests
                 #:build-overlay #:overlay-result)
   (:import-from :cl-repository-packager/asdf-plugin #:auto-package-spec)
-  (:import-from :cl-repository-packager/publisher #:publish-package #:publish-overlay)
+  (:import-from :cl-repository-packager/publisher #:publish-package #:publish-overlay
+                #:fetch-source-layer-info)
   (:import-from :cl-repository-client/installer #:install-system #:install-result-path)
   (:import-from :cl-oci/config #:+role-source+)
   (:import-from :babel #:string-to-octets))

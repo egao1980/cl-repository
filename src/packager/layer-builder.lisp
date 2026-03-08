@@ -159,9 +159,10 @@
                    :size (length data)
                    :role role)))
 
-(defun build-layer-from-files (file-pairs role)
-  "Build a tar+gzip layer from explicit FILE-PAIRS. Returns a LAYER-RESULT."
-  (let* ((data (make-tar-gzip-from-files file-pairs))
+(defun build-layer-from-files (file-pairs role &key tar-prefix)
+  "Build a tar+gzip layer from explicit FILE-PAIRS. Returns a LAYER-RESULT.
+   TAR-PREFIX, when given, is prepended to every entry name in the tarball."
+  (let* ((data (make-tar-gzip-from-files file-pairs :tar-prefix tar-prefix))
          (digest-obj (compute-digest data)))
     (make-instance 'layer-result
                    :data data

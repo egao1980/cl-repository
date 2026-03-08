@@ -15,9 +15,11 @@
                 #:+ann-version+ #:+ann-title+ #:+ann-description+
                 #:+cl-system-name+ #:+cl-alias-for+ #:+cl-provides+
                 #:+cl-depends-on+ #:+cl-depends-on-versioned+)
-  (:import-from :cl-oci/descriptor #:make-descriptor #:descriptor-digest)
+  (:import-from :cl-oci/descriptor #:make-descriptor #:descriptor-digest
+                #:descriptor-size #:descriptor-annotations)
   (:import-from :cl-oci/digest #:parse-digest #:format-digest #:compute-digest)
-  (:import-from :cl-oci/manifest #:manifest)
+  (:import-from :cl-oci/manifest #:manifest #:manifest-layers)
+  (:import-from :cl-oci/config #:+role-source+)
   (:import-from :cl-repository-packager/build-matrix
                 #:build-result #:build-result-index-json #:build-result-index-digest
                 #:build-result-blobs #:build-result-manifests
@@ -29,13 +31,17 @@
                 #:built-manifest #:built-manifest-json #:built-manifest-digest
                 #:built-manifest-descriptor
                 #:build-anchor-manifest #:build-image-index)
+  (:import-from :cl-repository-packager/layer-builder
+                #:layer-result #:layer-result-digest #:layer-result-size
+                #:layer-result-role #:layer-result-title)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests
                 #:image-index-annotations)
   (:import-from :babel #:string-to-octets)
   (:import-from :yason)
   (:export #:publish-package
            #:publish-full-package
-           #:publish-overlay))
+           #:publish-overlay
+           #:fetch-source-layer-info))
 (in-package :cl-repository-packager/publisher)
 
 (defun publish-package (registry namespace tag build-result spec)
@@ -161,6 +167,35 @@
           (msg " done~%")
           (msg "~&Overlay added to ~a:~a (new index digest: ~a)~%" repo tag idx-digest)
           idx-digest)))))
+
+;;; --- Source layer info for OCI client compatibility ---
+
+(defun fetch-source-layer-info (registry namespace system-name tag)
+  "Fetch source layer info from an existing package's universal manifest.
+   Returns a LAYER-RESULT with NIL data (blob already in registry) suitable
+   for passing to BUILD-OVERLAY :source-layer.
+   This enables incremental overlays to include the source layer for standard
+   OCI client compatibility (oras pull --platform ... gets all layers)."
+  (let* ((repo (format nil "~a/~a" namespace system-name))
+         (reg (etypecase registry
+                (registry registry)
+                (string (make-registry registry))))
+         (index (pull-manifest reg repo tag)))
+    (unless (typep index 'image-index)
+      (error "~a:~a is not an Image Index." repo tag))
+    ;; Universal manifest is first in index (no platform), all its layers are source.
+    (let* ((universal-desc (first (image-index-manifests index)))
+           (universal-digest (format-digest (descriptor-digest universal-desc)))
+           (universal-manifest (pull-manifest reg repo universal-digest))
+           (layer-desc (first (manifest-layers universal-manifest))))
+      (when layer-desc
+        (make-instance 'layer-result
+          :data nil
+          :digest (format-digest (descriptor-digest layer-desc))
+          :size (descriptor-size layer-desc)
+          :role +role-source+
+          :title (when (descriptor-annotations layer-desc)
+                   (gethash +ann-title+ (descriptor-annotations layer-desc))))))))
 
 ;;; --- Root anchor ---
 

@@ -18,13 +18,15 @@ Image Index
 │   ├── Config blob (application/vnd.common-lisp.system.config.v1+json)
 │   ├── Layer: <name>-<version>.tar.gz (OCICL-compatible root dir prefix)
 │   └── Layer: docs.tar.gz (optional)
-├── Manifest (linux/amd64) — platform overlay
+├── Manifest (linux/amd64) — platform overlay (self-contained)
 │   ├── Config blob
-│   ├── Layer: native-libs.tar.gz
-│   └── Layer: groveler.tar.gz
-├── Manifest (darwin/arm64) — platform overlay
+│   ├── Layer: <name>-<version>.tar.gz (same source blob, deduped by registry)
+│   ├── Layer: native-libs.tar.gz (<name>-<version>/native/... prefix)
+│   └── Layer: groveler.tar.gz (<name>-<version>/grovel-cache/... prefix)
+├── Manifest (darwin/arm64) — platform overlay (self-contained)
 │   ├── Config blob
-│   └── Layer: native-libs.tar.gz
+│   ├── Layer: <name>-<version>.tar.gz (same source blob, deduped by registry)
+│   └── Layer: native-libs.tar.gz (<name>-<version>/native/... prefix)
 └── ...
 ```
 
@@ -56,7 +58,7 @@ Source layers use a root directory prefix matching the OCICL convention: `<name>
 
 The cl-repo client strips this prefix during installation, producing a flat directory under `systems/<name>/<version>/`.
 
-Overlay layers (native libraries, grovel output, etc.) do NOT use a prefix — they are extracted into subdirectories of the install path.
+Overlay layers use the same `<name>-<version>/` root prefix with role-specific subdirectories (e.g., `<name>-<version>/native/libfoo.so`). This makes all layers true overlays: a standard OCI client can extract them in order and files land in the correct layout. The cl-repo client strips the prefix during installation, same as source layers.
 
 ## Cross-Repo Blob Mounting for Multi-System Packages
 
@@ -303,7 +305,9 @@ The first manifest in the Image Index MUST NOT have a `platform` field. It conta
 
 ### Platform Overlay Manifests
 
-Subsequent manifests use the standard OCI `platform` field on their descriptor in the index.
+Subsequent manifests use the standard OCI `platform` field on their descriptor in the index. Each overlay manifest SHOULD include the universal source layer as its first layer, followed by platform-specific layers. This makes each overlay self-contained: a standard OCI client (`oras pull --platform linux/amd64`) retrieves a complete artifact in one pull. The source layer blob is content-addressable, so the registry stores it only once regardless of how many overlays reference it.
+
+The cl-repo installer skips source-role layers when extracting overlays (they are already extracted from the universal manifest).
 
 ### Resolution Algorithm
 
@@ -390,6 +394,7 @@ OCI packaging metadata can be embedded directly in a `.asd` file using ASDF's `:
 
 ## Compatibility
 
-- **OCI clients**: Any OCI-compliant tool can pull these artifacts. Each provided system name is a full package.
+- **Standard OCI clients**: Each overlay manifest is self-contained (source + native layers). `oras pull --platform linux/amd64 ghcr.io/ns/pkg:1.0` retrieves all layers for that platform in a single pull. The universal manifest (no platform) serves pure-Lisp clients. No cl-repo-specific tooling is required to download and extract a package.
 - **Backward compatibility**: Pure-Lisp systems require only a single universal manifest.
 - **CFFI integration**: Pre-groveled output and native libraries are additive overlays. Systems always remain buildable from source as a fallback.
+- **Content-addressable dedup**: Overlay manifests reference the same source layer blob as the universal manifest. OCI registries store the blob once; overlay manifests just add a descriptor pointing to it.

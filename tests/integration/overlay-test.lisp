@@ -102,12 +102,16 @@
              (let ((idx (pull-manifest reg repo tag)))
                (ok (typep idx 'image-index))
                (ok (= (length (image-index-manifests idx)) 1)))
-             ;; Step 2: Add real overlay for host platform
+             ;; Step 2: Add real overlay for host platform (with source layer for OCI compat)
              (let* ((overlay (make-instance
                               'cl-repository-packager/build-matrix::overlay-spec
                               :os (host-os) :arch (host-arch)
                               :native-paths (list (namestring lib-path))))
-                    (ov-result (build-overlay repo-name overlay :version tag)))
+                    (src-layer (fetch-source-layer-info
+                                reg *test-namespace* repo-name tag))
+                    (ov-result (build-overlay repo-name overlay
+                                              :version tag
+                                              :source-layer src-layer)))
                (publish-overlay reg *test-namespace* repo-name tag ov-result))
              ;; Verify: 2 manifests now
              (let ((idx (pull-manifest reg repo tag)))
@@ -126,7 +130,11 @@
                                       'cl-repository-packager/build-matrix::overlay-spec
                                       :os "freebsd" :arch "amd64"
                                       :native-paths (list (namestring fake-lib))))
-                           (ov-result2 (build-overlay repo-name overlay2 :version tag)))
+                           (src-layer (fetch-source-layer-info
+                                       reg *test-namespace* repo-name tag))
+                           (ov-result2 (build-overlay repo-name overlay2
+                                                      :version tag
+                                                      :source-layer src-layer)))
                       (publish-overlay reg *test-namespace* repo-name tag ov-result2))
                  (uiop:delete-directory-tree fake-lib-dir :validate t :if-does-not-exist :ignore)))
              ;; Verify: 3 manifests now

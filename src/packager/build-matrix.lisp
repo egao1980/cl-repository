@@ -185,28 +185,37 @@
                                              (list source-layer)
                                              :annotations ann)))
           (push bm all-manifests)
-          (push (built-manifest-descriptor bm) manifest-descriptors))))
-    ;; 3. Build overlay manifests for each platform
-    (dolist (overlay (package-spec-overlays spec))
-      (let ((overlay-layers nil)
-            (plat (make-platform :os (overlay-spec-os overlay)
-                                 :architecture (overlay-spec-arch overlay)
-                                 :os-version (overlay-spec-os-version overlay))))
-        ;; Native library layer
-        (when (overlay-spec-native-paths overlay)
-          (let* ((pairs (mapcar (lambda (p)
-                                  (let ((path (merge-pathnames p (package-spec-source-dir spec))))
-                                    (cons (file-namestring path) path)))
-                                (overlay-spec-native-paths overlay)))
-                 (layer (build-layer-from-files pairs +role-native-library+)))
-            (push layer overlay-layers)
-            (push (cons (layer-result-digest layer) (layer-result-data layer)) all-blobs)))
-        ;; Build overlay config + manifest
-        (when overlay-layers
+          (push (built-manifest-descriptor bm) manifest-descriptors)))
+      ;; 3. Build overlay manifests for each platform
+      ;; Each overlay includes the source layer so that standard OCI clients
+      ;; (oras pull --platform linux/amd64) get a complete, self-contained artifact.
+      ;; The source blob is content-addressable -- the registry stores it once.
+      (dolist (overlay (package-spec-overlays spec))
+        (let ((overlay-layers nil)
+              (plat (make-platform :os (overlay-spec-os overlay)
+                                   :architecture (overlay-spec-arch overlay)
+                                   :os-version (overlay-spec-os-version overlay))))
+          ;; Source layer first (same blob as universal, deduped by registry)
+          (push source-layer overlay-layers)
+          ;; Native library layer (prefixed so tar overlays cleanly on source)
+          (when (overlay-spec-native-paths overlay)
+            (let* ((pairs (mapcar (lambda (p)
+                                    (let ((path (merge-pathnames p (package-spec-source-dir spec))))
+                                      (cons (file-namestring path) path)))
+                                  (overlay-spec-native-paths overlay)))
+                   (layer (build-layer-from-files pairs +role-native-library+
+                                                  :tar-prefix (concatenate 'string tar-prefix "native/"))))
+              (push layer overlay-layers)
+              (push (cons (layer-result-digest layer) (layer-result-data layer)) all-blobs)))
+          ;; Build overlay config + manifest
+          (setf overlay-layers (nreverse overlay-layers))
           (multiple-value-bind (cfg-octets cfg-digest cfg-size)
               (build-config-blob (package-spec-name spec)
                                  :version (package-spec-version spec)
-                                 :layers overlay-layers)
+                                 :depends-on (package-spec-depends-on spec)
+                                 :provides (package-spec-provides spec)
+                                 :layers overlay-layers
+                                 :cffi-libraries (package-spec-cffi-libraries spec))
             (push (cons cfg-digest cfg-octets) all-blobs)
             (let* ((overlay-ann (make-hash-table :test 'equal))
                    (_ (when (overlay-spec-lisp overlay)
@@ -220,49 +229,62 @@
                                                   :platform plat)))
               (declare (ignore _ _2))
               (push bm all-manifests)
-              (push (built-manifest-descriptor bm) manifest-descriptors))))))
-    ;; 4. Build Image Index
-    (multiple-value-bind (idx-json idx-digest idx-size)
-        (build-image-index (nreverse manifest-descriptors) :annotations ann)
-      (declare (ignore idx-size))
-      (make-instance 'build-result
-                     :index-json idx-json
-                     :index-digest idx-digest
-                     :blobs (nreverse all-blobs)
-                     :manifests (nreverse all-manifests)))))
+              (push (built-manifest-descriptor bm) manifest-descriptors)))))
+      ;; 4. Build Image Index
+      (multiple-value-bind (idx-json idx-digest idx-size)
+          (build-image-index (nreverse manifest-descriptors) :annotations ann)
+        (declare (ignore idx-size))
+        (make-instance 'build-result
+                       :index-json idx-json
+                       :index-digest idx-digest
+                       :blobs (nreverse all-blobs)
+                       :manifests (nreverse all-manifests))))))
 
-(defun build-overlay (system-name overlay &key version)
+(defun build-overlay (system-name overlay &key version source-layer)
   "Build a single platform overlay without the universal manifest.
-   OVERLAY is an overlay-spec. Returns an OVERLAY-RESULT."
-  (let ((blobs nil)
-        (overlay-layers nil)
-        (plat (make-platform :os (overlay-spec-os overlay)
-                             :architecture (overlay-spec-arch overlay)
-                             :os-version (overlay-spec-os-version overlay))))
+   OVERLAY is an overlay-spec. SOURCE-LAYER, when provided, is a layer-result
+   for the source layer to include in the overlay manifest for OCI client
+   compatibility (the blob is already in the registry, no re-upload needed).
+   Returns an OVERLAY-RESULT."
+  (let* ((blobs nil)
+         (overlay-layers nil)
+         (tar-prefix (format nil "~a-~a/" system-name (or version "latest")))
+         (plat (make-platform :os (overlay-spec-os overlay)
+                              :architecture (overlay-spec-arch overlay)
+                              :os-version (overlay-spec-os-version overlay))))
+    ;; Source layer first (if available) for OCI client compat
+    (when source-layer
+      (push source-layer overlay-layers))
     (when (overlay-spec-native-paths overlay)
       (let* ((pairs (mapcar (lambda (p)
                               (let ((path (if (pathnamep p) p (pathname p))))
                                 (cons (file-namestring path) path)))
                             (overlay-spec-native-paths overlay)))
-             (layer (build-layer-from-files pairs +role-native-library+)))
+             (layer (build-layer-from-files pairs +role-native-library+
+                                            :tar-prefix (concatenate 'string tar-prefix "native/"))))
         (push layer overlay-layers)
         (push (cons (layer-result-digest layer) (layer-result-data layer)) blobs)))
-    (unless overlay-layers
-      (error "Overlay for ~a/~a has no layers to build." (overlay-spec-os overlay) (overlay-spec-arch overlay)))
-    (multiple-value-bind (cfg-octets cfg-digest cfg-size)
-        (build-config-blob system-name :version version :layers overlay-layers)
-      (push (cons cfg-digest cfg-octets) blobs)
-      (let* ((overlay-ann (make-hash-table :test 'equal))
-             (_ (when (overlay-spec-lisp overlay)
-                  (setf (gethash +cl-implementation+ overlay-ann)
-                        (overlay-spec-lisp overlay))))
-             (roles (format nil "~{~a~^,~}" (mapcar #'layer-result-role overlay-layers)))
-             (_2 (setf (gethash +cl-layer-roles+ overlay-ann) roles))
-             (bm (build-manifest-for-layers cfg-octets cfg-digest cfg-size
-                                            overlay-layers
-                                            :annotations overlay-ann
-                                            :platform plat)))
-        (declare (ignore _ _2))
-        (make-instance 'overlay-result
-                       :blobs (nreverse blobs)
-                       :manifest bm)))))
+    (let ((real-layers (if source-layer
+                           (nreverse overlay-layers)
+                           (progn
+                             (unless overlay-layers
+                               (error "Overlay for ~a/~a has no layers to build."
+                                      (overlay-spec-os overlay) (overlay-spec-arch overlay)))
+                             (nreverse overlay-layers)))))
+      (multiple-value-bind (cfg-octets cfg-digest cfg-size)
+          (build-config-blob system-name :version version :layers real-layers)
+        (push (cons cfg-digest cfg-octets) blobs)
+        (let* ((overlay-ann (make-hash-table :test 'equal))
+               (_ (when (overlay-spec-lisp overlay)
+                    (setf (gethash +cl-implementation+ overlay-ann)
+                          (overlay-spec-lisp overlay))))
+               (roles (format nil "~{~a~^,~}" (mapcar #'layer-result-role real-layers)))
+               (_2 (setf (gethash +cl-layer-roles+ overlay-ann) roles))
+               (bm (build-manifest-for-layers cfg-octets cfg-digest cfg-size
+                                              real-layers
+                                              :annotations overlay-ann
+                                              :platform plat)))
+          (declare (ignore _ _2))
+          (make-instance 'overlay-result
+                         :blobs (nreverse blobs)
+                         :manifest bm))))))

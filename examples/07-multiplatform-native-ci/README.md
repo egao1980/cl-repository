@@ -21,13 +21,15 @@ cl-calc/
 
 ## Resulting OCI Image Index
 
+Each overlay manifest is self-contained: it includes the source layer (same content-addressable blob as the universal manifest, stored once by the registry) plus platform-specific native library layers. This means `oras pull --platform linux/amd64` gives you a complete package in one pull.
+
 ```
 Image Index (cl-calc:1.0.0)
-  +-- Manifest (universal)       -> cl-calc source layer
-  +-- Manifest (linux/amd64)     -> libcalc.so
-  +-- Manifest (linux/arm64)     -> libcalc.so
-  +-- Manifest (darwin/arm64)    -> libcalc.dylib
-  +-- Manifest (darwin/amd64)    -> libcalc.dylib
+  +-- Manifest (universal)       -> source layer
+  +-- Manifest (linux/amd64)     -> source layer + libcalc.so
+  +-- Manifest (linux/arm64)     -> source layer + libcalc.so
+  +-- Manifest (darwin/arm64)    -> source layer + libcalc.dylib
+  +-- Manifest (darwin/amd64)    -> source layer + libcalc.dylib
 ```
 
 ## CI Patterns
@@ -126,6 +128,19 @@ qlot exec ros -e '
 # Cleanup
 docker stop oci-registry && docker rm oci-registry
 ```
+
+## Using a Standard OCI Client
+
+No cl-repo tooling required. Each overlay manifest is self-contained. All layers use the same OCICL-compatible `<name>-<version>/` prefix, so they overlay cleanly:
+
+```sh
+oras pull --platform linux/amd64 ghcr.io/cl-systems/cl-calc:1.0.0
+for f in *.tar.gz; do tar xzf "$f"; done
+# -> cl-calc-1.0.0/          (source)
+# -> cl-calc-1.0.0/native/   (platform libs)
+```
+
+Without `--platform`, `oras` selects the first manifest (universal, source-only).
 
 ## Client Resolution
 

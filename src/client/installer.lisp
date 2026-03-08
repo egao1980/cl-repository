@@ -121,7 +121,10 @@
           (let ((blob (pull-blob registry repository
                                  (format-digest (descriptor-digest layer-desc)))))
             (extract-layer-stripping-prefix blob install-dir strip-prefix))))
-      ;; Extract overlay layers (overlays have no prefix)
+      ;; Extract overlay layers -- skip source-role layers (already extracted
+      ;; from universal manifest above; overlays include them for OCI client compat).
+      ;; Non-source layers use the same OCICL prefix (e.g. "name-ver/native/..."),
+      ;; so strip-prefix extraction puts files in the right subdirectory.
       (dolist (overlay-desc overlay-descs)
         (let* ((overlay-manifest
                  (pull-manifest registry repository
@@ -135,19 +138,16 @@
                    (from-json 'cl-system-config
                               (babel:octets-to-string overlay-config-json :encoding :utf-8)))))
           (dolist (layer-desc (manifest-layers overlay-manifest))
-            (let* ((blob (pull-blob registry repository
-                                    (format-digest (descriptor-digest layer-desc))))
-                   (layer-digest-str (format-digest (descriptor-digest layer-desc)))
+            (let* ((layer-digest-str (format-digest (descriptor-digest layer-desc)))
                    (role (or (when overlay-config
                                (gethash layer-digest-str
                                         (config-layer-roles overlay-config)))
                              (when config
                                (gethash layer-digest-str
-                                        (config-layer-roles config)))))
-                   (subdir (role-subdirectory role)))
-              (extract-layer blob (if subdir
-                                      (merge-pathnames (format nil "~a/" subdir) install-dir)
-                                      install-dir))))))
+                                        (config-layer-roles config))))))
+              (unless (string= role "source")
+                (let ((blob (pull-blob registry repository layer-digest-str)))
+                  (extract-layer-stripping-prefix blob install-dir strip-prefix)))))))
       ;; Generate cl-repo-init.lisp if needed
       (when (and config (cl-oci/config:config-cffi-libraries config))
         (generate-init-file install-dir config))
