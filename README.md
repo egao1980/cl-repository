@@ -55,11 +55,12 @@ See [docs/spec.md](docs/spec.md) for the full specification.
 Packages are standard OCI artifacts — pull with any OCI client, then point ASDF at the extracted directory.
 
 ```sh
-# Pull the source layer
+# Pull the source layer (downloads cl-oci-0.2.0.tar.gz)
 oras pull ghcr.io/egao1980/cl-systems/cl-oci:0.2.0 -o /tmp/
-# Extract
-mkdir -p ~/.local/share/cl-systems/cl-oci/
-tar -xzf /tmp/source.tar.gz -C ~/.local/share/cl-systems/cl-oci/
+# Extract — tarball has a root directory cl-oci-0.2.0/ (OCICL-compatible)
+mkdir -p ~/.local/share/cl-systems/
+tar -xzf /tmp/cl-oci-0.2.0.tar.gz -C ~/.local/share/cl-systems/
+# Resulting directory: ~/.local/share/cl-systems/cl-oci-0.2.0/
 ```
 
 Then in your Lisp:
@@ -87,11 +88,11 @@ For scripting, pull + extract + load in one shot:
 REGISTRY=ghcr.io/egao1980/cl-systems
 SYSTEM=cl-oci
 TAG=0.2.0
-DEST=~/.local/share/cl-systems/${SYSTEM}
+DEST=~/.local/share/cl-systems
 
 mkdir -p "${DEST}"
 oras pull "${REGISTRY}/${SYSTEM}:${TAG}" -o /tmp/
-tar -xzf /tmp/source.tar.gz -C "${DEST}/"
+tar -xzf "/tmp/${SYSTEM}-${TAG}.tar.gz" -C "${DEST}/"
 
 sbcl --eval "(asdf:initialize-source-registry
                '(:source-registry
@@ -122,6 +123,8 @@ Mix cl-repo and OCICL registries — the client searches in order:
 ```
 
 OCICL differences handled automatically: empty config blobs, tarball prefix stripping, date-commit version tags.
+
+cl-repo packages are also OCICL-compatible — the source layer uses an `<name>-<version>/` root directory prefix and a matching layer title (`<name>-<version>.tar.gz`), so OCICL's client can consume cl-repo packages directly.
 
 ## Examples
 

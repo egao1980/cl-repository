@@ -1,3 +1,35 @@
+# v0.5.0 — OCICL-Compatible Tarball Format
+
+## OCICL-Compatible Packaging
+
+cl-repo packages now produce tarballs with the same structure OCICL expects, enabling bidirectional compatibility.
+
+### Packager Changes
+- Source layers now use a `<name>-<version>/` root directory prefix inside the tarball
+- Layer descriptor title annotation set to `<name>-<version>.tar.gz` (e.g., `cl-oci-0.2.0.tar.gz`)
+- `build-layer-from-directory` and `make-tar-gzip-from-files` accept `:tar-prefix` parameter
+- `layer-result` gains a `title` slot used by `build-manifest-for-layers` for the `org.opencontainers.image.title` annotation
+
+### Client Changes
+- `install-from-index` and `install-from-manifest` now compute and strip the `<name>-<version>/` prefix during extraction
+- New `compute-strip-prefix` helper exported from `cl-repository-client/installer`
+- No backward compatibility shim needed — all new images use the prefixed format
+
+### Benefits
+- **OCICL clients can consume cl-repo packages** directly (expected single subdirectory in tarball)
+- **`oras pull` + `tar -xzf`** produces a self-contained `<name>-<version>/` directory
+- **cl-repo clients** transparently strip the prefix during installation
+
+### Spec & Docs
+- `docs/spec.md` updated to v0.3.0 with "Source Layer Tarball Format" section
+- README oras section updated to reflect new tarball names and extraction paths
+
+### New Tests
+- `layer-builder-test`: tar prefix prepending, bare names, title slot
+- `ocicl-compat-test`: `compute-strip-prefix` test
+
+---
+
 # v0.4.0 — OCICL Compatibility + OCI Client Interop Fixes
 
 ## OCICL Compatibility

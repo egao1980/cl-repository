@@ -3,6 +3,7 @@
   (:import-from :cl-repository-client/installer
                 #:parse-ocicl-layer-info
                 #:extract-layer-stripping-prefix
+                #:compute-strip-prefix
                 #:systems-root
                 #:system-install-path)
   (:import-from :cl-repository-client/quickload
@@ -61,6 +62,14 @@
     (add-registry "https://ghcr.io" :namespace "ocicl" :type :ocicl)
     (add-registry "https://ghcr.io" :namespace "cl-systems" :type :cl-repo)
     (ok (= 2 (length cl-repository-client/quickload::*registries*)))))
+
+;;; --- compute-strip-prefix for cl-repo packages ---
+
+(deftest compute-strip-prefix-test
+  (testing "computes name-version/ prefix"
+    (ok (string= (compute-strip-prefix "alexandria" "1.4") "alexandria-1.4/"))
+    (ok (string= (compute-strip-prefix "cl-oci" "0.2.0") "cl-oci-0.2.0/"))
+    (ok (string= (compute-strip-prefix "mylib" nil) "mylib-latest/"))))
 
 ;;; --- tar prefix stripping (via extract-layer-stripping-prefix) ---
 

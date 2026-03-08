@@ -18,7 +18,7 @@
   (:import-from :cl-oci/serialization #:to-json-string #:serialize-to-octets)
   (:import-from :cl-repository-packager/layer-builder
                 #:layer-result #:layer-result-data #:layer-result-digest
-                #:layer-result-size #:layer-result-role)
+                #:layer-result-size #:layer-result-role #:layer-result-title)
   (:export #:build-config-blob
            #:build-manifest-for-layers
            #:build-image-index
@@ -63,15 +63,16 @@
                                        :digest (parse-digest config-digest)
                                        :size config-size))
          (layer-descs (mapcar (lambda (lr)
-                               (let ((ann (make-hash-table :test 'equal)))
-                                 (setf (gethash +ann-title+ ann)
-                                       (format nil "~a.tar.gz" (layer-result-role lr)))
-                                 (make-descriptor
-                                  :media-type +oci-image-layer-tar-gzip+
-                                  :digest (parse-digest (layer-result-digest lr))
-                                  :size (layer-result-size lr)
-                                  :annotations ann)))
-                             layers))
+                              (let ((ann (make-hash-table :test 'equal)))
+                                (setf (gethash +ann-title+ ann)
+                                      (or (layer-result-title lr)
+                                          (format nil "~a.tar.gz" (layer-result-role lr))))
+                                (make-descriptor
+                                 :media-type +oci-image-layer-tar-gzip+
+                                 :digest (parse-digest (layer-result-digest lr))
+                                 :size (layer-result-size lr)
+                                 :annotations ann)))
+                            layers))
          (manifest (make-manifest :config config-desc
                                   :layers layer-descs
                                   :artifact-type (or artifact-type +cl-system-artifact-type+)

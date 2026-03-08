@@ -72,3 +72,34 @@ jobs:
       - name: Run integration tests
         run: |
           qlot exec ros -e '(asdf:test-system "cl-repository-integration-tests")'
+
+  ocicl-compat:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Roswell
+        run: |
+          curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
+          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+
+      - name: Install SBCL
+        run: |
+          ros install "sbcl-bin/$SBCL_VERSION"
+          ros use "sbcl-bin/$SBCL_VERSION"
+
+      - name: Install dependencies
+        run: |
+          ros install qlot
+          qlot install
+
+      - name: Install OCICL
+        run: |
+          OCICL_VERSION=$(curl -sI https://github.com/ocicl/ocicl/releases/latest | grep -i ^location: | sed 's|.*/v||;s/\r//')
+          curl -sL "https://github.com/ocicl/ocicl/releases/download/v${OCICL_VERSION}/ocicl_${OCICL_VERSION}-1_amd64.deb" -o /tmp/ocicl.deb
+          sudo dpkg -i /tmp/ocicl.deb
+          ocicl version
+
+      - name: Run OCICL compatibility test
+        run: bash tests/integration/test-ocicl-compat.sh

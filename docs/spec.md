@@ -1,6 +1,6 @@
 # CL Repository OCI Artifact Format Specification
 
-**Version**: 0.2.0
+**Version**: 0.3.0
 
 ## Overview
 
@@ -16,7 +16,7 @@ All artifacts conform to the [OCI Image Specification v1.1](https://github.com/o
 Image Index
 ├── Manifest (universal) — no platform field
 │   ├── Config blob (application/vnd.common-lisp.system.config.v1+json)
-│   ├── Layer: source.tar.gz
+│   ├── Layer: <name>-<version>.tar.gz (OCICL-compatible root dir prefix)
 │   └── Layer: docs.tar.gz (optional)
 ├── Manifest (linux/amd64) — platform overlay
 │   ├── Config blob
@@ -45,6 +45,18 @@ Image Index
 ### Manifest `artifactType`
 
 Every manifest in the index MUST set `artifactType` to `application/vnd.common-lisp.system.v1`.
+
+### Source Layer Tarball Format (OCICL-compatible)
+
+Source layers use a root directory prefix matching the OCICL convention: `<name>-<version>/`. This ensures:
+
+1. **OCICL client compatibility** — OCICL extracts to a temp dir and expects a single subdirectory
+2. **Clean `oras pull` UX** — layer annotation title is `<name>-<version>.tar.gz`, and `tar -xzf` produces a self-contained directory
+3. **Standard OCI behavior** — any OCI client can pull and extract without cl-repo
+
+The cl-repo client strips this prefix during installation, producing a flat directory under `systems/<name>/<version>/`.
+
+Overlay layers (native libraries, grovel output, etc.) do NOT use a prefix — they are extracted into subdirectories of the install path.
 
 ## Cross-Repo Blob Mounting for Multi-System Packages
 

@@ -13,14 +13,16 @@
            #:layer-result-data
            #:layer-result-digest
            #:layer-result-size
-           #:layer-result-role))
+           #:layer-result-role
+           #:layer-result-title))
 (in-package :cl-repository-packager/layer-builder)
 
 (defclass layer-result ()
   ((data :type (vector (unsigned-byte 8)) :initarg :data :accessor layer-result-data)
    (digest :type string :initarg :digest :accessor layer-result-digest)
    (size :type integer :initarg :size :accessor layer-result-size)
-   (role :type string :initarg :role :accessor layer-result-role)))
+   (role :type string :initarg :role :accessor layer-result-role)
+   (title :type (or null string) :initarg :title :accessor layer-result-title :initform nil)))
 
 (defparameter *excluded-dirs*
   '(".git" ".qlot" ".lake" "__pycache__" "node_modules")
@@ -44,8 +46,9 @@
            (push (cons rel f) files)))))
     (nreverse files)))
 
-(defun make-tar-gzip-from-files (file-pairs)
+(defun make-tar-gzip-from-files (file-pairs &key tar-prefix)
   "Create a tar.gz archive from FILE-PAIRS ((relative-path . absolute-path) ...).
+   When TAR-PREFIX is given (e.g. \"mylib-1.0/\"), prepend it to every entry name.
    Returns the archive as an octet vector."
   (let ((output (flexi-streams:make-in-memory-output-stream :element-type '(unsigned-byte 8))))
     (let ((gzip-stream (salza2:make-compressing-stream 'salza2:gzip-compressor output)))
@@ -53,7 +56,9 @@
         (let* ((rel-path (car pair))
                (abs-path (cdr pair))
                (content (read-file-octets abs-path))
-               (name (namestring rel-path)))
+               (name (if tar-prefix
+                         (concatenate 'string tar-prefix (namestring rel-path))
+                         (namestring rel-path))))
           (write-tar-entry gzip-stream name content)))
       (write-tar-eof gzip-stream)
       (close gzip-stream))
@@ -141,10 +146,12 @@
           do (setf (aref buf (+ offset i)) (char-code (char str i))))
     (setf (aref buf (+ offset (1- width))) 0)))
 
-(defun build-layer-from-directory (directory role &key (strip-prefix directory))
-  "Build a tar+gzip layer from all files in DIRECTORY. Returns a LAYER-RESULT."
+(defun build-layer-from-directory (directory role &key (strip-prefix directory) tar-prefix)
+  "Build a tar+gzip layer from all files in DIRECTORY.
+   TAR-PREFIX: when given, prepend to every entry name (e.g. \"mylib-1.0/\").
+   Returns a LAYER-RESULT."
   (let* ((files (collect-files (truename directory) :strip-prefix (truename strip-prefix)))
-         (data (make-tar-gzip-from-files files))
+         (data (make-tar-gzip-from-files files :tar-prefix tar-prefix))
          (digest-obj (compute-digest data)))
     (make-instance 'layer-result
                    :data data

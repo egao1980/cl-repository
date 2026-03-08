@@ -11,7 +11,7 @@
   (:import-from :cl-repository-packager/layer-builder
                 #:build-layer-from-directory #:build-layer-from-files
                 #:layer-result #:layer-result-data #:layer-result-digest
-                #:layer-result-size #:layer-result-role)
+                #:layer-result-size #:layer-result-role #:layer-result-title)
   (:import-from :cl-repository-packager/manifest-builder
                 #:build-config-blob #:build-manifest-for-layers #:build-image-index
                 #:built-manifest #:built-manifest-descriptor)
@@ -140,9 +140,17 @@
         (all-manifests nil)
         (manifest-descriptors nil)
         (ann (make-annotations spec)))
-    ;; 1. Build source layer
-    (let ((source-layer (build-layer-from-directory
-                         (package-spec-source-dir spec) +role-source+)))
+    ;; 1. Build source layer (with OCICL-compatible root directory prefix)
+    (let* ((tar-prefix (format nil "~a-~a/"
+                               (package-spec-name spec)
+                               (or (package-spec-version spec) "latest")))
+           (source-layer (build-layer-from-directory
+                          (package-spec-source-dir spec) +role-source+
+                          :tar-prefix tar-prefix)))
+      (setf (layer-result-title source-layer)
+            (format nil "~a-~a.tar.gz"
+                    (package-spec-name spec)
+                    (or (package-spec-version spec) "latest")))
       (push (cons (layer-result-digest source-layer) (layer-result-data source-layer)) all-blobs)
       ;; 2. Build universal config + manifest
       (multiple-value-bind (cfg-octets cfg-digest cfg-size)

@@ -43,7 +43,8 @@
   "Check if the registry supports OCI Distribution Spec (GET /v2/)."
   (let ((url (api-url registry "/v2/")))
     (handler-case
-        (let ((resp (dex:get url :headers (make-auth-headers (registry-auth registry)))))
+        (let ((resp (dex:get url :headers (make-auth-headers (registry-auth registry))
+                                 :insecure (registry-insecure-p registry))))
           (declare (ignore resp))
           t)
       (dex:http-request-failed (e)
@@ -59,7 +60,8 @@
   (let* ((headers (dex:response-headers error))
          (www-auth (gethash "www-authenticate" headers)))
     (when www-auth
-      (let ((token (obtain-token www-auth (registry-auth registry))))
+      (let ((token (obtain-token www-auth (registry-auth registry)
+                                 :insecure (registry-insecure-p registry))))
         (if (registry-auth registry)
             (setf (auth-config-token (registry-auth registry)) token)
             (setf (registry-auth registry) (make-auth-config :token token)))
@@ -77,16 +79,17 @@
                               (when accept
                                 (list (cons "Accept" accept)))
                               headers)))
-    (handler-case
+    (let ((insecure (registry-insecure-p registry)))
+      (handler-case
         (multiple-value-bind (body status resp-headers)
             (ecase method
-              (:get (dex:get url :headers all-headers :force-binary t))
-              (:head (dex:head url :headers all-headers))
-              (:put (dex:put url :headers all-headers :content content :force-binary t))
-              (:post (dex:post url :headers all-headers :content content :force-binary t))
+              (:get (dex:get url :headers all-headers :force-binary t :insecure insecure))
+              (:head (dex:head url :headers all-headers :insecure insecure))
+              (:put (dex:put url :headers all-headers :content content :force-binary t :insecure insecure))
+              (:post (dex:post url :headers all-headers :content content :force-binary t :insecure insecure))
               (:patch (dex:request url :method :patch :headers all-headers
-                                       :content content :force-binary t))
-              (:delete (dex:delete url :headers all-headers)))
+                                       :content content :force-binary t :insecure insecure))
+              (:delete (dex:delete url :headers all-headers :insecure insecure)))
           (values body status resp-headers))
       (dex:http-request-failed (e)
         (cond
@@ -98,7 +101,7 @@
           (t (error 'registry-error
                     :status (dex:response-status e)
                     :url url
-                    :body (dex:response-body e))))))))
+                    :body (dex:response-body e)))))))))
 
 (defun parse-reference (reference)
   "Parse a reference like 'ghcr.io/namespace/name:tag' or 'registry/name@sha256:...'

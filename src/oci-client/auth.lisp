@@ -30,7 +30,7 @@
       (setf (gethash key params) value))
     params))
 
-(defun obtain-token (www-authenticate-header &optional auth)
+(defun obtain-token (www-authenticate-header &optional auth &key insecure)
   "Request a bearer token from the auth endpoint described in WWW-Authenticate header."
   (let* ((params (parse-www-authenticate www-authenticate-header))
          (realm (gethash "realm" params))
@@ -48,7 +48,7 @@
                                                    (auth-config-username auth)
                                                    (or (auth-config-password auth) ""))))))))
            (response (handler-case
-                         (dex:get url :headers headers)
+                         (dex:get url :headers headers :insecure insecure)
                        (dex:http-request-failed (e)
                          (error 'auth-error
                                 :status (dex:response-status e)

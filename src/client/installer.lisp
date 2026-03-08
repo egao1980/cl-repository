@@ -19,6 +19,7 @@
   (:export #:install-system
            #:extract-layer
            #:extract-layer-stripping-prefix
+           #:compute-strip-prefix
            #:systems-root
            #:system-install-path
            #:create-provides-symlinks
@@ -51,6 +52,10 @@
             (image-index (install-from-index reg repository obj))
             (manifest (install-from-manifest reg repository obj)))))))
 
+(defun compute-strip-prefix (name version)
+  "Compute the tarball prefix that the packager uses: \"<name>-<version>/\"."
+  (format nil "~a-~a/" name (or version "latest")))
+
 (defun install-from-index (registry repository index)
   "Install from an image index - resolve platform and pull appropriate manifests."
   (multiple-value-bind (universal-desc overlay-descs) (resolve-manifests index)
@@ -68,16 +73,17 @@
                                 (babel:octets-to-string config-json :encoding :utf-8))))
            (name (if config (config-system-name config) repository))
            (version (or (and config (cl-oci/config:config-version config)) "latest"))
+           (strip-prefix (compute-strip-prefix name version))
            (install-dir (system-install-path name version)))
       ;; Ensure install directory
       (ensure-directories-exist (merge-pathnames "x" install-dir))
-      ;; Extract universal layers
+      ;; Extract universal layers (strip OCICL-compatible prefix)
       (when universal-manifest
         (dolist (layer-desc (manifest-layers universal-manifest))
           (let ((blob (pull-blob registry repository
                                  (format-digest (descriptor-digest layer-desc)))))
-            (extract-layer blob install-dir))))
-      ;; Extract overlay layers
+            (extract-layer-stripping-prefix blob install-dir strip-prefix))))
+      ;; Extract overlay layers (overlays have no prefix)
       (dolist (overlay-desc overlay-descs)
         (let ((overlay-manifest
                 (pull-manifest registry repository
@@ -110,12 +116,13 @@
                             (babel:octets-to-string config-json :encoding :utf-8)))
          (name (config-system-name config))
          (version (or (cl-oci/config:config-version config) "latest"))
+         (strip-prefix (compute-strip-prefix name version))
          (install-dir (system-install-path name version)))
     (ensure-directories-exist (merge-pathnames "x" install-dir))
     (dolist (layer-desc (manifest-layers manifest))
       (let ((blob (pull-blob registry repository
                              (format-digest (descriptor-digest layer-desc)))))
-        (extract-layer blob install-dir)))
+        (extract-layer-stripping-prefix blob install-dir strip-prefix)))
     (create-provides-symlinks name (config-provides config))
     (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
     install-dir))
