@@ -44,11 +44,13 @@
            #:fetch-source-layer-info))
 (in-package :cl-repository-packager/publisher)
 
-(defun publish-package (registry namespace tag build-result spec)
+(defun publish-package (registry namespace tag build-result spec &key skip-catalog)
   "Publish a build result to an OCI registry with multi-system support.
    Pushes full package to primary repo, mounts blobs to secondary repos for
    each provided system name, creates system-name anchors and referrers.
-   SPEC is a package-spec for metadata. NAMESPACE is the registry namespace."
+   SPEC is a package-spec for metadata. NAMESPACE is the registry namespace.
+   When SKIP-CATALOG is true, skip writing ns-catalog anchors and referrers
+   (useful when the publishing token lacks write access to the catalog repo)."
   (let* ((provides (or (package-spec-provides spec)
                        (list (package-spec-name spec))))
          (canonical (first provides))
@@ -104,23 +106,24 @@
                        :content-type +oci-image-index-v1+)
         (msg " done~%")))
     ;; 5. Create/update system-name anchors + referrers
-    (let ((root-digest (ensure-root-anchor reg namespace)))
-      (dolist (system-name provides)
-        (let* ((sys-repo (format nil "~a/~a" namespace system-name))
-               (anchor-digest (ensure-system-name-anchor reg sys-repo system-name canonical
-                                                         (or (package-spec-version spec) tag))))
-          ;; Push provider referrer into system-name repo
-          (push-provider-referrer reg sys-repo anchor-digest spec tag)
-          ;; Push catalog referrer into ns-catalog repo
-          (push-catalog-referrer reg namespace root-digest system-name
-                                 (or (package-spec-version spec) tag)))))
+    (unless skip-catalog
+      (let ((root-digest (ensure-root-anchor reg namespace)))
+        (dolist (system-name provides)
+          (let* ((sys-repo (format nil "~a/~a" namespace system-name))
+                 (anchor-digest (ensure-system-name-anchor reg sys-repo system-name canonical
+                                                           (or (package-spec-version spec) tag))))
+            ;; Push provider referrer into system-name repo
+            (push-provider-referrer reg sys-repo anchor-digest spec tag)
+            ;; Push catalog referrer into ns-catalog repo
+            (push-catalog-referrer reg namespace root-digest system-name
+                                   (or (package-spec-version spec) tag))))))
     (msg "~&Published ~a:~a (digest: ~a, provides: ~{~a~^, ~})~%"
          primary-repo tag (build-result-index-digest build-result) provides)
     (build-result-index-digest build-result)))
 
-(defun publish-full-package (registry-url namespace tag build-result spec)
+(defun publish-full-package (registry-url namespace tag build-result spec &key skip-catalog)
   "High-level publish entry point. REGISTRY-URL is a string like \"http://localhost:5050\"."
-  (publish-package registry-url namespace tag build-result spec))
+  (publish-package registry-url namespace tag build-result spec :skip-catalog skip-catalog))
 
 (defun publish-overlay (registry namespace system-name tag overlay-result)
   "Add a platform overlay to an already-published package.

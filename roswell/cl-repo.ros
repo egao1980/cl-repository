@@ -52,14 +52,15 @@ exec ros -Q -- $0 "$@"
   (format t "  --os-version <ver>    OS version for add-overlay (e.g. ubuntu-22.04, macos-14)~%")
   (format t "  --lisp <impl>         CL implementation for add-overlay (optional)~%")
   (format t "  --native-paths <p>    Comma-separated native lib paths for add-overlay~%")
-  (format t "  --tag <tag>           Version tag for add-overlay (default: from .asd or latest)~%"))
+  (format t "  --tag <tag>           Version tag for add-overlay (default: from .asd or latest)~%")
+  (format t "  --skip-catalog        Skip writing ns-catalog anchors/referrers~%"))
 
 (defun parse-options (args)
   "Parse --key value pairs from args. Returns (values command-args options-plist).
    Boolean flags (--quiet, --dry-run) don't consume the next argument."
   (let ((cmd-args nil)
         (options nil)
-        (boolean-flags '("quiet" "dry-run" "incremental" "remote" "force")))
+        (boolean-flags '("quiet" "dry-run" "incremental" "remote" "force" "skip-catalog")))
     (loop with i = 0
           while (< i (length args))
           for arg = (nth i args)
@@ -133,7 +134,8 @@ exec ros -Q -- $0 "$@"
                     (ns (or namespace "cl-systems"))
                     (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
                              "latest")))
-               (publish-package reg ns tag result spec)))
+               (publish-package reg ns tag result spec
+                                :skip-catalog (getf opts :skip-catalog))))
 
             ((string-equal command "add-overlay")
              (let* ((system-name (or (first cmd-args)
