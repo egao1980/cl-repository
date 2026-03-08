@@ -77,9 +77,14 @@
          (config-desc (make-descriptor :media-type +cl-system-config-v1+
                                        :digest (cl-oci/digest:parse-digest cfg-digest)
                                        :size cfg-size))
+         (source-ann (let ((h (make-hash-table :test 'equal)))
+                       (setf (gethash +ann-title+ h)
+                             (format nil "~a-~a.tar.gz" project-name (or version "latest")))
+                       h))
          (source-desc (make-descriptor :media-type +oci-image-layer-tar-gzip+
                                        :digest (cl-oci/digest:parse-digest source-digest)
-                                       :size source-size))
+                                       :size source-size
+                                       :annotations source-ann))
          (manifest (make-manifest :config config-desc
                                   :layers (list source-desc)
                                   :artifact-type +cl-system-artifact-type+
