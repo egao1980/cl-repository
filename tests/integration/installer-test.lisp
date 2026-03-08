@@ -33,6 +33,6 @@
           ;; Verify source file was extracted
           (ok (uiop:file-exists-p (merge-pathnames "hello.lisp" install-path)))
           ;; Verify install-result carries registry info
-          (ok (cl-repository-client/installer:install-result-registry-url result)))))
+          (ok (cl-repository-client/installer:install-result-registry-url result))))
       ;; Cleanup
       (uiop:delete-directory-tree install-root :validate t :if-does-not-exist :ignore))))

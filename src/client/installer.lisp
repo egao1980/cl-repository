@@ -123,15 +123,27 @@
             (extract-layer-stripping-prefix blob install-dir strip-prefix))))
       ;; Extract overlay layers (overlays have no prefix)
       (dolist (overlay-desc overlay-descs)
-        (let ((overlay-manifest
-                (pull-manifest registry repository
-                               (format-digest (descriptor-digest overlay-desc)))))
+        (let* ((overlay-manifest
+                 (pull-manifest registry repository
+                                (format-digest (descriptor-digest overlay-desc))))
+               (overlay-config-json
+                 (pull-blob registry repository
+                            (format-digest
+                             (descriptor-digest (manifest-config overlay-manifest)))))
+               (overlay-config
+                 (when overlay-config-json
+                   (from-json 'cl-system-config
+                              (babel:octets-to-string overlay-config-json :encoding :utf-8)))))
           (dolist (layer-desc (manifest-layers overlay-manifest))
             (let* ((blob (pull-blob registry repository
                                     (format-digest (descriptor-digest layer-desc))))
-                   (role (when config
-                           (gethash (format-digest (descriptor-digest layer-desc))
-                                    (config-layer-roles config))))
+                   (layer-digest-str (format-digest (descriptor-digest layer-desc)))
+                   (role (or (when overlay-config
+                               (gethash layer-digest-str
+                                        (config-layer-roles overlay-config)))
+                             (when config
+                               (gethash layer-digest-str
+                                        (config-layer-roles config)))))
                    (subdir (role-subdirectory role)))
               (extract-layer blob (if subdir
                                       (merge-pathnames (format nil "~a/" subdir) install-dir)

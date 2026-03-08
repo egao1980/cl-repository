@@ -279,6 +279,7 @@ cl-repo packages are also OCICL-compatible — the source layer uses an `<name>-
 | [04-native-deps](examples/04-native-deps/) | CFFI + platform overlays |
 | [05-ci-workflow](examples/05-ci-workflow/) | GitHub Actions CI/CD |
 | [06-asd-embedded-config](examples/06-asd-embedded-config/) | OCI config embedded in .asd |
+| [07-multiplatform-native-ci](examples/07-multiplatform-native-ci/) | Real C lib + CFFI grovel + multiplatform CI |
 
 ## Development
 

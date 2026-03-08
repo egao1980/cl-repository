@@ -1,0 +1,157 @@
+# Parallel build + atomic batch publish.
+#
+# All platform runners build the native library concurrently, upload
+# artifacts, then a single publish job collects everything and pushes
+# the complete OCI Image Index (universal + all overlays) in one shot.
+#
+# Pros: the tag is atomic -- consumers never see a partial index.
+# Cons: all artifacts must be gathered on one runner before publish.
+name: Publish cl-calc (parallel batch)
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: ${{ github.repository_owner }}/cl-systems
+  SBCL_VERSION: 2.4.11
+
+jobs:
+  # ── Build native library on each platform ───────────────────────────
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            lib: libcalc.so
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            lib: libcalc.so
+          - os: darwin
+            arch: arm64
+            runner: macos-14
+            lib: libcalc.dylib
+          - os: darwin
+            arch: amd64
+            runner: macos-13
+            lib: libcalc.dylib
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build libcalc
+        run: make -C libcalc/
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.os }}-${{ matrix.arch }}
+          path: libcalc/${{ matrix.lib }}
+
+  # ── Collect artifacts and publish full OCI package ──────────────────
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: native-artifacts/
+
+      - name: Arrange overlay directories
+        run: |
+          # Each artifact downloads to native-artifacts/<name>/
+          # Rearrange into lib/<os>-<arch>/ for the packager.
+          for dir in native-artifacts/native-*; do
+            slug=$(basename "$dir" | sed 's/^native-//')
+            os=$(echo "$slug" | cut -d- -f1)
+            arch=$(echo "$slug" | cut -d- -f2)
+            target="cl-calc/lib/${os}-${arch}"
+            mkdir -p "$target"
+            cp "$dir"/* "$target/"
+          done
+          find cl-calc/lib/ -type f
+
+      - name: Install Roswell
+        run: |
+          curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
+          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+
+      - name: Install SBCL
+        run: |
+          ros install "sbcl-bin/$SBCL_VERSION"
+          ros use "sbcl-bin/$SBCL_VERSION"
+
+      - name: Install dependencies
+        run: |
+          ros install qlot
+          qlot install
+
+      - name: Build and publish complete package
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAMESPACE=$(echo "${{ env.NAMESPACE }}" | tr '[:upper:]' '[:lower:]')
+
+          cat > /tmp/publish.lisp <<'LISP'
+          (asdf:load-system "cl-repository-packager")
+
+          (let* ((version (uiop:getenv "PKG_VERSION"))
+                 (auth (cl-oci-client/auth:make-auth-config
+                         :username (uiop:getenv "GITHUB_ACTOR")
+                         :password (uiop:getenv "GITHUB_TOKEN")))
+                 (reg (cl-oci-client/registry:make-registry
+                        (format nil "https://~a" (uiop:getenv "OCI_REGISTRY"))
+                        :auth auth))
+                 (spec (make-instance 'cl-repository-packager/build-matrix:package-spec
+                         :name "cl-calc"
+                         :version version
+                         :source-dir #p"cl-calc/"
+                         :license "MIT"
+                         :description "Minimal CFFI wrapper around libcalc"
+                         :depends-on '("cffi")
+                         :provides '("cl-calc")
+                         :cffi-libraries '("libcalc")
+                         :overlays (list
+                           (make-instance 'cl-repository-packager/build-matrix:overlay-spec
+                             :os "linux" :arch "amd64"
+                             :native-paths '("lib/linux-amd64/libcalc.so"))
+                           (make-instance 'cl-repository-packager/build-matrix:overlay-spec
+                             :os "linux" :arch "arm64"
+                             :native-paths '("lib/linux-arm64/libcalc.so"))
+                           (make-instance 'cl-repository-packager/build-matrix:overlay-spec
+                             :os "darwin" :arch "arm64"
+                             :native-paths '("lib/darwin-arm64/libcalc.dylib"))
+                           (make-instance 'cl-repository-packager/build-matrix:overlay-spec
+                             :os "darwin" :arch "amd64"
+                             :native-paths '("lib/darwin-amd64/libcalc.dylib")))))
+                 (result (cl-repository-packager/build-matrix:build-package spec)))
+            (cl-repository-packager/publisher:publish-package
+              reg (uiop:getenv "OCI_NAMESPACE") version result spec))
+          LISP
+
+          PKG_VERSION="$VERSION" \
+          GITHUB_ACTOR="${{ github.actor }}" \
+          OCI_REGISTRY="${{ env.REGISTRY }}" \
+          OCI_NAMESPACE="$NAMESPACE" \
+            qlot exec ros -l /tmp/publish.lisp
+
+      - name: Verify published artifact
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAMESPACE=$(echo "${{ env.NAMESPACE }}" | tr '[:upper:]' '[:lower:]')
+          oras manifest fetch "${{ env.REGISTRY }}/${NAMESPACE}/cl-calc:${VERSION}" \
+            --registry-config <(echo '{"auths":{"ghcr.io":{"username":"${{ github.actor }}","password":"${{ secrets.GITHUB_TOKEN }}"}}}')

@@ -23,9 +23,11 @@
                 #:package-spec #:package-spec-name #:package-spec-version #:package-spec-overlays
                 #:build-package #:build-result
                 #:build-result-index-json #:build-result-index-digest
-                #:build-result-blobs #:build-result-manifests)
+                #:build-result-blobs #:build-result-manifests
+                #:build-overlay #:overlay-result)
   (:import-from :cl-repository-packager/asdf-plugin #:auto-package-spec)
-  (:import-from :cl-repository-packager/publisher #:publish-package)
+  (:import-from :cl-repository-packager/publisher #:publish-package #:publish-overlay)
+  (:import-from :cl-repository-client/installer #:install-system #:install-result-path)
   (:import-from :cl-oci/config #:+role-source+)
   (:import-from :babel #:string-to-octets))
 (in-package :cl-repository/tests/integration)

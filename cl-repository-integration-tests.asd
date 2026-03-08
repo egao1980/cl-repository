@@ -8,6 +8,7 @@
                "cl-oci-client"
                "cl-repository-packager"
                "cl-repository-client"
+               "cffi"
                "babel"
                "rove")
   :serial t
@@ -17,6 +18,7 @@
                (:file "installer-test")
                (:file "embedded-config-test")
                (:file "multi-system-test")
+               (:file "overlay-test")
                (:file "all"))
   :perform (test-op (o c)
             (symbol-call :rove :run c)))

@@ -1,0 +1,198 @@
+# Serial incremental overlay publishing.
+#
+# First publishes a source-only package (universal manifest), then each
+# platform runner builds the native library and appends its overlay to
+# the existing OCI Image Index.
+#
+# Pros: each platform builds natively on its own runner; no artifact
+#       shuffling; overlays can be added at any time (even days later).
+# Caveat: concurrent add-overlay calls race on the index tag.
+#         Use max-parallel: 1 to serialize, or accept last-writer-wins
+#         when platforms are truly independent.
+name: Publish cl-calc (incremental overlays)
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: ${{ github.repository_owner }}/cl-systems
+  SBCL_VERSION: 2.4.11
+
+jobs:
+  # ── Step 1: Publish source-only package ─────────────────────────────
+  publish-source:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Roswell
+        run: |
+          curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
+          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+
+      - name: Install SBCL
+        run: |
+          ros install "sbcl-bin/$SBCL_VERSION"
+          ros use "sbcl-bin/$SBCL_VERSION"
+
+      - name: Install dependencies
+        run: |
+          ros install qlot
+          qlot install
+
+      - name: Publish source-only
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAMESPACE=$(echo "${{ env.NAMESPACE }}" | tr '[:upper:]' '[:lower:]')
+
+          cat > /tmp/publish-source.lisp <<'LISP'
+          (asdf:load-system "cl-repository-packager")
+
+          (let* ((version (uiop:getenv "PKG_VERSION"))
+                 (auth (cl-oci-client/auth:make-auth-config
+                         :username (uiop:getenv "GITHUB_ACTOR")
+                         :password (uiop:getenv "GITHUB_TOKEN")))
+                 (reg (cl-oci-client/registry:make-registry
+                        (format nil "https://~a" (uiop:getenv "OCI_REGISTRY"))
+                        :auth auth))
+                 ;; No :overlays -- source-only universal manifest
+                 (spec (make-instance 'cl-repository-packager/build-matrix:package-spec
+                         :name "cl-calc"
+                         :version version
+                         :source-dir #p"cl-calc/"
+                         :license "MIT"
+                         :description "Minimal CFFI wrapper around libcalc"
+                         :depends-on '("cffi")
+                         :provides '("cl-calc")
+                         :cffi-libraries '("libcalc")))
+                 (result (cl-repository-packager/build-matrix:build-package spec)))
+            (cl-repository-packager/publisher:publish-package
+              reg (uiop:getenv "OCI_NAMESPACE") version result spec))
+          LISP
+
+          PKG_VERSION="$VERSION" \
+          GITHUB_ACTOR="${{ github.actor }}" \
+          OCI_REGISTRY="${{ env.REGISTRY }}" \
+          OCI_NAMESPACE="$NAMESPACE" \
+            qlot exec ros -l /tmp/publish-source.lisp
+
+  # ── Step 2: Add platform overlays one at a time ─────────────────────
+  add-overlay:
+    needs: publish-source
+    permissions:
+      packages: write
+      contents: read
+
+    # Serialize to avoid index race conditions.
+    # Remove max-parallel if your add-overlay implementation does
+    # optimistic concurrency control (ETag-based CAS).
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            lib: libcalc.so
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            lib: libcalc.so
+          - os: darwin
+            arch: arm64
+            runner: macos-14
+            lib: libcalc.dylib
+          - os: darwin
+            arch: amd64
+            runner: macos-13
+            lib: libcalc.dylib
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build libcalc
+        run: make -C libcalc/
+
+      - name: Install Roswell
+        run: |
+          curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
+          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+
+      - name: Install SBCL
+        run: |
+          ros install "sbcl-bin/$SBCL_VERSION"
+          ros use "sbcl-bin/$SBCL_VERSION"
+
+      - name: Install dependencies
+        run: |
+          ros install qlot
+          qlot install
+
+      - name: Add overlay
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAMESPACE=$(echo "${{ env.NAMESPACE }}" | tr '[:upper:]' '[:lower:]')
+
+          cat > /tmp/add-overlay.lisp <<'LISP'
+          (asdf:load-system "cl-repository-packager")
+
+          (let* ((version (uiop:getenv "PKG_VERSION"))
+                 (auth (cl-oci-client/auth:make-auth-config
+                         :username (uiop:getenv "GITHUB_ACTOR")
+                         :password (uiop:getenv "GITHUB_TOKEN")))
+                 (reg (cl-oci-client/registry:make-registry
+                        (format nil "https://~a" (uiop:getenv "OCI_REGISTRY"))
+                        :auth auth))
+                 (overlay (make-instance 'cl-repository-packager/build-matrix:overlay-spec
+                            :os (uiop:getenv "OVERLAY_OS")
+                            :arch (uiop:getenv "OVERLAY_ARCH")
+                            :native-paths (list (uiop:getenv "OVERLAY_LIB"))))
+                 (result (cl-repository-packager/build-matrix:build-overlay
+                           "cl-calc" overlay :version version)))
+            (cl-repository-packager/publisher:publish-overlay
+              reg (uiop:getenv "OCI_NAMESPACE") "cl-calc" version result))
+          LISP
+
+          PKG_VERSION="$VERSION" \
+          GITHUB_ACTOR="${{ github.actor }}" \
+          OCI_REGISTRY="${{ env.REGISTRY }}" \
+          OCI_NAMESPACE="$NAMESPACE" \
+          OVERLAY_OS="${{ matrix.os }}" \
+          OVERLAY_ARCH="${{ matrix.arch }}" \
+          OVERLAY_LIB="libcalc/${{ matrix.lib }}" \
+            qlot exec ros -l /tmp/add-overlay.lisp
+
+  # ── Optional: ABI-sensitive overlay with --os-version ───────────────
+  # Uncomment to add a glibc-specific overlay for Ubuntu 22.04:
+  #
+  # add-overlay-ubuntu2204:
+  #   needs: publish-source
+  #   runs-on: ubuntu-22.04
+  #   permissions:
+  #     packages: write
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Build libcalc
+  #       run: make -C libcalc/
+  #     - name: Add ABI-specific overlay
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         VERSION="${GITHUB_REF_NAME#v}"
+  #         cl-repo add-overlay cl-calc \
+  #           --os linux --arch amd64 --os-version ubuntu-22.04 \
+  #           --native-paths libcalc/libcalc.so \
+  #           --tag "$VERSION" \
+  #           --registry ghcr.io --namespace "${{ env.NAMESPACE }}"
