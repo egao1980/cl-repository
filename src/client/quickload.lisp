@@ -23,7 +23,8 @@
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
                 #:build-install-plan #:dependency-resolution-error)
-  (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
+  (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry
+                #:load-system-init-files)
   (:import-from :cl-repository-client/lockfile
                 #:lockfile-entry #:add-lockfile-entry)
   (:import-from :babel #:octets-to-string)
@@ -190,8 +191,8 @@
                 (configure-asdf-source-registry)
                 (record-lockfile-entry result))))))
       ;; Phase 3: Load via ASDF
-      (when installed-any
-        (configure-asdf-source-registry))
+      (configure-asdf-source-registry)
+      (load-system-init-files)
       (dolist (sys system-list)
         (let ((name (string-downcase (string sys))))
           (msg "~&; cl-repo: loading ~a~%" name)
