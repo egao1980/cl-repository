@@ -25,8 +25,17 @@
            #:package-spec-provides
            #:package-spec-overlays
            #:overlay-spec
+           #:overlay-spec-os
+           #:overlay-spec-arch
+           #:overlay-spec-os-version
+           #:overlay-spec-lisp
+           #:overlay-spec-native-paths
            #:parse-overlay-spec
            #:build-package
+           #:build-overlay
+           #:overlay-result
+           #:overlay-result-blobs
+           #:overlay-result-manifest
            #:build-result
            #:build-result-index-json
            #:build-result-index-digest
@@ -56,6 +65,8 @@
 (defclass overlay-spec ()
   ((platform-os :type string :initarg :os :accessor overlay-spec-os)
    (platform-arch :type string :initarg :arch :accessor overlay-spec-arch)
+   (platform-os-version :type (or null string) :initarg :os-version :accessor overlay-spec-os-version
+                        :initform nil)
    (lisp :type (or null string) :initarg :lisp :accessor overlay-spec-lisp :initform nil)
    (native-paths :type list :initarg :native-paths :accessor overlay-spec-native-paths :initform nil)
    (run-groveler :type boolean :initarg :run-groveler :accessor overlay-spec-run-groveler
@@ -68,6 +79,12 @@
    (index-digest :type string :initarg :index-digest :accessor build-result-index-digest)
    (blobs :type list :initarg :blobs :accessor build-result-blobs)
    (manifests :type list :initarg :manifests :accessor build-result-manifests)))
+
+(defclass overlay-result ()
+  ((blobs :type list :initarg :blobs :accessor overlay-result-blobs
+          :documentation "List of (digest . octets) pairs for the overlay.")
+   (manifest :type built-manifest :initarg :manifest :accessor overlay-result-manifest
+             :documentation "The built overlay manifest.")))
 
 (defun dep-flat-name (dep)
   "Extract flat name from a dependency (string or cons)."
@@ -112,6 +129,7 @@
     (make-instance 'overlay-spec
                    :os (getf plat :os)
                    :arch (getf plat :arch)
+                   :os-version (getf plat :os-version)
                    :lisp (getf plat :lisp)
                    :native-paths (getf plist :native-paths)
                    :run-groveler (getf plist :run-groveler)
@@ -172,7 +190,8 @@
     (dolist (overlay (package-spec-overlays spec))
       (let ((overlay-layers nil)
             (plat (make-platform :os (overlay-spec-os overlay)
-                                 :architecture (overlay-spec-arch overlay))))
+                                 :architecture (overlay-spec-arch overlay)
+                                 :os-version (overlay-spec-os-version overlay))))
         ;; Native library layer
         (when (overlay-spec-native-paths overlay)
           (let* ((pairs (mapcar (lambda (p)
@@ -211,3 +230,39 @@
                      :index-digest idx-digest
                      :blobs (nreverse all-blobs)
                      :manifests (nreverse all-manifests)))))
+
+(defun build-overlay (system-name overlay &key version)
+  "Build a single platform overlay without the universal manifest.
+   OVERLAY is an overlay-spec. Returns an OVERLAY-RESULT."
+  (let ((blobs nil)
+        (overlay-layers nil)
+        (plat (make-platform :os (overlay-spec-os overlay)
+                             :architecture (overlay-spec-arch overlay)
+                             :os-version (overlay-spec-os-version overlay))))
+    (when (overlay-spec-native-paths overlay)
+      (let* ((pairs (mapcar (lambda (p)
+                              (let ((path (if (pathnamep p) p (pathname p))))
+                                (cons (file-namestring path) path)))
+                            (overlay-spec-native-paths overlay)))
+             (layer (build-layer-from-files pairs +role-native-library+)))
+        (push layer overlay-layers)
+        (push (cons (layer-result-digest layer) (layer-result-data layer)) blobs)))
+    (unless overlay-layers
+      (error "Overlay for ~a/~a has no layers to build." (overlay-spec-os overlay) (overlay-spec-arch overlay)))
+    (multiple-value-bind (cfg-octets cfg-digest cfg-size)
+        (build-config-blob system-name :version version :layers overlay-layers)
+      (push (cons cfg-digest cfg-octets) blobs)
+      (let* ((overlay-ann (make-hash-table :test 'equal))
+             (_ (when (overlay-spec-lisp overlay)
+                  (setf (gethash +cl-implementation+ overlay-ann)
+                        (overlay-spec-lisp overlay))))
+             (roles (format nil "~{~a~^,~}" (mapcar #'layer-result-role overlay-layers)))
+             (_2 (setf (gethash +cl-layer-roles+ overlay-ann) roles))
+             (bm (build-manifest-for-layers cfg-octets cfg-digest cfg-size
+                                            overlay-layers
+                                            :annotations overlay-ann
+                                            :platform plat)))
+        (declare (ignore _ _2))
+        (make-instance 'overlay-result
+                       :blobs (nreverse blobs)
+                       :manifest bm)))))

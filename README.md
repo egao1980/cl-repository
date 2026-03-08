@@ -71,6 +71,128 @@ cl-repo ql-export https://beta.quicklisp.org/dist/quicklisp.txt --registry ghcr.
 
 See [docs/spec.md](docs/spec.md) for the full specification.
 
+### Incremental Platform Overlays
+
+Platform overlays are additive. You can publish a pure-Lisp package first, then add platform-specific overlays later (e.g., from CI jobs on different OS/arch runners).
+
+#### Workflow
+
+1. **Publish the source-only package** (universal manifest, no overlays):
+
+```lisp
+(defsystem "my-cffi-lib"
+  :version "1.0.0"
+  :depends-on ("cffi")
+  :components (...))
+```
+
+```sh
+cl-repo publish my-cffi-lib --registry ghcr.io --namespace cl-systems
+```
+
+2. **Build native libraries** on each target platform (in CI or locally).
+
+3. **Add overlays** to the already-published package:
+
+```sh
+# On a linux/amd64 runner:
+cl-repo add-overlay my-cffi-lib \
+  --os linux --arch amd64 \
+  --native-paths lib/linux-amd64/libfoo.so \
+  --tag 1.0.0 \
+  --registry ghcr.io --namespace cl-systems
+
+# On a darwin/arm64 runner:
+cl-repo add-overlay my-cffi-lib \
+  --os darwin --arch arm64 \
+  --native-paths lib/darwin-arm64/libfoo.dylib \
+  --tag 1.0.0 \
+  --registry ghcr.io --namespace cl-systems
+
+# On a windows/amd64 runner:
+cl-repo add-overlay my-cffi-lib \
+  --os windows --arch amd64 \
+  --native-paths lib/windows-amd64/foo.dll \
+  --tag 1.0.0 \
+  --registry ghcr.io --namespace cl-systems
+```
+
+Each `add-overlay` call pulls the existing Image Index, pushes the new overlay blobs and manifest, appends the overlay descriptor, and re-pushes the updated index under the same tag. OCI tags are mutable pointers, so this is safe and idempotent for distinct platform targets.
+
+Multiple native files can be included in a single overlay (comma-separated):
+
+```sh
+cl-repo add-overlay my-cffi-lib \
+  --os linux --arch amd64 \
+  --native-paths lib/libfoo.so,lib/libbar.so \
+  --tag 1.0.0
+```
+
+For ABI-sensitive overlays (grovel output, native libs linked against specific glibc/SDK), pin the OS version with `--os-version`. The client prefers exact os-version matches and falls back to generic os/arch overlays:
+
+```sh
+cl-repo add-overlay my-cffi-lib \
+  --os linux --arch amd64 --os-version ubuntu-22.04 \
+  --native-paths lib/linux-amd64-u2204/libfoo.so \
+  --tag 1.0.0
+```
+
+If the overlay targets a specific CL implementation, pass `--lisp`:
+
+```sh
+cl-repo add-overlay my-cffi-lib \
+  --os linux --arch amd64 --lisp sbcl \
+  --native-paths lib/linux-amd64/libfoo.so \
+  --tag 1.0.0
+```
+
+#### Programmatic API
+
+```lisp
+(let* ((overlay (parse-overlay-spec
+                  '(:platform (:os "linux" :arch "amd64")
+                    :native-paths ("lib/libfoo.so"))))
+       (result (build-overlay "my-cffi-lib" overlay :version "1.0.0")))
+  (publish-overlay "https://ghcr.io" "cl-systems" "my-cffi-lib" "1.0.0" result))
+```
+
+#### CI Example (GitHub Actions)
+
+```yaml
+jobs:
+  publish-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cl-repo publish my-cffi-lib --registry ghcr.io --namespace cl-systems
+
+  add-overlay:
+    needs: publish-source
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            lib: lib/linux-amd64/libfoo.so
+          - os: darwin
+            arch: arm64
+            runner: macos-14
+            lib: lib/darwin-arm64/libfoo.dylib
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: make native  # build the .so/.dylib
+      - run: |
+          cl-repo add-overlay my-cffi-lib \
+            --os ${{ matrix.os }} --arch ${{ matrix.arch }} \
+            --native-paths ${{ matrix.lib }} \
+            --tag 1.0.0 \
+            --registry ghcr.io --namespace cl-systems
+```
+
+The client automatically selects the matching overlay at install time — pure-Lisp systems skip overlays entirely.
+
 ### Using a Standard OCI Client (no cl-repo needed)
 
 Packages are standard OCI artifacts — pull with any OCI client, then point ASDF at the extracted directory.

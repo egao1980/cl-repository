@@ -134,7 +134,7 @@ Each layer serves a specific role, identified via the config blob's `layer-roles
 | `source` | CL source, .asd files | Always (universal manifest) |
 | `native-library` | Prebuilt .so/.dylib/.dll | Platform overlay |
 | `static-library` | Prebuilt .a/.lib for CFFI static linking | Platform overlay |
-| `cffi-grovel-output` | Pre-groveled .cffi.lisp files | Platform overlay (os+arch) |
+| `cffi-grovel-output` | Pre-groveled .cffi.lisp files | Platform overlay (os+arch+os-version) |
 | `cffi-wrapper` | Compiled wrapper .so for inline C | Platform overlay |
 | `headers` | C header files | Platform overlay or universal |
 | `documentation` | Docs, man pages | Universal (optional) |
@@ -142,7 +142,7 @@ Each layer serves a specific role, identified via the config blob's `layer-roles
 
 ### Grovel Output Portability
 
-CFFI grovel output (`.cffi.lisp`) is **architecture+OS dependent but CL-implementation-independent**. A single grovel overlay per os/arch pair serves all CL implementations on that platform.
+CFFI grovel output (`.cffi.lisp`) is **architecture+OS+OS-version dependent but CL-implementation-independent**. Grovel output derives struct layouts, constants, and type sizes from system headers, which vary across OS versions (e.g., glibc 2.31 vs 2.39, macOS SDK 14 vs 15). A single grovel overlay per os/arch/os-version tuple serves all CL implementations on that platform. When `platform.os.version` is not set on an overlay, it is treated as a generic fallback for that os/arch pair.
 
 ## Config Blob Schema
 
@@ -310,7 +310,7 @@ Subsequent manifests use the standard OCI `platform` field on their descriptor i
 1. Pull the Image Index.
 2. Detect local platform via `trivial-features`.
 3. **Always** select the universal manifest (no `platform` field).
-4. Match overlay descriptors by `platform.os` + `platform.architecture`.
+4. Match overlay descriptors by `platform.os` + `platform.architecture`. Prefer overlays that also match `platform.os.version` when set; fall back to overlays without `os.version` (generic fallback).
 5. If `dev.common-lisp.implementation` annotation is present, match against the running CL.
 6. Pull and extract all matched manifests.
 
@@ -321,7 +321,7 @@ Subsequent manifests use the standard OCI `platform` field on their descriptor i
 | OS | linux, darwin, windows | Always for platform overlays |
 | Architecture | amd64, arm64, 386 | Always for platform overlays |
 | CL Implementation | sbcl, ccl, ecl | Only for impl-specific compiled code |
-| OS Version | ubuntu-20.04, macos-14 | For ABI-sensitive native libs |
+| OS Version | ubuntu-20.04, macos-14 | For ABI-sensitive native libs and grovel output |
 
 ## Lockfile Format
 
@@ -366,7 +366,9 @@ OCI packaging metadata can be embedded directly in a `.asd` file using ASDF's `:
   :properties (:cl-repo (:cffi-libraries ("libfoo")
                           :provides ("my-lib" "my-lib/utils")
                           :overlays ((:platform (:os "linux" :arch "amd64")
-                                      :native-paths ("lib/linux-amd64/libfoo.so"))))))
+                                      :native-paths ("lib/linux-amd64/libfoo.so"))
+                                     (:platform (:os "linux" :arch "amd64" :os-version "ubuntu-22.04")
+                                      :native-paths ("lib/linux-amd64-u2204/libfoo.so"))))))
 ```
 
 ### Provides Resolution

@@ -17,9 +17,9 @@ exec ros -Q -- $0 "$@"
   (:import-from :cl-repository-client/quickload
                 #:*registries* #:add-registry)
   (:import-from :cl-repository-packager/build-matrix
-                #:build-package)
+                #:build-package #:build-overlay #:parse-overlay-spec)
   (:import-from :cl-repository-packager/publisher
-                #:publish-package)
+                #:publish-package #:publish-overlay)
   (:import-from :cl-repository-packager/asdf-plugin
                 #:auto-package-spec))
 
@@ -36,6 +36,7 @@ exec ros -Q -- $0 "$@"
   (format t "  search <query>        Search for systems~%")
   (format t "  info <ref>            Show system info~%")
   (format t "  publish               Package and push current project~%")
+  (format t "  add-overlay <name>    Add platform overlay to published package~%")
   (format t "  lock                  Generate/update lockfile from installed systems~%")
   (format t "  restore               Install exact versions from lockfile~%")
   (format t "  ql-export <url>       Export Quicklisp dist to OCI registry~%")
@@ -45,7 +46,13 @@ exec ros -Q -- $0 "$@"
   (format t "  --quiet               Suppress informational output~%")
   (format t "  --dry-run             Show what would be done without doing it~%")
   (format t "  --remote              For 'list': query registries instead of local~%")
-  (format t "  --force               For 'load': re-resolve deps, allow upgrades~%"))
+  (format t "  --force               For 'load': re-resolve deps, allow upgrades~%")
+  (format t "  --os <os>             Target OS for add-overlay (e.g. linux, darwin, windows)~%")
+  (format t "  --arch <arch>         Target arch for add-overlay (e.g. amd64, arm64)~%")
+  (format t "  --os-version <ver>    OS version for add-overlay (e.g. ubuntu-22.04, macos-14)~%")
+  (format t "  --lisp <impl>         CL implementation for add-overlay (optional)~%")
+  (format t "  --native-paths <p>    Comma-separated native lib paths for add-overlay~%")
+  (format t "  --tag <tag>           Version tag for add-overlay (default: from .asd or latest)~%"))
 
 (defun parse-options (args)
   "Parse --key value pairs from args. Returns (values command-args options-plist).
@@ -127,6 +134,37 @@ exec ros -Q -- $0 "$@"
                     (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
                              "latest")))
                (publish-package reg ns tag result spec)))
+
+            ((string-equal command "add-overlay")
+             (let* ((system-name (or (first cmd-args)
+                                     (pathname-name (first (directory "*.asd")))))
+                    (os-val (getf opts :os))
+                    (arch-val (getf opts :arch))
+                    (os-version-val (getf opts :os-version))
+                    (lisp-val (getf opts :lisp))
+                    (native-str (getf opts :native-paths))
+                    (tag-val (getf opts :tag)))
+               (unless (and os-val arch-val)
+                 (format *error-output* "~&Error: add-overlay requires --os and --arch~%")
+                 (ros:quit 1))
+               (unless native-str
+                 (format *error-output* "~&Error: add-overlay requires --native-paths~%")
+                 (ros:quit 1))
+               (let* ((native-paths (mapcar (lambda (p) (merge-pathnames (string-trim " " p)))
+                                            (uiop:split-string native-str :separator ",")))
+                      (overlay-spec (parse-overlay-spec
+                                     `(:platform (:os ,os-val :arch ,arch-val
+                                                  ,@(when os-version-val (list :os-version os-version-val))
+                                                  ,@(when lisp-val (list :lisp lisp-val)))
+                                       :native-paths ,native-paths)))
+                      (version (or tag-val
+                                   (ignore-errors
+                                    (asdf:component-version (asdf:find-system system-name)))
+                                   "latest"))
+                      (overlay-res (build-overlay system-name overlay-spec :version version))
+                      (reg (or registry-url "ghcr.io"))
+                      (ns (or namespace "cl-systems")))
+                 (publish-overlay reg ns system-name version overlay-res))))
 
             ((string-equal command "lock")
              (cmd-lock))

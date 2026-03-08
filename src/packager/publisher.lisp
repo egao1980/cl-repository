@@ -21,16 +21,21 @@
   (:import-from :cl-repository-packager/build-matrix
                 #:build-result #:build-result-index-json #:build-result-index-digest
                 #:build-result-blobs #:build-result-manifests
+                #:overlay-result #:overlay-result-blobs #:overlay-result-manifest
                 #:package-spec #:package-spec-name #:package-spec-version
                 #:package-spec-provides #:package-spec-depends-on
                 #:package-spec-description)
   (:import-from :cl-repository-packager/manifest-builder
                 #:built-manifest #:built-manifest-json #:built-manifest-digest
-                #:build-anchor-manifest)
+                #:built-manifest-descriptor
+                #:build-anchor-manifest #:build-image-index)
+  (:import-from :cl-oci/image-index #:image-index #:image-index-manifests
+                #:image-index-annotations)
   (:import-from :babel #:string-to-octets)
   (:import-from :yason)
   (:export #:publish-package
-           #:publish-full-package))
+           #:publish-full-package
+           #:publish-overlay))
 (in-package :cl-repository-packager/publisher)
 
 (defun publish-package (registry namespace tag build-result spec)
@@ -110,6 +115,52 @@
 (defun publish-full-package (registry-url namespace tag build-result spec)
   "High-level publish entry point. REGISTRY-URL is a string like \"http://localhost:5050\"."
   (publish-package registry-url namespace tag build-result spec))
+
+(defun publish-overlay (registry namespace system-name tag overlay-result)
+  "Add a platform overlay to an already-published package.
+   Pulls the existing Image Index for SYSTEM-NAME:TAG, pushes the overlay blobs
+   and manifest, appends the overlay descriptor to the index, and re-pushes.
+   Returns the new index digest."
+  (let* ((repo (format nil "~a/~a" namespace system-name))
+         (reg (etypecase registry
+                 (registry registry)
+                 (string (make-registry registry))))
+         (bm (overlay-result-manifest overlay-result)))
+    (when *dry-run*
+      (msg "~&[dry-run] Would add overlay to ~a:~a (~d blobs)~%"
+           repo tag (length (overlay-result-blobs overlay-result)))
+      (return-from publish-overlay (built-manifest-digest bm)))
+    ;; 1. Pull existing image index
+    (msg "~&Adding overlay to ~a:~a...~%" repo tag)
+    (let ((existing-index (pull-manifest reg repo tag)))
+      (unless (typep existing-index 'image-index)
+        (error "~a:~a is not an Image Index — cannot add overlay." repo tag))
+      ;; 2. Push overlay blobs
+      (dolist (blob-pair (overlay-result-blobs overlay-result))
+        (let ((digest (car blob-pair))
+              (data (cdr blob-pair)))
+          (msg "~&  Pushing blob ~a (~d bytes)..." digest (length data))
+          (multiple-value-bind (loc status) (push-blob-check-and-push reg repo data digest)
+            (declare (ignore loc))
+            (msg (if (eq status :exists) " already exists~%" " done~%")))))
+      ;; 3. Push overlay manifest
+      (msg "~&  Pushing overlay manifest ~a..." (built-manifest-digest bm))
+      (push-manifest reg repo (built-manifest-digest bm) (built-manifest-json bm)
+                     :content-type +oci-image-manifest-v1+)
+      (msg " done~%")
+      ;; 4. Append descriptor to existing index and re-push
+      (let* ((new-descriptors (append (image-index-manifests existing-index)
+                                      (list (built-manifest-descriptor bm))))
+             (new-ann (image-index-annotations existing-index)))
+        (multiple-value-bind (idx-json idx-digest idx-size)
+            (build-image-index new-descriptors :annotations new-ann)
+          (declare (ignore idx-size))
+          (msg "~&  Pushing updated index as ~a:~a..." repo tag)
+          (push-manifest reg repo tag idx-json :content-type +oci-image-index-v1+)
+          (push-manifest reg repo idx-digest idx-json :content-type +oci-image-index-v1+)
+          (msg " done~%")
+          (msg "~&Overlay added to ~a:~a (new index digest: ~a)~%" repo tag idx-digest)
+          idx-digest)))))
 
 ;;; --- Root anchor ---
 
