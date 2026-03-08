@@ -5,8 +5,8 @@
   (:import-from :chipz)
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
   (:import-from :cl-oci-client/registry #:registry #:make-registry)
-  (:import-from :cl-oci-client/pull #:pull-manifest #:pull-blob)
-  (:import-from :cl-oci/digest #:format-digest)
+  (:import-from :cl-oci-client/pull #:pull-manifest #:pull-manifest-raw #:pull-blob)
+  (:import-from :cl-oci/digest #:format-digest #:compute-digest)
   (:import-from :cl-oci/descriptor #:descriptor #:descriptor-digest #:descriptor-media-type
                 #:descriptor-annotations)
   (:import-from :cl-oci/manifest #:manifest #:manifest-layers #:manifest-config)
@@ -15,8 +15,18 @@
                 #:config-provides #:config-version)
   (:import-from :cl-oci/serialization #:from-json)
   (:import-from :cl-oci/annotations #:+ann-title+)
+  (:import-from :yason)
   (:import-from :cl-repository-client/platform-resolver #:resolve-manifests)
   (:export #:install-system
+           #:install-result
+           #:make-install-result
+           #:install-result-path
+           #:install-result-name
+           #:install-result-version
+           #:install-result-index-digest
+           #:install-result-source-digest
+           #:install-result-overlay-digest
+           #:install-result-registry-url
            #:extract-layer
            #:extract-layer-stripping-prefix
            #:compute-strip-prefix
@@ -36,33 +46,61 @@
   "Path where a system version gets installed."
   (merge-pathnames (format nil "~a/~a/" name version) *systems-root*))
 
+(defstruct install-result
+  "Result of installing a system, carrying path and digest info for lockfile."
+  path name version index-digest source-digest overlay-digest registry-url)
+
 (defun install-system (registry-url repository reference &key (type :cl-repo))
   "Install a CL system from an OCI registry.
    TYPE is :cl-repo (default) or :ocicl for OCICL-format packages.
-   Respects *dry-run* and *quiet*.  Returns the installation path."
+   Respects *dry-run* and *quiet*.  Returns an INSTALL-RESULT."
   (let ((reg (make-registry registry-url)))
     (msg "~&Pulling ~a:~a from ~a...~%" repository reference registry-url)
     (when *dry-run*
       (msg "~&[dry-run] Would install ~a:~a~%" repository reference)
-      (return-from install-system (system-install-path repository reference)))
-    (let ((obj (pull-manifest reg repository reference)))
-      (if (eq type :ocicl)
-          (install-from-ocicl-manifest reg repository obj reference)
-          (etypecase obj
-            (image-index (install-from-index reg repository obj))
-            (manifest (install-from-manifest reg repository obj)))))))
+      (return-from install-system
+        (make-install-result :path (system-install-path repository reference)
+                             :registry-url registry-url)))
+    (multiple-value-bind (body status headers)
+        (pull-manifest-raw reg repository reference)
+      (declare (ignore status))
+      (let* ((index-digest (or (gethash "docker-content-digest" headers)
+                               (format-digest (compute-digest body))))
+             (json-str (etypecase body
+                         (string body)
+                         ((vector (unsigned-byte 8))
+                          (babel:octets-to-string body :encoding :utf-8))))
+             (json (yason:parse json-str))
+             (media-type (or (gethash "content-type" headers) ""))
+             (obj (cond
+                    ((or (search "image.index" media-type)
+                         (search "manifest.list" media-type)
+                         (equalp (gethash "mediaType" json)
+                                 "application/vnd.oci.image.index.v1+json"))
+                     (from-json 'image-index json))
+                    (t (from-json 'manifest json)))))
+        (let ((result (if (eq type :ocicl)
+                          (install-from-ocicl-manifest reg repository obj reference registry-url)
+                          (etypecase obj
+                            (image-index (install-from-index reg repository obj registry-url))
+                            (manifest (install-from-manifest reg repository obj registry-url))))))
+          (setf (install-result-index-digest result) index-digest)
+          result)))))
 
 (defun compute-strip-prefix (name version)
   "Compute the tarball prefix that the packager uses: \"<name>-<version>/\"."
   (format nil "~a-~a/" name (or version "latest")))
 
-(defun install-from-index (registry repository index)
+(defun install-from-index (registry repository index registry-url)
   "Install from an image index - resolve platform and pull appropriate manifests."
   (multiple-value-bind (universal-desc overlay-descs) (resolve-manifests index)
-    (let* ((universal-manifest
+    (let* ((source-digest (when universal-desc
+                            (format-digest (descriptor-digest universal-desc))))
+           (overlay-digest (when (first overlay-descs)
+                             (format-digest (descriptor-digest (first overlay-descs)))))
+           (universal-manifest
              (when universal-desc
-               (pull-manifest registry repository
-                              (format-digest (descriptor-digest universal-desc)))))
+               (pull-manifest registry repository source-digest)))
            (config-json (when universal-manifest
                           (pull-blob registry repository
                                      (format-digest
@@ -105,9 +143,14 @@
       (when config
         (create-provides-symlinks name (config-provides config)))
       (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
-      install-dir)))
+      (make-install-result :path install-dir
+                           :name name
+                           :version version
+                           :source-digest source-digest
+                           :overlay-digest overlay-digest
+                           :registry-url registry-url))))
 
-(defun install-from-manifest (registry repository manifest)
+(defun install-from-manifest (registry repository manifest registry-url)
   "Install from a single manifest (no index)."
   (let* ((config-json (pull-blob registry repository
                                  (format-digest
@@ -125,7 +168,11 @@
         (extract-layer-stripping-prefix blob install-dir strip-prefix)))
     (create-provides-symlinks name (config-provides config))
     (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
-    install-dir))
+    (make-install-result :path install-dir
+                         :name name
+                         :version version
+                         :source-digest nil
+                         :registry-url registry-url)))
 
 ;;; --- OCICL compatibility ---
 
@@ -151,7 +198,7 @@
                     (format nil "~a/" base))
             (values base "latest" (format nil "~a/" base)))))))
 
-(defun install-from-ocicl-manifest (registry repository manifest reference)
+(defun install-from-ocicl-manifest (registry repository manifest reference registry-url)
   "Install from an OCICL-format manifest. Skips empty config, strips tarball prefix."
   (let* ((layers (manifest-layers manifest))
          (layer-desc (first layers))
@@ -171,7 +218,10 @@
                 (extract-layer-stripping-prefix blob install-dir strip-prefix)
                 (extract-layer blob install-dir))))
         (msg "~&Installed ~a ~a to ~a (ocicl)~%" name version install-dir)
-        install-dir))))
+        (make-install-result :path install-dir
+                             :name name
+                             :version version
+                             :registry-url registry-url)))))
 
 (defun extract-layer-stripping-prefix (tar-gz-data target-dir prefix)
   "Extract a tar+gzip layer to TARGET-DIR, stripping PREFIX from entry names."

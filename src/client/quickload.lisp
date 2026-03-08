@@ -14,12 +14,18 @@
   (:import-from :cl-oci/annotations #:+ann-version+ #:+cl-alias-for+)
   (:import-from :cl-oci/serialization #:from-json)
   (:import-from :cl-oci/config #:cl-system-config)
-  (:import-from :cl-repository-client/installer #:install-system #:systems-root #:system-install-path)
+  (:import-from :cl-repository-client/installer #:install-system #:install-result
+                #:install-result-path #:install-result-name #:install-result-version
+                #:install-result-index-digest #:install-result-source-digest
+                #:install-result-overlay-digest #:install-result-registry-url
+                #:systems-root #:system-install-path)
   (:import-from :cl-repository-client/digest-cache
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
                 #:build-install-plan #:dependency-resolution-error)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
+  (:import-from :cl-repository-client/lockfile
+                #:lockfile-entry #:add-lockfile-entry)
   (:import-from :babel #:octets-to-string)
   (:export #:*registries*
            #:add-registry
@@ -76,6 +82,24 @@
                 (car (last (pathname-directory (first (last subdirs)))))))))
       (error () nil))))
 
+;;; Lockfile integration
+
+(defun record-lockfile-entry (result)
+  "Create a lockfile entry from an INSTALL-RESULT and append it to cl-repo.lock."
+  (handler-case
+      (when (and (install-result-name result)
+                 (install-result-version result))
+        (add-lockfile-entry
+         (make-instance 'lockfile-entry
+                        :system (install-result-name result)
+                        :version (install-result-version result)
+                        :index-digest (or (install-result-index-digest result) "")
+                        :source-digest (install-result-source-digest result)
+                        :overlay-digest (install-result-overlay-digest result)
+                        :registry (or (install-result-registry-url result) ""))))
+    (error (e)
+      (msg "~&; cl-repo: warning: could not update lockfile: ~a~%" e))))
+
 ;;; Direct system install (for single system, bypasses SAT)
 
 (defun find-system-in-registry (reg-url namespace system-name &key version (type :cl-repo))
@@ -118,7 +142,7 @@
     (error () nil)))
 
 (defun ensure-system-installed (name &key version)
-  "Install NAME from configured registries. Returns install path or NIL."
+  "Install NAME from configured registries. Returns INSTALL-RESULT or NIL."
   (dolist (entry *registries* nil)
     (let ((url (registry-url entry))
           (ns (registry-namespace entry))
@@ -160,10 +184,11 @@
                        (system-already-installed-p name)
                        (let ((iv (installed-system-version name)))
                          (and iv (string= iv ver))))
-            (let ((path (ensure-system-installed name :version ver)))
-              (when path
+            (let ((result (ensure-system-installed name :version ver)))
+              (when result
                 (setf installed-any t)
-                (configure-asdf-source-registry))))))
+                (configure-asdf-source-registry)
+                (record-lockfile-entry result))))))
       ;; Phase 3: Load via ASDF
       (when installed-any
         (configure-asdf-source-registry))

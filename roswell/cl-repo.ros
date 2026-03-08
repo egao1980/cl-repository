@@ -12,7 +12,8 @@ exec ros -Q -- $0 "$@"
   (:use :cl)
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run*)
   (:import-from :cl-repository-client/commands
-                #:cmd-install #:cmd-list #:cmd-search #:cmd-info #:cmd-update)
+                #:cmd-install #:cmd-list #:cmd-search #:cmd-info #:cmd-update
+                #:cmd-lock #:cmd-restore)
   (:import-from :cl-repository-client/quickload
                 #:*registries* #:add-registry)
   (:import-from :cl-repository-packager/build-matrix
@@ -35,7 +36,8 @@ exec ros -Q -- $0 "$@"
   (format t "  search <query>        Search for systems~%")
   (format t "  info <ref>            Show system info~%")
   (format t "  publish               Package and push current project~%")
-  (format t "  lock                  Generate/update lockfile~%")
+  (format t "  lock                  Generate/update lockfile from installed systems~%")
+  (format t "  restore               Install exact versions from lockfile~%")
   (format t "  ql-export <url>       Export Quicklisp dist to OCI registry~%")
   (format t "~%Options:~%")
   (format t "  --registry <url>      Registry URL (default: ghcr.io)~%")
@@ -127,7 +129,10 @@ exec ros -Q -- $0 "$@"
                (publish-package reg ns tag result spec)))
 
             ((string-equal command "lock")
-             (format t "~&Lockfile generation not yet implemented~%"))
+             (cmd-lock))
+
+            ((string-equal command "restore")
+             (cmd-restore :registry-url registry-url :namespace namespace))
 
             ((string-equal command "ql-export")
              (unless cmd-args

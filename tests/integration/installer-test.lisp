@@ -24,12 +24,15 @@
            (repo (format nil "~a/installable" *test-namespace*)))
       ;; Override the systems root for testing
       (let ((cl-repository-client/installer::*systems-root* install-root))
-        (let ((install-path (cl-repository-client/installer:install-system
-                             *registry-url* repo "1.0.0")))
+        (let* ((result (cl-repository-client/installer:install-system
+                        *registry-url* repo "1.0.0"))
+               (install-path (cl-repository-client/installer:install-result-path result)))
           (ok (uiop:directory-exists-p install-path))
           ;; Verify .asd file was extracted
           (ok (uiop:file-exists-p (merge-pathnames "hello-test.asd" install-path)))
           ;; Verify source file was extracted
-          (ok (uiop:file-exists-p (merge-pathnames "hello.lisp" install-path)))))
+          (ok (uiop:file-exists-p (merge-pathnames "hello.lisp" install-path)))
+          ;; Verify install-result carries registry info
+          (ok (cl-repository-client/installer:install-result-registry-url result)))))
       ;; Cleanup
       (uiop:delete-directory-tree install-root :validate t :if-does-not-exist :ignore))))

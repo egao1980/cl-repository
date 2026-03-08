@@ -3,7 +3,7 @@
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
   (:import-from :cl-oci-client/registry #:make-registry #:parse-reference #:registry
                 #:registry-request)
-  (:import-from :cl-oci-client/pull #:pull-manifest)
+  (:import-from :cl-oci-client/pull #:pull-manifest #:pull-manifest-raw)
   (:import-from :cl-oci-client/content-discovery #:list-tags-paginated #:list-referrers)
   (:import-from :cl-oci-client/conditions #:registry-error)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests #:image-index-annotations)
@@ -11,16 +11,20 @@
   (:import-from :cl-oci/annotations #:+ann-title+ #:+ann-version+ #:+ann-description+
                 #:+cl-system-name+ #:+cl-provides+)
   (:import-from :cl-oci/media-types #:+cl-system-name-anchor-v1+ #:+oci-image-manifest-v1+)
-  (:import-from :cl-repository-client/installer #:install-system #:systems-root)
-  (:import-from :cl-repository-client/lockfile #:read-lockfile #:lockfile-entry-system
-                #:lockfile-entry-version #:lockfile-entry-registry)
+  (:import-from :cl-repository-client/installer #:install-system #:install-result-path #:systems-root)
+  (:import-from :cl-oci/digest #:format-digest #:compute-digest)
+  (:import-from :cl-repository-client/lockfile #:lockfile-entry #:read-lockfile #:write-lockfile
+                #:lockfile-entry-system #:lockfile-entry-version #:lockfile-entry-registry)
+  (:import-from :cl-repository-client/constraint-builder #:scan-installed-systems)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/quickload #:*registries*)
   (:export #:cmd-install
            #:cmd-list
            #:cmd-search
            #:cmd-info
-           #:cmd-update))
+           #:cmd-update
+           #:cmd-lock
+           #:cmd-restore))
 (in-package :cl-repository-client/commands)
 
 (defvar *default-registry* "ghcr.io"
@@ -168,6 +172,78 @@
             (error (e)
               (msg "  Failed: ~a~%" e))))
         (msg "~&No lockfile found. Nothing to update.~%"))))
+
+(defun cmd-lock ()
+  "Generate cl-repo.lock from installed systems.
+   For each installed system, queries configured registries to obtain manifest digests."
+  (let ((installed (scan-installed-systems))
+        (existing (read-lockfile))
+        (entries nil))
+    (if (null installed)
+        (msg "~&No systems installed. Nothing to lock.~%")
+        (progn
+          (dolist (pair installed)
+            (let* ((name (car pair))
+                   (version (cdr pair))
+                   (prev (find name existing :key #'lockfile-entry-system :test #'string=)))
+              (if (and prev (string= (lockfile-entry-version prev) version))
+                  (push prev entries)
+                  (let ((entry (resolve-lockfile-entry name version)))
+                    (when entry (push entry entries))))))
+          (setf entries (sort entries #'string< :key #'lockfile-entry-system))
+          (write-lockfile entries)
+          (msg "~&Wrote cl-repo.lock (~d systems)~%" (length entries))))))
+
+(defun cmd-restore (&key registry-url namespace)
+  "Install exact versions from cl-repo.lock for reproducible builds."
+  (let ((entries (read-lockfile)))
+    (if (null entries)
+        (msg "~&No lockfile found. Run 'cl-repo lock' first.~%")
+        (progn
+          (msg "~&Restoring ~d systems from lockfile...~%" (length entries))
+          (dolist (entry entries)
+            (let* ((name (lockfile-entry-system entry))
+                   (version (lockfile-entry-version entry))
+                   (reg (or registry-url (lockfile-entry-registry entry)))
+                   (ns (or namespace *default-namespace*))
+                   (repo (format nil "~a/~a" ns name)))
+              (msg "~&  ~a ~a~%" name version)
+              (handler-case
+                  (progn
+                    (install-system reg repo version)
+                    (configure-asdf-source-registry))
+                (error (e)
+                  (msg "~&  Failed to restore ~a ~a: ~a~%" name version e)))))
+          (msg "~&Restore complete.~%")))))
+
+(defun resolve-lockfile-entry (name version)
+  "Try to resolve digest info for NAME at VERSION from configured registries.
+   Returns a LOCKFILE-ENTRY or NIL."
+  (dolist (reg-entry *registries*)
+    (let* ((url (first reg-entry))
+           (ns (getf (rest reg-entry) :namespace "cl-systems"))
+           (repo (format nil "~a/~a" ns name))
+           (reg (make-registry url)))
+      (handler-case
+          (multiple-value-bind (body status headers)
+              (pull-manifest-raw reg repo version)
+            (declare (ignore status))
+            (let ((digest (or (gethash "docker-content-digest" headers)
+                              (format-digest (compute-digest body)))))
+              (return-from resolve-lockfile-entry
+                (make-instance 'lockfile-entry
+                               :system name
+                               :version version
+                               :index-digest digest
+                               :registry url))))
+        (error () nil))))
+  ;; No registry had it — create entry without digest
+  (msg "~&  Warning: ~a ~a not found in any registry, recording without digest~%" name version)
+  (make-instance 'lockfile-entry
+                 :system name
+                 :version version
+                 :index-digest ""
+                 :registry ""))
 
 ;;; Helpers
 

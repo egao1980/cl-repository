@@ -17,6 +17,7 @@
                 #:sat-true #:sat-var #:sat-and #:sat-or #:sat-not #:sat-imply #:sat-solve)
   (:import-from :cl-repository-client/installer #:systems-root)
   (:export #:build-install-plan
+           #:scan-installed-systems
            #:dependency-resolution-error))
 (in-package :cl-repository-client/constraint-builder)
 
