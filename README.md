@@ -1,8 +1,29 @@
 # CL Repository
 
+<img src="https://img.shields.io/badge/WARN-LLM%20GENERATED-FF6347"/>
+
 OCI-based distribution system for Common Lisp packages.
 
 Packages are standard OCI artifacts pushable to any OCI-compliant registry (GHCR, Docker Hub, Quay, etc.) and pullable by any OCI client (oras, crane, skopeo) or the included CL-native client.
+
+## Why CL Repository?
+
+Quicklisp is a great way to get started with Common Lisp libraries, but it has limitations. It provides a single curated snapshot that updates monthly -- there's no way to pin `cffi` at 0.24.1 while a colleague uses 0.25, and no lockfile for reproducible builds. More importantly, there's no built-in story for native dependencies. If a library wraps a C library via CFFI, every user needs the right headers and a compiler toolchain to run the groveler locally. On a fresh CI machine, that setup cost adds up quickly.
+
+cl-repo takes a different approach: every CL system is packaged as an OCI artifact -- the same format used by Docker images. You push it to any container registry (GHCR, Docker Hub, your organization's Harbor instance) and pull it back with exact version tags. The registry you already use for container images works as your Lisp package registry too. No additional servers, no new accounts, no custom protocol.
+
+The biggest practical benefit is **platform overlays**. Each package can include prebuilt `.so`/`.dylib`/`.dll` files and pre-groveled CFFI output for specific OS/arch combinations (linux/amd64, darwin/arm64, etc.). These are built once in CI and distributed alongside the source. When someone runs `cl-repo install cffi` on an M1 Mac, the client automatically selects the matching overlay -- no C compiler required at install time. Since CFFI grovel output depends on OS and architecture but not on the CL implementation, a single linux/amd64 overlay serves SBCL, CCL, and ECL equally well. Pure-Lisp systems skip overlays entirely and work everywhere with just a universal source manifest.
+
+If you're familiar with qlot, cl-repo shares the same per-project dependency philosophy but replaces the transport layer. Where qlot pulls from Quicklisp and Ultralisp distributions, cl-repo pulls directly from OCI registries. It's also fully compatible with [OCICL](https://github.com/ocicl/ocicl) -- cl-repo packages work with the OCICL client and vice versa. And since these are standard OCI artifacts, you can always pull them with `oras`, `crane`, or `skopeo` without any Lisp tooling at all.
+
+**At a glance:**
+
+- Store packages in any OCI registry you already have (GHCR, Docker Hub, ECR, Harbor, self-hosted)
+- Pin exact versions per project, with lockfile and digest pinning for reproducible CI builds
+- Platform overlays: ship prebuilt native libs + pre-groveled CFFI per OS/arch -- no C compiler at install time
+- Grovel once, use everywhere: one overlay per platform serves all CL implementations
+- Standard OCI tooling: pull with `oras`, `crane`, `skopeo` -- no Lisp required
+- Cross-compatible with OCICL
 
 ## Systems
 
