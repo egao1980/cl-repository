@@ -158,7 +158,12 @@ jobs:
                  (overlay (make-instance 'cl-repository-packager/build-matrix:overlay-spec
                             :os (uiop:getenv "OVERLAY_OS")
                             :arch (uiop:getenv "OVERLAY_ARCH")
-                            :native-paths (list (uiop:getenv "OVERLAY_LIB"))))
+                            :layers (list
+                                     (list :role "native-library"
+                                           :files (list
+                                                   (cons (uiop:getenv "OVERLAY_LIB")
+                                                         (file-namestring
+                                                          (pathname (uiop:getenv "OVERLAY_LIB")))))))))
                  (result (cl-repository-packager/build-matrix:build-overlay
                            "cl-calc" overlay :version version)))
             (cl-repository-packager/publisher:publish-overlay

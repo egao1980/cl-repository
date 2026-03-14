@@ -65,7 +65,8 @@ cl-repo ql-export https://beta.quicklisp.org/dist/quicklisp.txt --registry ghcr.
   :depends-on ("cffi")
   :properties (:cl-repo (:cffi-libraries ("libfoo")
                           :overlays ((:platform (:os "linux" :arch "amd64")
-                                      :native-paths ("lib/libfoo.so")))))
+                                      :layers ((:role "native-library"
+                                                :files (("lib/libfoo.so" . "libfoo.so"))))))))
   :components (...))
 ```
 
@@ -151,7 +152,8 @@ cl-repo add-overlay my-cffi-lib \
 ```lisp
 (let* ((overlay (parse-overlay-spec
                   '(:platform (:os "linux" :arch "amd64")
-                    :native-paths ("lib/libfoo.so"))))
+                    :layers ((:role "native-library"
+                              :files (("lib/libfoo.so" . "libfoo.so")))))))
        (result (build-overlay "my-cffi-lib" overlay :version "1.0.0")))
   (publish-overlay "https://ghcr.io" "my-org/my-project" "my-cffi-lib" "1.0.0" result))
 ```

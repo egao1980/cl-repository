@@ -100,3 +100,73 @@
             (ok (= (length (image-index-manifests idx)) 2)))))
       ;; Cleanup
       (uiop:delete-directory-tree source-dir :validate t :if-does-not-exist :ignore))))
+
+(deftest build-and-publish-with-unified-overlay-layers
+  (testing "Build an overlay with role-tagged unified layers (including custom role)"
+    (let* ((source-dir (make-test-source-dir))
+           (native-dir (merge-pathnames "lib/linux-amd64/" source-dir))
+           (grovel-dir (merge-pathnames "grovel/" source-dir))
+           (custom-dir (merge-pathnames "overlay/" source-dir)))
+      (ensure-directories-exist native-dir)
+      (ensure-directories-exist grovel-dir)
+      (ensure-directories-exist custom-dir)
+      (with-open-file (s (merge-pathnames "libhello.so" native-dir)
+                         :direction :output :if-exists :supersede
+                         :element-type '(unsigned-byte 8))
+        (write-sequence (babel:string-to-octets "FAKE-ELF-BINARY" :encoding :utf-8) s))
+      (with-open-file (s (merge-pathnames "hello.cffi.lisp" grovel-dir)
+                         :direction :output :if-exists :supersede)
+        (format s ";; pre-groveled test file~%"))
+      (with-open-file (s (merge-pathnames "marker.txt" custom-dir)
+                         :direction :output :if-exists :supersede)
+        (format s "custom overlay payload~%"))
+      (let* ((reg (make-registry *registry-url*))
+             (repo (format nil "~a/hello-layered" *test-namespace*))
+             (tag "0.3.0")
+             (spec (make-instance 'package-spec
+                                  :name "hello-layered"
+                                  :version tag
+                                  :source-dir source-dir
+                                  :license "MIT"
+                                  :description "Overlay layer schema test"
+                                  :overlays
+                                  (list
+                                   (make-instance 'cl-repository-packager/build-matrix::overlay-spec
+                                                  :os "linux" :arch "amd64"
+                                                  :layers
+                                                  (list
+                                                   (list :role "native-library"
+                                                         :files '(("lib/linux-amd64/libhello.so"
+                                                                   . "libhello.so")))
+                                                   (list :role "cffi-grovel-output"
+                                                         :files '(("grovel/hello.cffi.lisp"
+                                                                   . "hello.cffi.lisp")))
+                                                   (list :role "custom-role"
+                                                         :files '(("overlay/marker.txt"
+                                                                   . "marker.txt")))))))))
+        (let* ((result (build-package spec))
+               (digest (publish-package reg *test-namespace* tag result spec)))
+          (declare (ignore digest))
+          (let* ((idx (pull-manifest reg repo tag))
+                 (overlay-desc (second (image-index-manifests idx)))
+                 (overlay-manifest (pull-manifest reg repo
+                                                 (format nil "sha256:~a"
+                                                         (digest-hex
+                                                          (descriptor-digest overlay-desc)))))
+                 (config-octets (pull-blob reg repo
+                                           (format-digest
+                                            (descriptor-digest
+                                             (manifest-config overlay-manifest))))
+                 )
+                 (config (from-json 'cl-oci/config:cl-system-config
+                                    (babel:octets-to-string config-octets
+                                                            :encoding :utf-8)))
+                 (role-values nil))
+            (ok (= (length (image-index-manifests idx)) 2))
+            (ok (= (length (manifest-layers overlay-manifest)) 4))
+            (maphash (lambda (_k v) (declare (ignore _k)) (push v role-values))
+                     (cl-oci/config:config-layer-roles config))
+            (ok (find "native-library" role-values :test #'string=))
+            (ok (find "cffi-grovel-output" role-values :test #'string=))
+            (ok (find "custom-role" role-values :test #'string=)))))
+      (uiop:delete-directory-tree source-dir :validate t :if-does-not-exist :ignore))))

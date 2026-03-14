@@ -16,9 +16,13 @@ ASDF supports a `:properties` plist on system definitions. We use the `:cl-repo`
   :properties (:cl-repo (:cffi-libraries ("libcrypto")
                           :provides ("my-lib" "my-lib/utils")
                           :overlays ((:platform (:os "linux" :arch "amd64")
-                                      :native-paths ("lib/linux-amd64/libcrypto.so"))
+                                      :layers ((:role "native-library"
+                                                :files (("lib/linux-amd64/libcrypto.so"
+                                                         . "libcrypto.so")))))
                                      (:platform (:os "darwin" :arch "arm64")
-                                      :native-paths ("lib/darwin-arm64/libcrypto.dylib")))))
+                                      :layers ((:role "native-library"
+                                                :files (("lib/darwin-arm64/libcrypto.dylib"
+                                                         . "libcrypto.dylib")))))))
   :serial t
   :components ((:file "package")
                (:file "utils")
@@ -37,7 +41,8 @@ ASDF supports a `:properties` plist on system definitions. We use the `:cl-repo`
 
 ```lisp
 (:platform (:os "linux" :arch "amd64" :lisp "sbcl")  ; :lisp is optional
- :native-paths ("path/to/lib.so" ...)
+ :layers ((:role "native-library"
+           :files (("path/to/lib.so" . "lib.so"))))
  :run-groveler t                                       ; optional
  :cffi-wrapper-systems ("my-wrapper-system"))           ; optional
 ```

@@ -128,16 +128,28 @@ jobs:
                          :overlays (list
                            (make-instance 'cl-repository-packager/build-matrix:overlay-spec
                              :os "linux" :arch "amd64"
-                             :native-paths '("lib/linux-amd64/libcalc.so"))
+                             :layers (list
+                                      (list :role "native-library"
+                                            :files '(("lib/linux-amd64/libcalc.so"
+                                                      . "libcalc.so")))))
                            (make-instance 'cl-repository-packager/build-matrix:overlay-spec
                              :os "linux" :arch "arm64"
-                             :native-paths '("lib/linux-arm64/libcalc.so"))
+                             :layers (list
+                                      (list :role "native-library"
+                                            :files '(("lib/linux-arm64/libcalc.so"
+                                                      . "libcalc.so")))))
                            (make-instance 'cl-repository-packager/build-matrix:overlay-spec
                              :os "darwin" :arch "arm64"
-                             :native-paths '("lib/darwin-arm64/libcalc.dylib"))
+                             :layers (list
+                                      (list :role "native-library"
+                                            :files '(("lib/darwin-arm64/libcalc.dylib"
+                                                      . "libcalc.dylib")))))
                            (make-instance 'cl-repository-packager/build-matrix:overlay-spec
                              :os "darwin" :arch "amd64"
-                             :native-paths '("lib/darwin-amd64/libcalc.dylib")))))
+                             :layers (list
+                                      (list :role "native-library"
+                                            :files '(("lib/darwin-amd64/libcalc.dylib"
+                                                      . "libcalc.dylib"))))))))
                  (result (cl-repository-packager/build-matrix:build-package spec)))
             (cl-repository-packager/publisher:publish-package
               reg (uiop:getenv "OCI_NAMESPACE") version result spec))

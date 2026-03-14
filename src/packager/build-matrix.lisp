@@ -7,7 +7,7 @@
                 #:+cl-depends-on+ #:+cl-depends-on-versioned+ #:+cl-provides+)
   (:import-from :cl-oci/config #:+role-source+ #:+role-native-library+
                 #:+role-cffi-grovel-output+ #:+role-cffi-wrapper+ #:+role-headers+
-                #:+role-documentation+)
+                #:+role-documentation+ #:+role-static-library+ #:+role-build-script+)
   (:import-from :cl-repository-packager/layer-builder
                 #:build-layer-from-directory #:build-layer-from-files
                 #:layer-result #:layer-result-data #:layer-result-digest
@@ -30,6 +30,7 @@
            #:overlay-spec-os-version
            #:overlay-spec-lisp
            #:overlay-spec-native-paths
+           #:overlay-spec-layers
            #:parse-overlay-spec
            #:build-package
            #:build-overlay
@@ -69,6 +70,7 @@
                         :initform nil)
    (lisp :type (or null string) :initarg :lisp :accessor overlay-spec-lisp :initform nil)
    (native-paths :type list :initarg :native-paths :accessor overlay-spec-native-paths :initform nil)
+   (layers :type list :initarg :layers :accessor overlay-spec-layers :initform nil)
    (run-groveler :type boolean :initarg :run-groveler :accessor overlay-spec-run-groveler
                  :initform nil)
    (cffi-wrapper-systems :type list :initarg :cffi-wrapper-systems
@@ -123,6 +125,74 @@
       (decode-universal-time (get-universal-time) 0)
     (format nil "~4,'0d-~2,'0d-~2,'0dT~2,'0d:~2,'0d:~2,'0dZ" yr mon day hr min sec)))
 
+(defun role-default-subdirectory (role)
+  "Return default overlay subdirectory for ROLE, or NIL for package root."
+  (cond
+    ((string= role +role-native-library+) "native/")
+    ((string= role +role-static-library+) "native/")
+    ((string= role +role-cffi-wrapper+) "native/")
+    ((string= role +role-cffi-grovel-output+) "grovel-cache/")
+    ((string= role +role-headers+) "headers/")
+    ((string= role +role-documentation+) "docs/")
+    ((string= role +role-build-script+) nil)
+    (t nil)))
+
+(defun ensure-trailing-slash (string)
+  "Ensure STRING ends with '/'."
+  (if (and (> (length string) 0)
+           (char= (char string (1- (length string))) #\/))
+      string
+      (concatenate 'string string "/")))
+
+(defun normalize-role (role)
+  "Normalize ROLE to a lowercase string."
+  (etypecase role
+    (string role)
+    (symbol (string-downcase (symbol-name role)))))
+
+(defun normalize-overlay-file-entry (entry)
+  "Normalize overlay file ENTRY into (source . destination)."
+  (etypecase entry
+    (string (cons entry (file-namestring (pathname entry))))
+    (pathname (let ((namestr (namestring entry)))
+                (cons namestr (file-namestring entry))))
+    (cons (cons (etypecase (car entry)
+                  (string (car entry))
+                  (pathname (namestring (car entry))))
+                (etypecase (cdr entry)
+                  (string (cdr entry))
+                  (pathname (namestring (cdr entry))))))))
+
+(defun normalize-overlay-layer (layer)
+  "Normalize a user-provided overlay layer plist."
+  (let* ((role-raw (getf layer :role))
+         (files-raw (getf layer :files))
+         (prefix-raw (getf layer :prefix)))
+    (unless role-raw
+      (error "Overlay layer is missing required :role key: ~s" layer))
+    (unless files-raw
+      (error "Overlay layer is missing required :files key: ~s" layer))
+    (list :role (normalize-role role-raw)
+          :files (mapcar #'normalize-overlay-file-entry files-raw)
+          :prefix (when prefix-raw
+                    (etypecase prefix-raw
+                      (string prefix-raw)
+                      (pathname (namestring prefix-raw)))))))
+
+(defun normalize-overlay-layers (overlay-plist)
+  "Normalize overlay-plist to a list of layer plists.
+   Legacy :native-paths is converted into a single native-library layer."
+  (let* ((layers-raw (getf overlay-plist :layers))
+         (native-paths (getf overlay-plist :native-paths))
+         (normalized-layers (when layers-raw
+                              (mapcar #'normalize-overlay-layer layers-raw)))
+         (legacy-layer
+           (when native-paths
+             (list (list :role +role-native-library+
+                         :files (mapcar #'normalize-overlay-file-entry native-paths)
+                         :prefix nil)))))
+    (append normalized-layers legacy-layer)))
+
 (defun parse-overlay-spec (plist)
   "Parse an overlay spec from a plist like (:platform (:os \"linux\" :arch \"amd64\") ...)."
   (let ((plat (getf plist :platform)))
@@ -132,8 +202,43 @@
                    :os-version (getf plat :os-version)
                    :lisp (getf plat :lisp)
                    :native-paths (getf plist :native-paths)
+                   :layers (normalize-overlay-layers plist)
                    :run-groveler (getf plist :run-groveler)
                    :cffi-wrapper-systems (getf plist :cffi-wrapper-systems))))
+
+(defun overlay-layer-tar-prefix (base-prefix layer)
+  "Compute TAR prefix for an overlay layer."
+  (let ((explicit-prefix (getf layer :prefix))
+        (role-prefix (role-default-subdirectory (getf layer :role))))
+    (cond
+      (explicit-prefix
+       (let ((prefix (etypecase explicit-prefix
+                       (string explicit-prefix)
+                       (pathname (namestring explicit-prefix)))))
+         (concatenate 'string base-prefix
+                      (ensure-trailing-slash (string-left-trim "/" prefix)))))
+      (role-prefix (concatenate 'string base-prefix role-prefix))
+      (t base-prefix))))
+
+(defun resolve-overlay-source-path (source &key source-dir)
+  "Resolve SOURCE (string/pathname) to a pathname."
+  (etypecase source
+    (pathname source)
+    (string (if source-dir
+                (merge-pathnames source source-dir)
+                (pathname source)))))
+
+(defun build-layer-from-overlay-layer (overlay-layer tar-prefix &key source-dir)
+  "Build a layer-result from normalized OVERLAY-LAYER."
+  (let* ((role (getf overlay-layer :role))
+         (file-maps (getf overlay-layer :files))
+         (pairs (mapcar (lambda (mapping)
+                          (let ((src (car mapping))
+                                (dst (cdr mapping)))
+                            (cons dst (resolve-overlay-source-path src :source-dir source-dir))))
+                        file-maps)))
+    (build-layer-from-files pairs role
+                            :tar-prefix (overlay-layer-tar-prefix tar-prefix overlay-layer))))
 
 (defmacro define-package-spec (name &rest args)
   "Define a package specification for OCI packaging."
@@ -197,14 +302,11 @@
                                    :os-version (overlay-spec-os-version overlay))))
           ;; Source layer first (same blob as universal, deduped by registry)
           (push source-layer overlay-layers)
-          ;; Native library layer (prefixed so tar overlays cleanly on source)
-          (when (overlay-spec-native-paths overlay)
-            (let* ((pairs (mapcar (lambda (p)
-                                    (let ((path (merge-pathnames p (package-spec-source-dir spec))))
-                                      (cons (file-namestring path) path)))
-                                  (overlay-spec-native-paths overlay)))
-                   (layer (build-layer-from-files pairs +role-native-library+
-                                                  :tar-prefix (concatenate 'string tar-prefix "native/"))))
+          ;; Overlay layers from unified spec (including normalized legacy native-paths)
+          (dolist (overlay-layer (overlay-spec-layers overlay))
+            (let ((layer (build-layer-from-overlay-layer
+                          overlay-layer tar-prefix
+                          :source-dir (package-spec-source-dir spec))))
               (push layer overlay-layers)
               (push (cons (layer-result-digest layer) (layer-result-data layer)) all-blobs)))
           ;; Build overlay config + manifest
@@ -255,13 +357,8 @@
     ;; Source layer first (if available) for OCI client compat
     (when source-layer
       (push source-layer overlay-layers))
-    (when (overlay-spec-native-paths overlay)
-      (let* ((pairs (mapcar (lambda (p)
-                              (let ((path (if (pathnamep p) p (pathname p))))
-                                (cons (file-namestring path) path)))
-                            (overlay-spec-native-paths overlay)))
-             (layer (build-layer-from-files pairs +role-native-library+
-                                            :tar-prefix (concatenate 'string tar-prefix "native/"))))
+    (dolist (overlay-layer (overlay-spec-layers overlay))
+      (let ((layer (build-layer-from-overlay-layer overlay-layer tar-prefix)))
         (push layer overlay-layers)
         (push (cons (layer-result-digest layer) (layer-result-data layer)) blobs)))
     (let ((real-layers (if source-layer

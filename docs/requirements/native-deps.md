@@ -12,6 +12,27 @@
 | `headers` | C header files | Platform overlay or universal |
 | `documentation` | Docs, man pages | Universal (optional) |
 | `build-script` | Makefile/build.sh for from-source fallback | Universal (optional) |
+| `<custom-role>` | Project-specific payloads | Author-defined |
+
+Known roles map to conventional destinations (`native/`, `grovel-cache/`, `headers/`, `docs/`). Unknown/custom
+roles are extracted according to tar paths and are accepted for forward compatibility.
+
+## Overlay Schema
+
+Use unified role-tagged overlay layers:
+
+```lisp
+(:platform (:os "linux" :arch "amd64")
+ :layers ((:role "native-library"
+           :files (("lib/linux-amd64/libfoo.so" . "libfoo.so")))
+          (:role "cffi-grovel-output"
+           :files (("grovel/linux-amd64/libfoo.cffi.lisp" . "libfoo.cffi.lisp")))
+          (:role "custom-role"
+           :files (("meta/linux-amd64/marker.txt" . "marker.txt")))))
+```
+
+Legacy compatibility is preserved: `:native-paths (...)` is still accepted and normalized into a
+`native-library` layer.
 
 ## CFFI Integration
 

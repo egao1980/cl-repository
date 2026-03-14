@@ -60,8 +60,46 @@
              (ok (= (length (package-spec-overlays spec)) 1))
              (let ((overlay (first (package-spec-overlays spec))))
                (ok (string= (cl-repository-packager/build-matrix::overlay-spec-os overlay) "linux"))
-               (ok (string= (cl-repository-packager/build-matrix::overlay-spec-arch overlay) "amd64")))))
+               (ok (string= (cl-repository-packager/build-matrix::overlay-spec-arch overlay) "amd64"))
+               (ok (= (length (cl-repository-packager/build-matrix::overlay-spec-layers overlay)) 1))
+               (ok (string=
+                    (getf (first (cl-repository-packager/build-matrix::overlay-spec-layers overlay))
+                          :role)
+                    "native-library")))))
       (asdf:clear-system "asd-test")
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest auto-package-spec-reads-unified-overlay-layers
+  (let ((dir (uiop:ensure-directory-pathname
+              (merge-pathnames (format nil "cl-repo-asd-test3-~a/" (get-universal-time))
+                               (uiop:temporary-directory)))))
+    (ensure-directories-exist dir)
+    (with-open-file (s (merge-pathnames "asd-test3.asd" dir)
+                       :direction :output :if-exists :supersede)
+      (format s "(defsystem \"asd-test3\"~%")
+      (format s "  :version \"3.0.0\"~%")
+      (format s "  :properties (:cl-repo~%")
+      (format s "               (:overlays ((:platform (:os \"linux\" :arch \"amd64\")~%")
+      (format s "                            :layers ((:role \"native-library\"~%")
+      (format s "                                      :files ((\"lib/libfoo.so\" . \"libfoo.so\")))~%")
+      (format s "                                     (:role \"custom-role\"~%")
+      (format s "                                      :files ((\"meta/marker.txt\" . \"marker.txt\"))))))))~%")
+      (format s "  :components ((:file \"m\")))~%"))
+    (with-open-file (s (merge-pathnames "m.lisp" dir)
+                       :direction :output :if-exists :supersede)
+      (format s "(defpackage :asd-test3 (:use :cl))~%"))
+    (unwind-protect
+         (progn
+           (asdf:initialize-source-registry
+            `(:source-registry (:tree ,(namestring dir)) :inherit-configuration))
+           (asdf:clear-system "asd-test3")
+           (let* ((spec (auto-package-spec "asd-test3"))
+                  (overlay (first (package-spec-overlays spec)))
+                  (layers (cl-repository-packager/build-matrix::overlay-spec-layers overlay)))
+             (ok (= (length layers) 2))
+             (ok (string= (getf (first layers) :role) "native-library"))
+             (ok (string= (getf (second layers) :role) "custom-role"))))
+      (asdf:clear-system "asd-test3")
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
 (deftest auto-package-spec-defaults-provides-to-system-name

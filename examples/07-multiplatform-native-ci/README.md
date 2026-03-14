@@ -109,7 +109,10 @@ qlot exec ros -e '
                :overlays (list
                  (make-instance (quote cl-repository-packager/build-matrix:overlay-spec)
                    :os "linux" :arch "amd64"
-                   :native-paths (list "examples/07-multiplatform-native-ci/libcalc/libcalc.so")))))
+                   :layers (list
+                     (list :role "native-library"
+                           :files (list (cons "examples/07-multiplatform-native-ci/libcalc/libcalc.so"
+                                              "libcalc.so"))))))))
        (result (cl-repository-packager/build-matrix:build-package spec)))
   (cl-repository-packager/publisher:publish-package
     "http://localhost:5050" "cl-systems" "1.0.0" result spec))'

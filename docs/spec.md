@@ -141,6 +141,9 @@ Each layer serves a specific role, identified via the config blob's `layer-roles
 | `headers` | C header files | Platform overlay or universal |
 | `documentation` | Docs, man pages | Universal (optional) |
 | `build-script` | Makefile/build.sh | Universal (fallback) |
+| `<custom-role>` | Project-specific payloads | Overlay or universal (author-defined) |
+
+Known roles have conventional extraction locations (`native/`, `grovel-cache/`, etc). Unknown/custom roles are extracted as-is from tar paths (defaulting to package root unless the overlay layer sets a custom prefix).
 
 ### Grovel Output Portability
 
@@ -370,10 +373,18 @@ OCI packaging metadata can be embedded directly in a `.asd` file using ASDF's `:
   :properties (:cl-repo (:cffi-libraries ("libfoo")
                           :provides ("my-lib" "my-lib/utils")
                           :overlays ((:platform (:os "linux" :arch "amd64")
-                                      :native-paths ("lib/linux-amd64/libfoo.so"))
+                                      :layers ((:role "native-library"
+                                                :files (("lib/linux-amd64/libfoo.so" . "libfoo.so")))
+                                               (:role "cffi-grovel-output"
+                                                :files (("grovel/linux-amd64/libfoo.cffi.lisp"
+                                                         . "libfoo.cffi.lisp")))))
                                      (:platform (:os "linux" :arch "amd64" :os-version "ubuntu-22.04")
-                                      :native-paths ("lib/linux-amd64-u2204/libfoo.so"))))))
+                                      :layers ((:role "native-library"
+                                                :files (("lib/linux-amd64-u2204/libfoo.so"
+                                                         . "libfoo.so")))))))))
 ```
+
+` :layers` is the recommended schema. Legacy `:native-paths` is still accepted and normalized to one `native-library` layer for backward compatibility.
 
 ### Provides Resolution
 

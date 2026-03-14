@@ -8,11 +8,17 @@
   :properties (:cl-repo (:cffi-libraries ("libcrypto-example")
                           :provides ("crypto-wrapper")
                           :overlays ((:platform (:os "linux" :arch "amd64")
-                                      :native-paths ("lib/linux-amd64/libcrypto-example.so"))
+                                      :layers ((:role "native-library"
+                                                :files (("lib/linux-amd64/libcrypto-example.so"
+                                                         . "libcrypto-example.so")))))
                                      (:platform (:os "linux" :arch "arm64")
-                                      :native-paths ("lib/linux-arm64/libcrypto-example.so"))
+                                      :layers ((:role "native-library"
+                                                :files (("lib/linux-arm64/libcrypto-example.so"
+                                                         . "libcrypto-example.so")))))
                                      (:platform (:os "darwin" :arch "arm64")
-                                      :native-paths ("lib/darwin-arm64/libcrypto-example.dylib")))))
+                                      :layers ((:role "native-library"
+                                                :files (("lib/darwin-arm64/libcrypto-example.dylib"
+                                                         . "libcrypto-example.dylib"))))))))
   :serial t
   :components ((:file "package")
                (:file "bindings")))

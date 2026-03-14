@@ -209,3 +209,75 @@
                  (uiop:delete-directory-tree install-root
                                              :validate t :if-does-not-exist :ignore))))
         (cleanup-libcalc)))))
+
+;;; ---------- Test 4: Unified :layers schema + custom role extraction ----------
+
+(deftest install-overlay-layers-with-custom-role
+  (testing "Publish/install overlays with native, grovel and custom role payloads"
+    (let* ((overlay-dir (uiop:ensure-directory-pathname
+                         (merge-pathnames (format nil "cl-repo-overlay-layered-~a/"
+                                                  (get-universal-time))
+                                          (uiop:temporary-directory))))
+           (native-file (merge-pathnames (host-lib-name) overlay-dir))
+           (grovel-file (merge-pathnames "calc.cffi.lisp" overlay-dir))
+           (custom-file (merge-pathnames "marker.txt" overlay-dir)))
+      (ensure-directories-exist overlay-dir)
+      (with-open-file (s native-file :direction :output :if-exists :supersede
+                                   :element-type '(unsigned-byte 8))
+        (write-sequence (babel:string-to-octets "FAKE-NATIVE-PAYLOAD" :encoding :utf-8) s))
+      (with-open-file (s grovel-file :direction :output :if-exists :supersede)
+        (format s ";; test grovel output~%"))
+      (with-open-file (s custom-file :direction :output :if-exists :supersede)
+        (format s "custom role payload~%"))
+      (unwind-protect
+           (let* ((reg (make-registry *registry-url*))
+                  (tag "4.0.0")
+                  (repo-name "cl-calc-layered")
+                  (repo (format nil "~a/~a" *test-namespace* repo-name))
+                  (spec (make-instance 'package-spec
+                           :name repo-name
+                           :version tag
+                           :source-dir *cl-calc-dir*
+                           :license "MIT"
+                           :depends-on '("cffi")
+                           :provides (list repo-name)
+                           :cffi-libraries '("libcalc")
+                           :overlays
+                           (list
+                            (make-instance 'cl-repository-packager/build-matrix::overlay-spec
+                                           :os (host-os) :arch (host-arch)
+                                           :layers
+                                           (list
+                                            (list :role "native-library"
+                                                  :files (list
+                                                          (cons (namestring native-file)
+                                                                (host-lib-name))))
+                                            (list :role "cffi-grovel-output"
+                                                  :files (list
+                                                          (cons (namestring grovel-file)
+                                                                "calc.cffi.lisp")))
+                                            (list :role "custom-role"
+                                                  :files (list
+                                                          (cons (namestring custom-file)
+                                                                "marker.txt")))))))))
+             (let ((result (build-package spec)))
+               (publish-package reg *test-namespace* tag result spec))
+             (let* ((install-root (uiop:ensure-directory-pathname
+                                   (merge-pathnames
+                                    (format nil "cl-repo-overlay-layered-install-~a/"
+                                            (get-universal-time))
+                                    (uiop:temporary-directory))))
+                    (cl-repository-client/installer::*systems-root* install-root))
+               (unwind-protect
+                    (let* ((ir (install-system *registry-url* repo tag))
+                           (install-dir (install-result-path ir)))
+                      (ok (uiop:file-exists-p (merge-pathnames
+                                               (format nil "native/~a" (host-lib-name))
+                                               install-dir)))
+                      (ok (uiop:file-exists-p (merge-pathnames "grovel-cache/calc.cffi.lisp"
+                                                               install-dir)))
+                      ;; Unknown/custom roles fall back to package root extraction.
+                      (ok (uiop:file-exists-p (merge-pathnames "marker.txt" install-dir))))
+                 (uiop:delete-directory-tree install-root
+                                             :validate t :if-does-not-exist :ignore))))
+        (uiop:delete-directory-tree overlay-dir :validate t :if-does-not-exist :ignore)))))
