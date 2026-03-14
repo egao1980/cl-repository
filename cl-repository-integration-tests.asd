@@ -18,6 +18,7 @@
                (:file "installer-test")
                (:file "embedded-config-test")
                (:file "multi-system-test")
+               (:file "qlot-onboarding-test")
                (:file "overlay-test")
                (:file "all"))
   :perform (test-op (o c)

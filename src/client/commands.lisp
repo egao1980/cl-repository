@@ -18,13 +18,18 @@
   (:import-from :cl-repository-client/constraint-builder #:scan-installed-systems)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/quickload #:*registries*)
+  (:import-from :cl-repository-client/qlot-integration
+                #:read-qlfile #:qlot-entry-kind #:qlot-entry-name #:qlot-entry-ref
+                #:qlot-installable-entry-p #:read-qlfile-lock #:build-qlot-sync-plan
+                #:read-qlfile-with-path #:read-qlfile-lock-with-path)
   (:export #:cmd-install
            #:cmd-list
            #:cmd-search
            #:cmd-info
            #:cmd-update
            #:cmd-lock
-           #:cmd-restore))
+           #:cmd-restore
+           #:cmd-sync-qlot))
 (in-package :cl-repository-client/commands)
 
 (defvar *default-registry* "ghcr.io"
@@ -214,11 +219,43 @@
               (msg "~&  ~a ~a~%" name version)
               (handler-case
                   (progn
+                    (verify-lockfile-entry-digest entry reg repo version)
                     (install-system reg repo version)
                     (configure-asdf-source-registry))
                 (error (e)
                   (msg "~&  Failed to restore ~a ~a: ~a~%" name version e)))))
           (msg "~&Restore complete.~%")))))
+
+(defun cmd-sync-qlot (&key qlfile-path
+                           qlfile-lock-path
+                           use-lock
+                           registry-url
+                           namespace
+                           source-handler)
+  "Install dependencies declared in qlfile.
+SOURCE-HANDLER is an optional function called for non-:ql entries."
+  (multiple-value-bind (raw-entries resolved-path)
+      (if use-lock
+          (read-qlfile-lock-with-path qlfile-lock-path)
+          (read-qlfile-with-path qlfile-path))
+    (msg "~&qlot sync source: ~a~%" (namestring resolved-path))
+    (let ((entries (build-qlot-sync-plan raw-entries))
+        (installed 0)
+          (handled-source 0))
+      (dolist (entry entries)
+        (if (qlot-installable-entry-p entry)
+            (progn
+              (cmd-install (if (qlot-entry-ref entry)
+                               (format nil "~a:~a" (qlot-entry-name entry) (qlot-entry-ref entry))
+                               (qlot-entry-name entry))
+                           :registry-url registry-url
+                           :namespace namespace)
+              (incf installed))
+            (when source-handler
+              (funcall source-handler entry)
+              (incf handled-source))))
+      (msg "~&qlot sync complete: ~d registry deps installed, ~d source deps handled.~%"
+           installed handled-source))))
 
 (defun resolve-lockfile-entry (name version)
   "Try to resolve digest info for NAME at VERSION from configured registries.
@@ -248,6 +285,22 @@
                  :version version
                  :index-digest ""
                  :registry ""))
+
+(defun verify-lockfile-entry-digest (entry reg repo version)
+  "Ensure lockfile digest matches remote digest when lockfile contains one."
+  (let ((expected (lockfile-entry-index-digest entry)))
+    (when (and expected (> (length expected) 0))
+      (multiple-value-bind (body status headers)
+          (pull-manifest-raw reg repo version)
+        (declare (ignore status))
+        (let ((actual (or (gethash "docker-content-digest" headers)
+                          (format-digest (compute-digest body)))))
+          (unless (string= expected actual)
+            (error "Digest mismatch for ~a ~a: lockfile=~a registry=~a"
+                   (lockfile-entry-system entry)
+                   (lockfile-entry-version entry)
+                   expected
+                   actual)))))))
 
 ;;; Helpers
 

@@ -14,6 +14,7 @@
   :serial t
   :components ((:file "platform-resolver-test")
                (:file "lockfile-test")
+               (:file "qlot-integration-test")
                (:file "installer-test")
                (:file "solver-test")
                (:file "digest-cache-test")

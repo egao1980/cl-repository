@@ -3,8 +3,9 @@
   (:import-from :cl-oci/platform #:make-platform)
   (:import-from :cl-oci/annotations
                 #:+ann-title+ #:+ann-version+ #:+ann-licenses+ #:+ann-description+
-                #:+ann-created+ #:+ann-authors+ #:+cl-implementation+ #:+cl-layer-roles+
-                #:+cl-depends-on+ #:+cl-depends-on-versioned+ #:+cl-provides+)
+                #:+ann-created+ #:+ann-authors+ #:+ann-source+ #:+ann-revision+
+                #:+cl-implementation+ #:+cl-layer-roles+ #:+cl-depends-on+
+                #:+cl-depends-on-versioned+ #:+cl-provides+)
   (:import-from :cl-oci/config #:+role-source+ #:+role-native-library+
                 #:+role-cffi-grovel-output+ #:+role-cffi-wrapper+ #:+role-headers+
                 #:+role-documentation+ #:+role-static-library+ #:+role-build-script+)
@@ -21,6 +22,8 @@
            #:package-spec-version
            #:package-spec-source-dir
            #:package-spec-description
+           #:package-spec-source-url
+           #:package-spec-revision
            #:package-spec-depends-on
            #:package-spec-provides
            #:package-spec-overlays
@@ -48,6 +51,10 @@
   ((name :type string :initarg :name :accessor package-spec-name)
    (version :type (or null string) :initarg :version :accessor package-spec-version :initform nil)
    (source-dir :type pathname :initarg :source-dir :accessor package-spec-source-dir)
+   (source-url :type (or null string) :initarg :source-url :accessor package-spec-source-url
+               :initform nil)
+   (revision :type (or null string) :initarg :revision :accessor package-spec-revision
+             :initform nil)
    (license :type (or null string) :initarg :license :accessor package-spec-license :initform nil)
    (description :type (or null string) :initarg :description :accessor package-spec-description
                 :initform nil)
@@ -110,6 +117,10 @@
       (setf (gethash +ann-description+ ann) (package-spec-description spec)))
     (when (package-spec-author spec) (setf (gethash +ann-authors+ ann) (package-spec-author spec)))
     (setf (gethash +ann-created+ ann) (format-iso-time))
+    (when (package-spec-source-url spec)
+      (setf (gethash +ann-source+ ann) (package-spec-source-url spec)))
+    (when (package-spec-revision spec)
+      (setf (gethash +ann-revision+ ann) (package-spec-revision spec)))
     (when (package-spec-depends-on spec)
       (setf (gethash +cl-depends-on+ ann)
             (format nil "~{~a~^,~}" (mapcar #'dep-flat-name (package-spec-depends-on spec))))
@@ -258,6 +269,8 @@
                   :name ,name
                   :version ,(getf args :version)
                   :source-dir ,(or (getf args :source-dir) `(uiop:getcwd))
+                  :source-url ,(getf args :source-url)
+                  :revision ,(getf args :revision)
                   :license ,(getf args :license)
                   :description ,(getf args :description)
                   :author ,(getf args :author)

@@ -16,6 +16,7 @@
   (:import-from :cl-repository-client/solver
                 #:sat-true #:sat-var #:sat-and #:sat-or #:sat-not #:sat-imply #:sat-solve)
   (:import-from :cl-repository-client/installer #:systems-root)
+  (:import-from :cl-repository-client/version-utils #:select-preferred-version)
   (:export #:build-install-plan
            #:scan-installed-systems
            #:dependency-resolution-error))
@@ -228,7 +229,7 @@
         (unless versions
           (error 'dependency-resolution-error
                  :message (format nil "~a not found in any registry" root-name)))
-        (setf root-version (car (last (sort (copy-list versions) #'string<))))))
+        (setf root-version (select-preferred-version versions))))
     (let* ((installed (scan-installed-systems))
            (universe (gather-universe root-name root-version registries installed :force force))
            (formula (build-formula root-name root-version universe installed :force force))

@@ -54,7 +54,32 @@ If you're familiar with qlot, cl-repo shares the same per-project dependency phi
 cl-repo install alexandria
 cl-repo install cffi:0.24.1
 cl-repo publish
+cl-repo publish-github fukamachi/sxql --ref main --registry ghcr.io --namespace my-org/my-project
+cl-repo sync-qlot --qlfile ./qlfile --registry ghcr.io --namespace my-org/my-project
 cl-repo ql-export https://beta.quicklisp.org/dist/quicklisp.txt --registry ghcr.io --namespace my-org/my-project
+```
+
+### Onboarding Existing Projects
+
+You can onboard projects that are not yet in your OCI registry without first adding them to a Quicklisp dist.
+
+```sh
+# Publish directly from GitHub source.
+cl-repo publish-github owner/repo --ref v1.2.3 \
+  --registry ghcr.io --namespace my-org/my-project
+
+# Install/publish from qlot metadata (auto-detects qlfile/qlfile.lock).
+# - ql entries are installed from OCI registry.
+# - github/git entries can be auto-published first with --publish-sources.
+cl-repo sync-qlot --publish-sources \
+  --use-lock \
+  --registry ghcr.io --namespace my-org/my-project
+
+# Override paths only when needed.
+cl-repo sync-qlot --use-lock \
+  --qlfile /path/to/qlfile \
+  --qlfile-lock /path/to/qlfile.lock \
+  --registry ghcr.io --namespace my-org/my-project
 ```
 
 ### Embedded OCI Config in .asd
@@ -288,6 +313,7 @@ cl-repo packages are also OCICL-compatible — the source layer uses an `<name>-
 | [05-ci-workflow](examples/05-ci-workflow/) | GitHub Actions CI/CD |
 | [06-asd-embedded-config](examples/06-asd-embedded-config/) | OCI config embedded in .asd |
 | [07-multiplatform-native-ci](examples/07-multiplatform-native-ci/) | Real C lib + CFFI grovel + multiplatform CI |
+| [08-github-qlot-onboarding](examples/08-github-qlot-onboarding/) | Onboard GitHub and qlot projects into OCI |
 
 ## Development
 

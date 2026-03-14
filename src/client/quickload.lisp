@@ -23,6 +23,7 @@
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
                 #:build-install-plan #:dependency-resolution-error)
+  (:import-from :cl-repository-client/version-utils #:select-preferred-version)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry
                 #:load-system-init-files)
   (:import-from :cl-repository-client/lockfile
@@ -118,7 +119,7 @@
               (if tags
                   (let ((version-tags (remove "latest" tags :test #'string=)))
                     (if version-tags
-                        (values repo (car (last (sort (copy-list version-tags) #'string<))))
+                        (values repo (select-preferred-version version-tags))
                         (values repo (first tags))))
                   (unless (eq type :ocicl)
                     (find-via-anchor reg repo system-name)))))

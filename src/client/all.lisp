@@ -3,6 +3,7 @@
   (:use-reexport
    :cl-repository-client/platform-resolver
    :cl-repository-client/installer
+   :cl-repository-client/qlot-integration
    :cl-repository-client/digest-cache
    :cl-repository-client/solver
    :cl-repository-client/constraint-builder

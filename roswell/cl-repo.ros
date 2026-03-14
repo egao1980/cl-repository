@@ -13,13 +13,19 @@ exec ros -Q -- $0 "$@"
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run*)
   (:import-from :cl-repository-client/commands
                 #:cmd-install #:cmd-list #:cmd-search #:cmd-info #:cmd-update
-                #:cmd-lock #:cmd-restore)
+                #:cmd-lock #:cmd-restore #:cmd-sync-qlot)
+  (:import-from :cl-repository-client/qlot-integration
+                #:qlot-entry-kind #:qlot-entry-name #:qlot-entry-ref)
   (:import-from :cl-repository-client/quickload
                 #:*registries* #:add-registry)
   (:import-from :cl-repository-packager/build-matrix
                 #:build-package #:build-overlay #:parse-overlay-spec)
   (:import-from :cl-repository-packager/publisher
                 #:publish-package #:publish-overlay)
+  (:import-from :cl-repository-packager/source-adapter
+                #:build-package-from-github #:build-package-from-source #:clone-git-source
+                #:ensure-dependencies-published #:discover-project-systems
+                #:build-packages-from-source)
   (:import-from :cl-repository-packager/asdf-plugin
                 #:auto-package-spec))
 
@@ -40,6 +46,8 @@ exec ros -Q -- $0 "$@"
   (format t "  lock                  Generate/update lockfile from installed systems~%")
   (format t "  restore               Install exact versions from lockfile~%")
   (format t "  ql-export <url>       Export Quicklisp dist to OCI registry~%")
+  (format t "  publish-github <repo> Package and publish from GitHub (owner/repo or URL)~%")
+  (format t "  sync-qlot             Install/publish dependencies from qlfile~%")
   (format t "~%Options:~%")
   (format t "  --registry <url>      Registry URL (default: ghcr.io)~%")
   (format t "  --namespace <ns>      Repository namespace (default: cl-systems)~%")
@@ -53,14 +61,27 @@ exec ros -Q -- $0 "$@"
   (format t "  --lisp <impl>         CL implementation for add-overlay (optional)~%")
   (format t "  --native-paths <p>    Comma-separated native lib paths for add-overlay~%")
   (format t "  --tag <tag>           Version tag for add-overlay (default: from .asd or latest)~%")
-  (format t "  --skip-catalog        Skip writing catalog anchors/referrers~%"))
+  (format t "  --skip-catalog        Skip writing catalog anchors/referrers~%")
+  (format t "  --ref <ref>           Git ref (tag/branch/commit) for publish-github/sync-qlot~%")
+  (format t "  --system <name>       ASDF system to package when source has multiple .asd files~%")
+  (format t "  --qlfile <path>       qlfile path for sync-qlot (optional; auto-detected)~%")
+  (format t "  --qlfile-lock <path>  qlfile.lock path for sync-qlot (optional; auto-detected)~%")
+  (format t "  --use-lock            For sync-qlot, resolve from qlfile.lock~%")
+  (format t "  --publish-sources     For sync-qlot, publish github/git dependencies first~%")
+  (format t "  --publish-dependencies Resolve and publish missing local dependencies~%")
+  (format t "  --recursive-dependencies Recursively publish dependency graphs~%")
+  (format t "  --publish-ql-dependencies Fallback-publish unresolved deps via ql-export~%")
+  (format t "  --deps-dist-url <url> Dist URL for ql-export fallback (Quicklisp/Ultralisp)~%")
+  (format t "  --all-systems         Publish all .asd systems from source tree~%"))
 
 (defun parse-options (args)
   "Parse --key value pairs from args. Returns (values command-args options-plist).
    Boolean flags (--quiet, --dry-run) don't consume the next argument."
   (let ((cmd-args nil)
         (options nil)
-        (boolean-flags '("quiet" "dry-run" "incremental" "remote" "force" "skip-catalog")))
+        (boolean-flags '("quiet" "dry-run" "incremental" "remote" "force" "skip-catalog"
+                         "publish-sources" "publish-dependencies" "recursive-dependencies"
+                         "publish-ql-dependencies" "all-systems" "use-lock")))
     (loop with i = 0
           while (< i (length args))
           for arg = (nth i args)
@@ -90,9 +111,12 @@ exec ros -Q -- $0 "$@"
            (*quiet* (or *quiet* (getf opts :quiet)))
            (*dry-run* (or *dry-run* (getf opts :dry-run))))
       (handler-case
-          (when registry-url
-            (add-registry registry-url :namespace (or namespace "cl-systems")))
-          (cond
+          (progn
+            (when registry-url
+              (add-registry registry-url :namespace (or namespace "cl-systems")))
+            (when (getf opts :publish-ql-dependencies)
+              #+quicklisp (ql:quickload "cl-repository-ql-exporter" :silent t))
+            (cond
             ((string-equal command "load")
              (unless cmd-args
                (format *error-output* "~&Error: load requires system name(s)~%")
@@ -126,16 +150,42 @@ exec ros -Q -- $0 "$@"
              (cmd-info (first cmd-args) :registry-url registry-url :namespace namespace))
 
             ((string-equal command "publish")
-             (let* ((system-name (or (first cmd-args)
-                                     (pathname-name (first (directory "*.asd")))))
-                    (spec (auto-package-spec system-name))
-                    (result (build-package spec))
-                    (reg (or registry-url "ghcr.io"))
-                    (ns (or namespace "cl-systems"))
-                    (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
-                             "latest")))
-               (publish-package reg ns tag result spec
-                                :skip-catalog (getf opts :skip-catalog))))
+             (if (getf opts :all-systems)
+                 (let* ((source-dir (uiop:getcwd))
+                        (reg (or registry-url "ghcr.io"))
+                        (ns (or namespace "cl-systems"))
+                        (built (build-packages-from-source source-dir :isolate-provides t)))
+                   (dolist (pair built)
+                     (let* ((spec (car pair))
+                            (result (cdr pair))
+                            (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
+                                     "latest")))
+                       (ensure-dependencies-published spec reg ns
+                                                      :publish-missing (not (null (getf opts :publish-dependencies)))
+                                                      :recursive (not (null (getf opts :recursive-dependencies)))
+                                                      :publish-ql-dependencies (not (null (getf opts :publish-ql-dependencies)))
+                                                      :deps-dist-url (getf opts :deps-dist-url)
+                                                      :skip-catalog (getf opts :skip-catalog))
+                       (publish-package reg ns tag result spec
+                                        :skip-catalog (getf opts :skip-catalog))))
+                   (cl-oci/runtime:msg "~&Published all systems: ~{~a~^, ~}~%"
+                                       (discover-project-systems (uiop:getcwd))))
+                 (let* ((system-name (or (first cmd-args)
+                                         (pathname-name (first (directory "*.asd")))))
+                        (spec (auto-package-spec system-name))
+                        (reg (or registry-url "ghcr.io"))
+                        (ns (or namespace "cl-systems"))
+                        (result (build-package spec))
+                        (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
+                                 "latest")))
+                   (ensure-dependencies-published spec reg ns
+                                                  :publish-missing (not (null (getf opts :publish-dependencies)))
+                                                  :recursive (not (null (getf opts :recursive-dependencies)))
+                                                  :publish-ql-dependencies (not (null (getf opts :publish-ql-dependencies)))
+                                                  :deps-dist-url (getf opts :deps-dist-url)
+                                                  :skip-catalog (getf opts :skip-catalog))
+                   (publish-package reg ns tag result spec
+                                    :skip-catalog (getf opts :skip-catalog)))))
 
             ((string-equal command "add-overlay")
              (let* ((system-name (or (first cmd-args)
@@ -187,10 +237,121 @@ exec ros -Q -- $0 "$@"
                           :namespace (or namespace "cl-systems")
                           :incremental (not (null (getf opts :incremental)))))))
 
-            (t
-             (format *error-output* "~&Unknown command: ~a~%~%" command)
-             (usage)
-             (ros:quit 1)))
+            ((string-equal command "publish-github")
+             (unless cmd-args
+               (format *error-output* "~&Error: publish-github requires repository (owner/repo or URL)~%")
+               (ros:quit 1))
+             (let* ((repo (first cmd-args))
+                    (ref (getf opts :ref))
+                    (system-name (getf opts :system))
+                    (reg (or registry-url "ghcr.io"))
+                    (ns (or namespace "cl-systems")))
+               (if (getf opts :all-systems)
+                   (multiple-value-bind (source-dir revision cleanup-fn)
+                       (clone-git-source (cl-repository-packager/source-adapter:github-repo-url repo) :ref ref)
+                     (unwind-protect
+                          (let ((built (build-packages-from-source source-dir
+                                                                   :source-url (format nil "https://github.com/~a"
+                                                                                       (cl-repository-packager/source-adapter:normalize-github-repo repo))
+                                                                   :revision revision
+                                                                   :isolate-provides t)))
+                            (dolist (pair built)
+                              (let* ((spec (car pair))
+                                     (result (cdr pair))
+                                     (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
+                                              (or ref "latest"))))
+                                (ensure-dependencies-published spec reg ns
+                                                               :publish-missing (not (null (getf opts :publish-dependencies)))
+                                                               :recursive (not (null (getf opts :recursive-dependencies)))
+                                                               :publish-ql-dependencies (not (null (getf opts :publish-ql-dependencies)))
+                                                               :deps-dist-url (getf opts :deps-dist-url)
+                                                               :skip-catalog (getf opts :skip-catalog))
+                                (publish-package reg ns tag result spec
+                                                 :skip-catalog (getf opts :skip-catalog)))))
+                       (when cleanup-fn
+                         (funcall cleanup-fn))))
+                   (multiple-value-bind (spec result cleanup-fn)
+                       (build-package-from-github repo :ref ref :system-name system-name)
+                     (unwind-protect
+                          (let ((tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
+                                         (or ref "latest"))))
+                            (ensure-dependencies-published spec reg ns
+                                                           :publish-missing (not (null (getf opts :publish-dependencies)))
+                                                           :recursive (not (null (getf opts :recursive-dependencies)))
+                                                           :publish-ql-dependencies (not (null (getf opts :publish-ql-dependencies)))
+                                                           :deps-dist-url (getf opts :deps-dist-url)
+                                                           :skip-catalog (getf opts :skip-catalog))
+                            (publish-package reg ns tag result spec
+                                             :skip-catalog (getf opts :skip-catalog)))
+                       (when cleanup-fn
+                         (funcall cleanup-fn)))))))
+
+            ((string-equal command "sync-qlot")
+             (let ((qlfile-path (when (getf opts :qlfile) (pathname (getf opts :qlfile))))
+                   (qlfile-lock-path (when (getf opts :qlfile-lock) (pathname (getf opts :qlfile-lock))))
+                   (use-lock (not (null (getf opts :use-lock))))
+                   (publish-sources (not (null (getf opts :publish-sources))))
+                   (reg (or registry-url "ghcr.io"))
+                   (ns (or namespace "cl-systems")))
+               (cmd-sync-qlot
+                :qlfile-path qlfile-path
+                :qlfile-lock-path qlfile-lock-path
+                :use-lock use-lock
+                :registry-url reg
+                :namespace ns
+                :source-handler
+                (when publish-sources
+                  (lambda (entry)
+                    (let ((kind (qlot-entry-kind entry))
+                          (name (qlot-entry-name entry))
+                          (ref (or (qlot-entry-ref entry) (getf opts :ref))))
+                      (cond
+                        ((eq kind :github)
+                         (multiple-value-bind (spec result cleanup-fn)
+                             (build-package-from-github name :ref ref :system-name (getf opts :system))
+                           (unwind-protect
+                                (let ((tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
+                                               ref
+                                               "latest")))
+                                  (ensure-dependencies-published spec reg ns
+                                                                 :publish-missing (not (null (getf opts :publish-dependencies)))
+                                                                 :recursive (not (null (getf opts :recursive-dependencies)))
+                                                                 :publish-ql-dependencies (not (null (getf opts :publish-ql-dependencies)))
+                                                                 :deps-dist-url (getf opts :deps-dist-url)
+                                                                 :skip-catalog (getf opts :skip-catalog))
+                                  (publish-package reg ns tag result spec
+                                                   :skip-catalog (getf opts :skip-catalog)))
+                             (when cleanup-fn
+                               (funcall cleanup-fn)))))
+                        ((eq kind :git)
+                         (multiple-value-bind (source-dir revision cleanup-fn)
+                             (clone-git-source name :ref ref)
+                           (unwind-protect
+                                (multiple-value-bind (spec result)
+                                    (build-package-from-source source-dir
+                                                               :system-name (getf opts :system)
+                                                               :source-url name
+                                                               :revision revision)
+                                  (let ((tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
+                                                 ref
+                                                 "latest")))
+                                    (ensure-dependencies-published spec reg ns
+                                                                   :publish-missing (not (null (getf opts :publish-dependencies)))
+                                                                   :recursive (not (null (getf opts :recursive-dependencies)))
+                                                                   :publish-ql-dependencies (not (null (getf opts :publish-ql-dependencies)))
+                                                                   :deps-dist-url (getf opts :deps-dist-url)
+                                                                   :skip-catalog (getf opts :skip-catalog))
+                                    (publish-package reg ns tag result spec
+                                                     :skip-catalog (getf opts :skip-catalog))))
+                             (when cleanup-fn
+                               (funcall cleanup-fn)))))
+                        (t
+                         (format *error-output* "~&Warning: unsupported qlot entry: ~a~%" kind)))))))))
+
+              (t
+               (format *error-output* "~&Unknown command: ~a~%~%" command)
+               (usage)
+               (ros:quit 1))))
         (error (e)
           (format *error-output* "~&Error: ~a~%" e)
           (ros:quit 1))))))
