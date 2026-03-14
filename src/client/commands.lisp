@@ -33,6 +33,10 @@
 (defvar *default-namespace* "cl-systems"
   "Default repository namespace.")
 
+(defun catalog-root-repo (namespace)
+  "Build the per-project catalog repository path for NAMESPACE."
+  (format nil "~a/catalog" namespace))
+
 (defun cmd-install (reference &key registry-url namespace)
   "Install a CL system. REFERENCE can be 'name', 'name:version', or 'registry/ns/name:ver'."
   (multiple-value-bind (host repo tag) (parse-reference reference)
@@ -44,7 +48,7 @@
         (configure-asdf-source-registry)))))
 
 (defun cmd-list (&key remote)
-  "List systems. Without REMOTE, lists locally installed. With REMOTE, queries ns-catalog referrers."
+  "List systems. Without REMOTE, lists locally installed. With REMOTE, queries catalog referrers."
   (if remote
       (cmd-list-remote)
       (cmd-list-local)))
@@ -66,12 +70,12 @@
         (msg "~&No systems installed.~%"))))
 
 (defun cmd-list-remote ()
-  "List all systems in configured registries via ns-catalog referrers."
+  "List all systems in configured registries via per-project catalog referrers."
   (dolist (entry *registries*)
     (let* ((url (first entry))
            (ns (getf (rest entry) :namespace "cl-systems"))
            (reg (make-registry url))
-           (root-repo (format nil "~a/ns-catalog" ns)))
+           (root-repo (catalog-root-repo ns)))
       (msg "~&Registry: ~a (~a)~%" url ns)
       (handler-case
           (let ((root-digest (head-manifest-digest reg root-repo "latest")))
@@ -89,7 +93,7 @@
           (msg "~&  Error: ~a~%" e))))))
 
 (defun cmd-search (query &key registry-url namespace)
-  "Search for systems. Queries ns-catalog referrers and filters by substring."
+  "Search for systems. Queries per-project catalog referrers and filters by substring."
   (let ((found nil))
     (dolist (entry (or (when registry-url
                          (list (list registry-url :namespace (or namespace *default-namespace*))))
@@ -97,7 +101,7 @@
       (let* ((url (first entry))
              (ns (getf (rest entry) :namespace "cl-systems"))
              (reg (make-registry url))
-             (root-repo (format nil "~a/ns-catalog" ns)))
+             (root-repo (catalog-root-repo ns)))
         (handler-case
             (let ((root-digest (head-manifest-digest reg root-repo "latest")))
               (when root-digest

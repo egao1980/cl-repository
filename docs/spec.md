@@ -113,19 +113,19 @@ After publishing, a provider referrer is pushed into each system-name repo:
 
 Referrers are discoverable via `GET /v2/<ns>/<system-name>/referrers/<anchor-digest>`.
 
-## Namespace Root and Catalog
+## Project Catalog Root
 
-A namespace root anchor at `<ns>/ns-catalog:latest` provides a catalog of all published systems:
+A per-project catalog root anchor at `<ns>/catalog:latest` provides a catalog of all published systems:
 
 - `artifactType`: `application/vnd.common-lisp.namespace-root.v1`
 - Empty config, empty layers
 
-Each published system pushes a catalog referrer into `ns-catalog`:
+Each published system pushes a catalog referrer into `catalog`:
 
 - `subject`: root anchor digest
 - Annotations: `dev.common-lisp.system.name`, `org.opencontainers.image.version`
 
-Browse catalog: `GET /v2/<ns>/ns-catalog/referrers/<root-digest>`
+Browse catalog: `GET /v2/<ns>/catalog/referrers/<root-digest>`
 
 ## Layer Roles
 

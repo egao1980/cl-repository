@@ -17,7 +17,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  NAMESPACE: ${{ github.repository_owner }}/cl-systems
+  NAMESPACE: ${{ github.repository }}
   SBCL_VERSION: 2.4.11
 
 jobs:

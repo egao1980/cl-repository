@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  NAMESPACE: ${{ github.repository_owner }}/cl-systems
+  NAMESPACE: ${{ github.repository }}
   SBCL_VERSION: 2.4.11
 
 jobs:
@@ -77,7 +77,7 @@ jobs:
             echo "::endgroup::"
           done
 
-          echo "::group::Verifying ns-catalog anchor"
-          oras manifest fetch "${{ env.REGISTRY }}/${NAMESPACE}/ns-catalog:latest" \
-            --registry-config <(echo "${ORAS_AUTH}") || echo "No ns-catalog anchor (OK for first publish)"
+          echo "::group::Verifying project catalog anchor"
+          oras manifest fetch "${{ env.REGISTRY }}/${NAMESPACE}/catalog:latest" \
+            --registry-config <(echo "${ORAS_AUTH}") || echo "No project catalog anchor (OK for first publish)"
           echo "::endgroup::"

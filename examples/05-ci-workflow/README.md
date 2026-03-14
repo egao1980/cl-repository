@@ -18,7 +18,7 @@ Key steps:
 1. Set up SBCL via Roswell
 2. Load the packager
 3. Build the OCI artifact
-4. Push to `ghcr.io/<owner>/cl-systems/<name>:<version>`
+4. Push to `ghcr.io/<owner>/<repo>/<name>:<version>`
 
 ## GitHub Actions: Test with cl-repo
 
@@ -30,7 +30,7 @@ Key steps:
 (asdf:load-system "cl-repository-client")
 
 ;; Use GHCR as a registry (public packages, no auth needed)
-(cl-repo:add-registry "https://ghcr.io" :namespace "my-org/cl-systems")
+(cl-repo:add-registry "https://ghcr.io" :namespace "my-org/my-project")
 
 (cl-repo:load-system "my-library")
 ```

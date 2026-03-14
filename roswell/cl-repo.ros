@@ -53,7 +53,7 @@ exec ros -Q -- $0 "$@"
   (format t "  --lisp <impl>         CL implementation for add-overlay (optional)~%")
   (format t "  --native-paths <p>    Comma-separated native lib paths for add-overlay~%")
   (format t "  --tag <tag>           Version tag for add-overlay (default: from .asd or latest)~%")
-  (format t "  --skip-catalog        Skip writing ns-catalog anchors/referrers~%"))
+  (format t "  --skip-catalog        Skip writing catalog anchors/referrers~%"))
 
 (defun parse-options (args)
   "Parse --key value pairs from args. Returns (values command-args options-plist).

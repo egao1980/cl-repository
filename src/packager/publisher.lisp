@@ -49,7 +49,7 @@
    Pushes full package to primary repo, mounts blobs to secondary repos for
    each provided system name, creates system-name anchors and referrers.
    SPEC is a package-spec for metadata. NAMESPACE is the registry namespace.
-   When SKIP-CATALOG is true, skip writing ns-catalog anchors and referrers
+   When SKIP-CATALOG is true, skip writing catalog anchors and referrers
    (useful when the publishing token lacks write access to the catalog repo)."
   (let* ((provides (or (package-spec-provides spec)
                        (list (package-spec-name spec))))
@@ -114,7 +114,7 @@
                                                            (or (package-spec-version spec) tag))))
             ;; Push provider referrer into system-name repo
             (push-provider-referrer reg sys-repo anchor-digest spec tag)
-            ;; Push catalog referrer into ns-catalog repo
+            ;; Push catalog referrer into per-project catalog repo
             (push-catalog-referrer reg namespace root-digest system-name
                                    (or (package-spec-version spec) tag))))))
     (msg "~&Published ~a:~a (digest: ~a, provides: ~{~a~^, ~})~%"
@@ -202,9 +202,13 @@
 
 ;;; --- Root anchor ---
 
+(defun catalog-root-repo (namespace)
+  "Build the per-project catalog repository path for NAMESPACE."
+  (format nil "~a/catalog" namespace))
+
 (defun ensure-root-anchor (registry namespace)
-  "Ensure ns-catalog:latest anchor exists. Returns its digest string."
-  (let ((root-repo (format nil "~a/ns-catalog" namespace)))
+  "Ensure per-project catalog root anchor exists. Returns its digest string."
+  (let ((root-repo (catalog-root-repo namespace)))
     (handler-case
         (let ((obj (pull-manifest registry root-repo "latest")))
           (declare (ignore obj))
@@ -277,8 +281,8 @@
                      :content-type +oci-image-manifest-v1+))))
 
 (defun push-catalog-referrer (registry namespace root-digest system-name version)
-  "Push a catalog referrer into ns-catalog repo."
-  (let* ((root-repo (format nil "~a/ns-catalog" namespace))
+  "Push a catalog referrer into the per-project catalog repo."
+  (let* ((root-repo (catalog-root-repo namespace))
          (ann (make-hash-table :test 'equal))
          (subject-desc (make-descriptor :media-type +oci-image-manifest-v1+
                                         :digest (parse-digest root-digest)

@@ -134,7 +134,7 @@ docker stop oci-registry && docker rm oci-registry
 No cl-repo tooling required. Each overlay manifest is self-contained. All layers use the same OCICL-compatible `<name>-<version>/` prefix, so they overlay cleanly:
 
 ```sh
-oras pull --platform linux/amd64 ghcr.io/cl-systems/cl-calc:1.0.0
+oras pull --platform linux/amd64 ghcr.io/<owner>/<repo>/cl-calc:1.0.0
 for f in *.tar.gz; do tar xzf "$f"; done
 # -> cl-calc-1.0.0/          (source)
 # -> cl-calc-1.0.0/native/   (platform libs)

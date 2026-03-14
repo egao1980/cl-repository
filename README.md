@@ -40,7 +40,7 @@ If you're familiar with qlot, cl-repo shares the same per-project dependency phi
 ```lisp
 ;; Load a system from configured OCI registries (like ql:quickload)
 (asdf:load-system "cl-repository-client")
-(cl-repo:add-registry "https://ghcr.io" :namespace "cl-systems")
+(cl-repo:add-registry "https://ghcr.io" :namespace "my-org/my-project")
 (cl-repo:load-system "alexandria")
 
 ;; Package and publish a system (reads OCI config from .asd :properties)
@@ -54,7 +54,7 @@ If you're familiar with qlot, cl-repo shares the same per-project dependency phi
 cl-repo install alexandria
 cl-repo install cffi:0.24.1
 cl-repo publish
-cl-repo ql-export https://beta.quicklisp.org/dist/quicklisp.txt --registry ghcr.io --namespace cl-systems
+cl-repo ql-export https://beta.quicklisp.org/dist/quicklisp.txt --registry ghcr.io --namespace my-org/my-project
 ```
 
 ### Embedded OCI Config in .asd
@@ -87,7 +87,7 @@ Platform overlays are additive. You can publish a pure-Lisp package first, then 
 ```
 
 ```sh
-cl-repo publish my-cffi-lib --registry ghcr.io --namespace cl-systems
+cl-repo publish my-cffi-lib --registry ghcr.io --namespace my-org/my-project
 ```
 
 2. **Build native libraries** on each target platform (in CI or locally).
@@ -100,21 +100,21 @@ cl-repo add-overlay my-cffi-lib \
   --os linux --arch amd64 \
   --native-paths lib/linux-amd64/libfoo.so \
   --tag 1.0.0 \
-  --registry ghcr.io --namespace cl-systems
+  --registry ghcr.io --namespace my-org/my-project
 
 # On a darwin/arm64 runner:
 cl-repo add-overlay my-cffi-lib \
   --os darwin --arch arm64 \
   --native-paths lib/darwin-arm64/libfoo.dylib \
   --tag 1.0.0 \
-  --registry ghcr.io --namespace cl-systems
+  --registry ghcr.io --namespace my-org/my-project
 
 # On a windows/amd64 runner:
 cl-repo add-overlay my-cffi-lib \
   --os windows --arch amd64 \
   --native-paths lib/windows-amd64/foo.dll \
   --tag 1.0.0 \
-  --registry ghcr.io --namespace cl-systems
+  --registry ghcr.io --namespace my-org/my-project
 ```
 
 Each `add-overlay` call pulls the existing Image Index, pushes the new overlay blobs and manifest, appends the overlay descriptor, and re-pushes the updated index under the same tag. OCI tags are mutable pointers, so this is safe and idempotent for distinct platform targets.
@@ -153,7 +153,7 @@ cl-repo add-overlay my-cffi-lib \
                   '(:platform (:os "linux" :arch "amd64")
                     :native-paths ("lib/libfoo.so"))))
        (result (build-overlay "my-cffi-lib" overlay :version "1.0.0")))
-  (publish-overlay "https://ghcr.io" "cl-systems" "my-cffi-lib" "1.0.0" result))
+  (publish-overlay "https://ghcr.io" "my-org/my-project" "my-cffi-lib" "1.0.0" result))
 ```
 
 #### CI Example (GitHub Actions)
@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cl-repo publish my-cffi-lib --registry ghcr.io --namespace cl-systems
+      - run: cl-repo publish my-cffi-lib --registry ghcr.io --namespace "${{ github.repository }}"
 
   add-overlay:
     needs: publish-source
@@ -188,7 +188,7 @@ jobs:
             --os ${{ matrix.os }} --arch ${{ matrix.arch }} \
             --native-paths ${{ matrix.lib }} \
             --tag 1.0.0 \
-            --registry ghcr.io --namespace cl-systems
+            --registry ghcr.io --namespace "${{ github.repository }}"
 ```
 
 The client automatically selects the matching overlay at install time — pure-Lisp systems skip overlays entirely.
@@ -199,12 +199,12 @@ Packages are standard OCI artifacts — pull with any OCI client, then point ASD
 
 ```sh
 # Pure-Lisp package (source only)
-oras pull ghcr.io/egao1980/cl-systems/cl-oci:0.2.0 -o /tmp/
+oras pull ghcr.io/my-org/my-project/cl-oci:0.2.0 -o /tmp/
 mkdir -p ~/.local/share/cl-systems/
 tar -xzf /tmp/cl-oci-0.2.0.tar.gz -C ~/.local/share/cl-systems/
 
 # Package with native libs — all layers use the same prefix, so extract in order
-oras pull --platform linux/amd64 ghcr.io/cl-systems/my-cffi-lib:1.0.0
+oras pull --platform linux/amd64 ghcr.io/my-org/my-project/my-cffi-lib:1.0.0
 for f in *.tar.gz; do tar xzf "$f" -C ~/.local/share/cl-systems/; done
 # -> ~/.local/share/cl-systems/my-cffi-lib-1.0.0/         (source)
 # -> ~/.local/share/cl-systems/my-cffi-lib-1.0.0/native/  (platform libs)
@@ -234,7 +234,7 @@ For scripting, pull + extract + load in one shot:
 
 ```sh
 #!/bin/sh
-REGISTRY=ghcr.io/egao1980/cl-systems
+REGISTRY=ghcr.io/my-org/my-project
 SYSTEM=cl-oci
 TAG=0.2.0
 DEST=~/.local/share/cl-systems
@@ -266,7 +266,7 @@ This works with any OCI client (`oras`, `crane`, `skopeo`) and any CL implementa
 Mix cl-repo and OCICL registries — the client searches in order:
 
 ```lisp
-(cl-repo:add-registry "https://ghcr.io" :namespace "egao1980/cl-systems")         ; cl-repo format (default)
+(cl-repo:add-registry "https://ghcr.io" :namespace "my-org/my-project")          ; cl-repo format (GitHub default)
 (cl-repo:add-registry "https://ghcr.io" :namespace "ocicl" :type :ocicl)          ; OCICL format
 (cl-repo:load-system "alexandria")  ; tries cl-repo first, falls back to OCICL
 ```
@@ -296,7 +296,7 @@ qlot install
 qlot exec ros run
 ```
 
-Or use the devcontainer (VS Code / Cursor with `egao1980/features` + `alive`).
+Or use the devcontainer (VS Code / Cursor with Roswell + Alive features).
 
 ### Running Tests
 
@@ -316,6 +316,14 @@ Integration tests (requires Docker OCI registry at `localhost:5050`):
 docker run -d -p 5050:5000 --name oci-registry registry:2
 qlot exec ros -e '(asdf:test-system "cl-repository-integration-tests")'
 ```
+
+Local GitHub Actions testing with Docker + `act`:
+
+```sh
+act -W .github/workflows/test.yml -P ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-latest
+```
+
+See full tutorial: [docs/tutorial-local-testing-docker-act.md](docs/tutorial-local-testing-docker-act.md).
 
 ## License
 
