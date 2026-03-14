@@ -193,6 +193,18 @@
                          :prefix nil)))))
     (append normalized-layers legacy-layer)))
 
+(defun effective-overlay-layers (overlay)
+  "Return normalized layers for OVERLAY, preserving legacy native-path behavior.
+   This covers direct make-instance usage where :layers may be unset."
+  (let ((layers (overlay-spec-layers overlay)))
+    (if layers
+        layers
+        (let ((native-paths (overlay-spec-native-paths overlay)))
+          (when native-paths
+            (list (list :role +role-native-library+
+                        :files (mapcar #'normalize-overlay-file-entry native-paths)
+                        :prefix nil)))))))
+
 (defun parse-overlay-spec (plist)
   "Parse an overlay spec from a plist like (:platform (:os \"linux\" :arch \"amd64\") ...)."
   (let ((plat (getf plist :platform)))
@@ -302,8 +314,8 @@
                                    :os-version (overlay-spec-os-version overlay))))
           ;; Source layer first (same blob as universal, deduped by registry)
           (push source-layer overlay-layers)
-          ;; Overlay layers from unified spec (including normalized legacy native-paths)
-          (dolist (overlay-layer (overlay-spec-layers overlay))
+          ;; Overlay layers from unified spec (including legacy native-path fallback)
+          (dolist (overlay-layer (effective-overlay-layers overlay))
             (let ((layer (build-layer-from-overlay-layer
                           overlay-layer tar-prefix
                           :source-dir (package-spec-source-dir spec))))
@@ -357,7 +369,7 @@
     ;; Source layer first (if available) for OCI client compat
     (when source-layer
       (push source-layer overlay-layers))
-    (dolist (overlay-layer (overlay-spec-layers overlay))
+    (dolist (overlay-layer (effective-overlay-layers overlay))
       (let ((layer (build-layer-from-overlay-layer overlay-layer tar-prefix)))
         (push layer overlay-layers)
         (push (cons (layer-result-digest layer) (layer-result-data layer)) blobs)))
