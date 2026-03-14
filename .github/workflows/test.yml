@@ -9,6 +9,17 @@ env:
   SBCL_VERSION: 2.4.11
 
 jobs:
+  docs-localization:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check docs translation sync
+        run: |
+          bash scripts/check-doc-translations.sh
+
   test:
     runs-on: ubuntu-latest
     strategy:

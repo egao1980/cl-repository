@@ -21,6 +21,15 @@ cl-oci (CLOS data model) <- cl-oci-client (HTTP) <- cl-repository-packager (buil
 - **Testing**: `rove` framework. Test systems use explicit `:components` (not `package-inferred-system`).
 - **Dependencies**: managed via `qlfile` (qlot). Register external packages with `register-system-packages` in `.asd` files.
 
+## Documentation Localization
+
+- Every user-facing documentation file has two localized variants:
+  - Russian: `<name>.ru.md`
+  - Japanese: `<name>.ja.md`
+- When updating any canonical English doc (`README.md`, `docs/**/*.md`), update corresponding `.ru.md` and `.ja.md` files in the same change.
+- Keep structure and command examples aligned across language variants.
+- If a section is intentionally brief in localized files, explicitly note that and keep links to the canonical English source.
+
 ## Key Directories
 
 | Path | Contents |

@@ -4,6 +4,11 @@
 
 OCI-based distribution system for Common Lisp packages.
 
+Language versions:
+- English: `README.md`
+- Russian: `README.ru.md`
+- Japanese: `README.ja.md`
+
 Packages are standard OCI artifacts pushable to any OCI-compliant registry (GHCR, Docker Hub, Quay, etc.) and pullable by any OCI client (oras, crane, skopeo) or the included CL-native client.
 
 ## Why CL Repository?
