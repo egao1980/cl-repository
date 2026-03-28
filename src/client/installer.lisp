@@ -9,7 +9,9 @@
   (:import-from :cl-oci/digest #:format-digest #:compute-digest)
   (:import-from :cl-oci/descriptor #:descriptor #:descriptor-digest #:descriptor-media-type
                 #:descriptor-annotations)
-  (:import-from :cl-oci/manifest #:manifest #:manifest-layers #:manifest-config)
+  (:import-from :cl-oci/manifest #:manifest #:manifest-layers #:manifest-config
+                #:manifest-artifact-type)
+  (:import-from :cl-oci/media-types #:+cl-system-name-anchor-v1+)
   (:import-from :cl-oci/image-index #:image-index)
   (:import-from :cl-oci/config #:cl-system-config #:config-system-name #:config-layer-roles
                 #:config-provides #:config-version)
@@ -166,6 +168,11 @@
 
 (defun install-from-manifest (registry repository manifest registry-url)
   "Install from a single manifest (no index)."
+  (when (and (null (manifest-layers manifest))
+             (let ((at (manifest-artifact-type manifest)))
+               (and at (string= at +cl-system-name-anchor-v1+))))
+    (error "~a:latest is a system-name anchor (no layers). ~
+            Use an explicit version tag instead." repository))
   (let* ((config-json (pull-blob registry repository
                                  (format-digest
                                   (descriptor-digest (manifest-config manifest)))))

@@ -80,7 +80,8 @@
                 (let ((tags (list-tags reg repo)))
                   (when tags
                     (dolist (tag tags)
-                      (pushnew tag versions :test #'string=))))
+                      (unless (string= tag "latest")
+                        (pushnew tag versions :test #'string=)))))
               (error () nil))))
         (setf (gethash name *version-cache*) versions)
         versions)))

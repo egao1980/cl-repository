@@ -228,5 +228,5 @@
                 ;; Fall back to direct install without SAT for simple cases
                 (msg "~&; cl-repo: SAT resolution unavailable for ~a (~a), trying direct~%" name e)
                 (unless (system-already-installed-p name)
-                  (push (cons name (or version "latest")) plan)))))))
+                  (push (cons name version) plan)))))))
     (nreverse plan)))
