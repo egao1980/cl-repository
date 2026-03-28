@@ -56,6 +56,7 @@
                                     with deny allow sources default-source)
   "Install a CL system. REFERENCE can be 'name', 'name:version', or 'registry/ns/name:ver'.
    WITH, DENY, ALLOW, SOURCES, DEFAULT-SOURCE: see load-system for semantics."
+  (declare (ignore with))
   (call-with-policy-overrides
    sources deny allow default-source
    (lambda ()

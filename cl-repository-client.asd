@@ -21,6 +21,8 @@
                (:file "ocicl-compat-test")
                (:file "integrity-test")
                (:file "protected-systems-test")
+               (:file "config-test")
+               (:file "source-policy-test")
                (:file "all"))
   :perform (test-op (o c)
             (symbol-call :rove :run c)))

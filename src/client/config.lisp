@@ -7,6 +7,7 @@
            #:write-config
            #:find-project-config
            #:load-merged-config
+           #:merge-configs
            #:apply-config
            #:config-value
            #:generate-default-config))

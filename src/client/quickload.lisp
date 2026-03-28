@@ -29,13 +29,14 @@
   (:import-from :cl-repository-client/lockfile
                 #:lockfile-entry #:add-lockfile-entry)
   (:import-from :cl-repository-client/protected-systems
-                #:ensure-snapshot #:system-protected-p)
+                #:ensure-snapshot #:system-protected-p
+                #:*protected-system-prefixes*)
   (:import-from :cl-repository-client/config
                 #:load-merged-config #:config-value)
   (:import-from :cl-repository-client/source-policy
                 #:*source-policy* #:*source-rules* #:*default-source*
                 #:apply-source-config #:call-with-policy-overrides
-                #:ql-allowed-p #:system-denied-p)
+                #:source-for #:ql-allowed-p #:system-denied-p)
   (:import-from :babel #:octets-to-string)
   (:export #:*registries*
            #:add-registry
@@ -193,7 +194,7 @@
         ;; Apply protected system prefixes from config
         (let ((protect (config-value config :protect)))
           (dolist (p protect)
-            (pushnew p cl-repository-client/protected-systems:*protected-system-prefixes*
+            (pushnew p *protected-system-prefixes*
                      :test #'string=)))))
     (setf *config-loaded* t)))
 
@@ -219,7 +220,7 @@
               (error (e)
                 (msg "~&; cl-repo: ql:quickload ~a failed: ~a~%" dep e)))
             (msg "~&; cl-repo: skipping QL fallback for ~a (source policy: ~a)~%"
-                 dep (cl-repository-client/source-policy:source-for dep))))
+                 dep (source-for dep))))
       loaded)))
 
 ;;; Main entry point
