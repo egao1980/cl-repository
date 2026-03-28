@@ -18,6 +18,9 @@
   (:import-from :cl-repository-client/constraint-builder #:scan-installed-systems)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/quickload #:*registries*)
+  (:import-from :cl-repository-client/source-policy
+                #:system-denied-p #:registry-allowed-p
+                #:call-with-policy-overrides)
   (:import-from :cl-repository-client/protected-systems
                 #:ensure-snapshot #:system-protected-p)
   (:import-from :cl-repository-client/qlot-integration
@@ -49,15 +52,27 @@
   "Build the per-project catalog repository path for NAMESPACE."
   (format nil "~a/catalog" namespace))
 
-(defun cmd-install (reference &key registry-url namespace)
-  "Install a CL system. REFERENCE can be 'name', 'name:version', or 'registry/ns/name:ver'."
-  (multiple-value-bind (host repo tag) (parse-reference reference)
-    (let* ((reg-url (or host registry-url *default-registry*))
-           (full-repo (if host repo
-                         (format nil "~a/~a" (or namespace *default-namespace*) repo))))
-      (install-system reg-url full-repo tag)
-      (unless *dry-run*
-        (configure-asdf-source-registry)))))
+(defun cmd-install (reference &key registry-url namespace
+                                    with deny allow sources default-source)
+  "Install a CL system. REFERENCE can be 'name', 'name:version', or 'registry/ns/name:ver'.
+   WITH, DENY, ALLOW, SOURCES, DEFAULT-SOURCE: see load-system for semantics."
+  (call-with-policy-overrides
+   sources deny allow default-source
+   (lambda ()
+     (multiple-value-bind (host repo tag) (parse-reference reference)
+       (let* ((reg-url (or host registry-url *default-registry*))
+              (full-repo (if host repo
+                             (format nil "~a/~a" (or namespace *default-namespace*) repo)))
+              ;; Extract system name from repo path
+              (sys-name (let ((slash (position #\/ full-repo :from-end t)))
+                          (if slash (subseq full-repo (1+ slash)) full-repo))))
+         (when (system-denied-p sys-name)
+           (error "System ~a is denied by source policy" sys-name))
+         (when (and reg-url (not (registry-allowed-p sys-name reg-url)))
+           (error "System ~a is not allowed from registry ~a" sys-name reg-url))
+         (install-system reg-url full-repo tag)
+         (unless *dry-run*
+           (configure-asdf-source-registry)))))))
 
 (defun cmd-list (&key remote)
   "List systems. Without REMOTE, lists locally installed. With REMOTE, queries catalog referrers."
