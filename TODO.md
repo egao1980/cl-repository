@@ -22,3 +22,14 @@ Leverage standard OCI signing infrastructure rather than inventing a custom sche
 - [ ] **Trust policy config** — define which signing identities / OIDC issuers to accept (`cl-repo-trust-policy.sexp` or similar)
 - [ ] **Notation (CNCF Notary v2)** — alternative signer for on-prem / air-gapped registries
 - [ ] **Registry support matrix** — document which registries support what (GHCR → cosign, Harbor → Notation, etc.)
+
+## 3. SBOM Generation ([CycloneDX](https://cyclonedx.org/))
+
+Generate a Software Bill of Materials for installed dependency trees. [CycloneDX](https://github.com/CycloneDX) (ECMA-424) is the target format — it has the most advanced license support of any SBOM standard and covers SBOM, VEX, and supply-chain attestations in one spec. Key references: [specification](https://github.com/CycloneDX/specification), [cyclonedx-cli](https://github.com/CycloneDX/cyclonedx-cli) (validation/merge/diff/convert).
+
+- [ ] **CycloneDX SBOM export** — `cl-repo sbom` generates a CycloneDX BOM (JSON) from `cl-repo.lock` and installed system metadata
+- [ ] **Component mapping** — map OCI config blob fields (`system-name`, `version`, `depends-on`, SPDX license annotation) to CycloneDX `component` entries with `purl` identifiers (`pkg:oci/...` or a custom `pkg:cl-repo/...` scheme)
+- [ ] **Dependency graph** — emit the full transitive dependency tree in CycloneDX `dependencies` section
+- [ ] **VEX integration** — attach Vulnerability Exploitability Exchange data when available (e.g. from registry-side scanners)
+- [ ] **OCI artifact attachment** — publish SBOM as an OCI referrer artifact (media type `application/vnd.cyclonedx+json`) linked to the package manifest via Referrers API
+- [ ] **CI pipeline** — generate and attach SBOM automatically during `cl-repo publish`

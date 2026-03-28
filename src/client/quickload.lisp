@@ -22,7 +22,7 @@
   (:import-from :cl-repository-client/digest-cache
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
-                #:build-install-plan #:dependency-resolution-error)
+                #:build-install-plan #:find-missing-deps #:dependency-resolution-error)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry
                 #:load-system-init-files)
@@ -30,6 +30,12 @@
                 #:lockfile-entry #:add-lockfile-entry)
   (:import-from :cl-repository-client/protected-systems
                 #:ensure-snapshot #:system-protected-p)
+  (:import-from :cl-repository-client/config
+                #:load-merged-config #:config-value)
+  (:import-from :cl-repository-client/source-policy
+                #:*source-policy* #:*source-rules* #:*default-source*
+                #:apply-source-config #:call-with-policy-overrides
+                #:ql-allowed-p #:system-denied-p)
   (:import-from :babel #:octets-to-string)
   (:export #:*registries*
            #:add-registry
@@ -161,72 +167,171 @@
         (error (e)
           (msg "~&; cl-repo: ~a not in ~a (~a)~%" name url e))))))
 
+;;; Missing deps accumulator (set by compute-install-plan, consumed by load-system)
+
+(defvar *missing-deps-accumulator* nil
+  "List of dep names not found in OCI registries during the last compute-install-plan.")
+
+;;; Config loading
+
+(defvar *config-loaded* nil
+  "T after config has been loaded for the current session.")
+
+(defun ensure-config-loaded (&optional explicit-config-path)
+  "Load and apply cl-repo.conf (global + project) if not already done."
+  (unless *config-loaded*
+    (let ((config (load-merged-config explicit-config-path)))
+      (when config
+        (apply-source-config config)
+        ;; Apply registries from config
+        (let ((registries (config-value config :registries)))
+          (dolist (reg-entry (reverse registries))
+            (when (and (listp reg-entry) (stringp (first reg-entry)))
+              (add-registry (first reg-entry)
+                            :namespace (or (getf (rest reg-entry) :namespace) "cl-systems")
+                            :priority :append))))
+        ;; Apply protected system prefixes from config
+        (let ((protect (config-value config :protect)))
+          (dolist (p protect)
+            (pushnew p cl-repository-client/protected-systems:*protected-system-prefixes*
+                     :test #'string=)))))
+    (setf *config-loaded* t)))
+
+;;; Quicklisp fallback
+
+(defun quicklisp-available-p ()
+  "T if Quicklisp is loaded in the image."
+  (not (null (find-package :ql))))
+
+(defun try-quicklisp-fallback (missing-deps)
+  "Attempt to install MISSING-DEPS via Quicklisp. Returns list of successfully loaded names."
+  (when (and missing-deps (quicklisp-available-p))
+    (let ((loaded nil))
+      (msg "~&; cl-repo: ~d deps not in OCI registries, trying Quicklisp fallback: ~{~a~^, ~}~%"
+           (length missing-deps) missing-deps)
+      (dolist (dep missing-deps)
+        (if (ql-allowed-p dep)
+            (handler-case
+                (progn
+                  (uiop:symbol-call :ql :quickload dep :silent t)
+                  (push dep loaded)
+                  (msg "~&; cl-repo: ql:quickload ~a OK~%" dep))
+              (error (e)
+                (msg "~&; cl-repo: ql:quickload ~a failed: ~a~%" dep e)))
+            (msg "~&; cl-repo: skipping QL fallback for ~a (source policy: ~a)~%"
+                 dep (cl-repository-client/source-policy:source-for dep))))
+      loaded)))
+
 ;;; Main entry point
 
-(defun load-system (systems &key silent version force)
+(defun load-system (systems &key silent version force
+                                  with sources deny allow default-source
+                                  config-path)
   "Install (if needed) and load Common Lisp systems from OCI registries.
    Uses SAT solver for transitive dependency resolution with version constraints.
+
    SYSTEMS: system name (string/symbol) or list of them.
    SILENT: suppress output. VERSION: pin specific tag. FORCE: re-resolve even if installed.
+   WITH: extra deps resolved alongside (like uv --with). List of strings or (name :version v).
+   SOURCES: per-system source overrides. Alist ((name :ql) (name :oci) ...).
+   DENY: deny rules. List of strings or (:deny name :from registry) forms.
+   ALLOW: allow-from rules. List of (:allow name :from registry) forms.
+   DEFAULT-SOURCE: :oci | :ql | :any — override *default-source* for this call.
+   CONFIG-PATH: explicit cl-repo.conf path (overrides project discovery).
 
    Usage:
      (cl-repo:load-system \"alexandria\")
-     (cl-repo:load-system '(\"alexandria\" \"cl-ppcre\") :silent t)
-     (cl-repo:load-system \"my-app\" :force t)  ; re-resolve and upgrade deps"
-  (let* ((*quiet* (or *quiet* silent))
-         (system-list (if (listp systems) systems (list systems)))
-         (installed-any nil))
-    (ensure-snapshot)
-    (load-digest-cache)
-    ;; Phase 1: Build install plan via SAT solver for systems not yet available
-    (let ((plan (compute-install-plan system-list :version version :force force)))
-      ;; Phase 2: Install everything in the plan
-      (dolist (entry plan)
-        (let ((name (car entry))
-              (ver (cdr entry)))
-          (unless (and (not force)
-                       (system-already-installed-p name)
-                       (let ((iv (installed-system-version name)))
-                         (and iv (string= iv ver))))
-            (let ((result (ensure-system-installed name :version ver)))
-              (when result
-                (setf installed-any t)
-                (configure-asdf-source-registry)
-                (record-lockfile-entry result))))))
-      ;; Phase 3: Load via ASDF
-      (configure-asdf-source-registry)
-      (load-system-init-files)
-      (dolist (sys system-list)
-        (let ((name (string-downcase (string sys))))
-          (msg "~&; cl-repo: loading ~a~%" name)
-          (handler-case (asdf:load-system name)
-            (error (e)
-              (msg "~&; cl-repo: failed to load ~a: ~a~%" name e))))))
-    (if (= (length system-list) 1)
-        (first system-list)
-        system-list)))
+     (cl-repo:load-system \"grpc\" :with '(\"rove\") :sources '((\"float-features\" :ql)))
+     (cl-repo:load-system \"my-app\" :force t :deny '(\"bad-lib\"))"
+  (ensure-config-loaded config-path)
+  (call-with-policy-overrides
+   sources deny allow default-source
+   (lambda ()
+     (let* ((*quiet* (or *quiet* silent))
+            (system-list (if (listp systems) systems (list systems)))
+            (installed-any nil))
+       (ensure-snapshot)
+       (load-digest-cache)
+       ;; Phase 1: Build install plan via SAT solver
+       (let ((plan (compute-install-plan system-list :version version :force force
+                                                     :with with)))
+         ;; Phase 2: Install everything in the plan
+         (dolist (entry plan)
+           (let ((name (car entry))
+                 (ver (cdr entry)))
+             (unless (or (system-denied-p name)
+                         (and (not force)
+                              (system-already-installed-p name)
+                              (let ((iv (installed-system-version name)))
+                                (and iv (string= iv ver)))))
+               (let ((result (ensure-system-installed name :version ver)))
+                 (when result
+                   (setf installed-any t)
+                   (configure-asdf-source-registry)
+                   (record-lockfile-entry result))))))
+         ;; Phase 2.5: Quicklisp fallback for missing transitive deps
+         (when *missing-deps-accumulator*
+           (try-quicklisp-fallback *missing-deps-accumulator*))
+         ;; Phase 3: Load via ASDF
+         (configure-asdf-source-registry)
+         (load-system-init-files)
+         (dolist (sys system-list)
+           (let ((name (string-downcase (string sys))))
+             (msg "~&; cl-repo: loading ~a~%" name)
+             (handler-case (asdf:load-system name)
+               (error (e)
+                 (msg "~&; cl-repo: failed to load ~a: ~a~%" name e))))))
+       (if (= (length system-list) 1)
+           (first system-list)
+           system-list)))))
 
-(defun compute-install-plan (system-names &key version force)
+(defun compute-install-plan (system-names &key version force with)
   "Use SAT solver to compute full transitive install plan.
    Pins already-installed systems unless FORCE is true.
-   Skips systems that are protected (see SYSTEM-PROTECTED-P)."
+   Skips systems that are protected (see SYSTEM-PROTECTED-P).
+   WITH: extra systems to resolve alongside (separate SAT passes).
+   Sets *missing-deps-accumulator* as a side-effect."
   (let ((plan nil))
+    (setf *missing-deps-accumulator* nil)
+    ;; Resolve main systems
     (dolist (name-raw system-names)
       (let ((name (string-downcase (string name-raw))))
         (if (and (not force) (or (asdf:find-system name nil)
                                  (system-protected-p name)))
             (msg "~&; cl-repo: ~a already available via ASDF~%" name)
             (handler-case
-                (let ((resolved (build-install-plan name (or version :latest) *registries*
-                                                    :force force)))
+                (multiple-value-bind (resolved missing)
+                    (build-install-plan name (or version :latest) *registries* :force force)
                   (dolist (entry resolved)
                     (unless (find (car entry) plan :key #'car :test #'string=)
-                      (push entry plan))))
+                      (push entry plan)))
+                  (dolist (m missing)
+                    (pushnew m *missing-deps-accumulator* :test #'string=)))
               (dependency-resolution-error (e)
                 (msg "~&; cl-repo: ~a~%" e))
               (error (e)
-                ;; Fall back to direct install without SAT for simple cases
                 (msg "~&; cl-repo: SAT resolution unavailable for ~a (~a), trying direct~%" name e)
                 (unless (system-already-installed-p name)
                   (push (cons name version) plan)))))))
+    ;; Resolve :with extras (separate SAT pass each)
+    (dolist (extra-raw (or with nil))
+      (multiple-value-bind (extra-name extra-version)
+          (if (consp extra-raw)
+              (values (first extra-raw) (getf (rest extra-raw) :version))
+              (values (string extra-raw) nil))
+        (let ((name (string-downcase (string extra-name))))
+          (unless (or (asdf:find-system name nil)
+                      (find name plan :key #'car :test #'string=))
+            (handler-case
+                (multiple-value-bind (resolved missing)
+                    (build-install-plan name (or extra-version :latest) *registries* :force force)
+                  (dolist (entry resolved)
+                    (unless (find (car entry) plan :key #'car :test #'string=)
+                      (push entry plan)))
+                  (dolist (m missing)
+                    (pushnew m *missing-deps-accumulator* :test #'string=)))
+              (dependency-resolution-error (e)
+                (msg "~&; cl-repo: --with ~a: ~a~%" name e))
+              (error (e)
+                (msg "~&; cl-repo: --with ~a failed: ~a~%" name e)))))))
     (nreverse plan)))

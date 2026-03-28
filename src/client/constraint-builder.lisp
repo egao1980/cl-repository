@@ -17,8 +17,11 @@
                 #:sat-true #:sat-var #:sat-and #:sat-or #:sat-not #:sat-imply #:sat-solve)
   (:import-from :cl-repository-client/installer #:systems-root)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version)
+  (:import-from :cl-repository-client/source-policy
+                #:system-denied-p #:registry-allowed-p #:oci-allowed-p)
   (:export #:build-install-plan
            #:scan-installed-systems
+           #:find-missing-deps
            #:dependency-resolution-error))
 (in-package :cl-repository-client/constraint-builder)
 
@@ -68,21 +71,24 @@
 ;;; Registry queries (cached)
 
 (defun fetch-available-versions (name registries)
-  "Get available versions for NAME from registries. Cached."
+  "Get available versions for NAME from registries. Cached.
+   Respects source policy: skips registries denied/not-allowed for NAME."
   (or (gethash name *version-cache*)
       (let ((versions nil))
-        (dolist (entry registries)
-          (let* ((url (first entry))
-                 (ns (getf (rest entry) :namespace "cl-systems"))
-                 (repo (format nil "~a/~a" ns name))
-                 (reg (make-registry url)))
-            (handler-case
-                (let ((tags (list-tags reg repo)))
-                  (when tags
-                    (dolist (tag tags)
-                      (unless (string= tag "latest")
-                        (pushnew tag versions :test #'string=)))))
-              (error () nil))))
+        (when (oci-allowed-p name)
+          (dolist (entry registries)
+            (let* ((url (first entry))
+                   (ns (getf (rest entry) :namespace "cl-systems"))
+                   (repo (format nil "~a/~a" ns name))
+                   (reg (make-registry url)))
+              (when (registry-allowed-p name url)
+                (handler-case
+                    (let ((tags (list-tags reg repo)))
+                      (when tags
+                        (dolist (tag tags)
+                          (unless (string= tag "latest")
+                            (pushnew tag versions :test #'string=)))))
+                  (error () nil))))))
         (setf (gethash name *version-cache*) versions)
         versions)))
 
@@ -152,6 +158,10 @@
                     (when config
                       (dolist (dep (config-depends-on config))
                         (let ((dn (dep-name dep)))
+                          (when (system-denied-p dn)
+                            (error 'dependency-resolution-error
+                                   :message (format nil "~a depends on ~a which is denied by source policy"
+                                                    name dn)))
                           (unless (gethash dn universe)
                             (push (cons dn (dep-version dep)) queue)))))))
                 (setf (gethash name universe) (nreverse entries))))))))
@@ -216,12 +226,32 @@
       (asdf:version-satisfies installed-version required-version)
     (error () (string>= installed-version required-version))))
 
+;;; Missing dependency detection
+
+(defun find-missing-deps (universe)
+  "Return list of dep names referenced in configs but absent from UNIVERSE and ASDF."
+  (let ((missing nil))
+    (maphash (lambda (name entries)
+               (declare (ignore name))
+               (dolist (entry entries)
+                 (let ((config (cdr entry)))
+                   (when config
+                     (dolist (dep (config-depends-on config))
+                       (let ((dn (dep-name dep)))
+                         (unless (or (gethash dn universe)
+                                     (asdf:find-system dn nil))
+                           (pushnew dn missing :test #'string=))))))))
+             universe)
+    missing))
+
 ;;; Main entry point
 
 (defun build-install-plan (root-name root-version registries &key force)
   "Build a complete install plan for ROOT-NAME.
    ROOT-VERSION: specific version string or :latest (auto-discover).
-   Returns alist ((name . version) ...) or signals dependency-resolution-error."
+   Returns (values plan missing-deps) where plan is alist ((name . version) ...)
+   and missing-deps is a list of dep names not found in any registry or ASDF.
+   Signals dependency-resolution-error on failure."
   (let ((*version-cache* (make-hash-table :test 'equal))
         (*config-cache* (make-hash-table :test 'equal)))
     ;; Resolve :latest to actual version
@@ -233,6 +263,7 @@
         (setf root-version (select-preferred-version versions))))
     (let* ((installed (scan-installed-systems))
            (universe (gather-universe root-name root-version registries installed :force force))
+           (missing (find-missing-deps universe))
            (formula (build-formula root-name root-version universe installed :force force))
            (solution (sat-solve formula)))
       (unless solution
@@ -250,4 +281,4 @@
                   (unless (and (not force)
                                (assoc name installed :test #'string=))
                     (push (cons name version) plan)))))))
-        (nreverse plan)))))
+        (values (nreverse plan) missing)))))
