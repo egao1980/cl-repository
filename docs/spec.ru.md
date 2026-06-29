@@ -23,6 +23,10 @@
 - Стандартные OCI: `org.opencontainers.image.*`
 - CL-специфичные: `dev.common-lisp.*`
 
+## Нативные зависимости (cffi-libraries)
+
+В config-блобе `cffi-libraries` сопоставляет каждой нативной библиотеке метаданные: `define-foreign-library`, `canary` и `search-path`. При установке `search-path` добавляется в `cffi:*foreign-library-directories*` (через `cl-repo-init.lisp`), чтобы `define-foreign-library` находил поставляемую библиотеку. В `.asd` запись допускается как имя-строка, так и `(имя . plist)`.
+
 ## Важно
 
 Полные нормативные требования (media types, anchors/referrers, layer roles, примеры JSON) см. в `docs/spec.md`.

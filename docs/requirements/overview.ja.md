@@ -19,4 +19,4 @@ Common Lisp には、PyPI/crates.io/npm 相当の標準配布基盤がなく、�
 
 - 独自 registry サーバ実装
 - FASL バイナリ配布
-- アプリ層での署名機構実装（OCI 側機能に委譲）
+- パッケージ署名 — 計画中、[TODO.md](../../TODO.md#2-package-signing--verification) を参照
