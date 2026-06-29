@@ -11,6 +11,7 @@
            #:config-grovel-systems
            #:config-build-requires
            #:make-cl-system-config
+           #:normalize-cffi-libraries
            ;; Layer role constants
            #:+role-source+
            #:+role-native-library+
@@ -43,6 +44,23 @@
    (grovel-systems :type list :initarg :grovel-systems :accessor config-grovel-systems :initform nil)
    (build-requires :type list :initarg :build-requires :accessor config-build-requires :initform nil)))
 
+(defun normalize-cffi-library (entry)
+  "Normalize one cffi-libraries ENTRY to canonical (NAME . PLIST).
+   Author forms accepted:
+     \"libfoo\"                                        ; name only
+     (\"libfoo\" :define-foreign-library \"pkg::libfoo\" ; name + metadata plist
+                :canary \"foo_init\" :search-path \"lib/\")
+   PLIST keys: :define-foreign-library, :canary, :search-path. Idempotent."
+  (etypecase entry
+    (string (list entry))
+    (cons (if (stringp (car entry))
+              entry
+              (error "cffi-libraries entry must start with a name string: ~s" entry)))))
+
+(defun normalize-cffi-libraries (entries)
+  "Normalize a cffi-libraries list to a canonical alist of (NAME . PLIST). Idempotent."
+  (mapcar #'normalize-cffi-library entries))
+
 (defun make-cl-system-config (&key system-name version depends-on provides
                                 layer-roles cffi-libraries grovel-systems build-requires)
   (make-instance 'cl-system-config
@@ -51,6 +69,6 @@
                  :depends-on (or depends-on nil)
                  :provides (or provides nil)
                  :layer-roles (or layer-roles (make-hash-table :test 'equal))
-                 :cffi-libraries (or cffi-libraries nil)
+                 :cffi-libraries (normalize-cffi-libraries cffi-libraries)
                  :grovel-systems (or grovel-systems nil)
                  :build-requires (or build-requires nil)))

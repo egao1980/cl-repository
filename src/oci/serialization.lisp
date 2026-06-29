@@ -47,6 +47,19 @@
 (defun non-empty-hash-p (ht)
   (and ht (plusp (hash-table-count ht))))
 
+(defmacro json-object (&body entries)
+  "Build an EQUAL hash-table for yason from ENTRIES.
+Each ENTRY is (KEY VALUE) to set unconditionally, or (KEY VALUE :when TEST)
+to set KEY only when TEST holds (TEST is evaluated first, VALUE only if it passes)."
+  (let ((ht (gensym "JSON")))
+    `(let ((,ht (make-hash-table :test 'equal)))
+       ,@(loop for (key value . opts) in entries
+               for test = (if opts (getf opts :when) t)
+               collect (if (eq test t)
+                           `(setf (gethash ,key ,ht) ,value)
+                           `(when ,test (setf (gethash ,key ,ht) ,value))))
+       ,ht)))
+
 ;;; --- To JSON (object -> nested hash-tables/lists for yason) ---
 
 (defgeneric to-json-value (object)
@@ -56,84 +69,75 @@
   (format-digest d))
 
 (defmethod to-json-value ((p platform))
-  (let ((ht (make-hash-table :test 'equal)))
-    (when (platform-os p) (setf (gethash "os" ht) (platform-os p)))
-    (when (platform-architecture p) (setf (gethash "architecture" ht) (platform-architecture p)))
-    (when (platform-os-version p) (setf (gethash "os.version" ht) (platform-os-version p)))
-    (when (platform-os-features p)
-      (setf (gethash "os.features" ht) (coerce (platform-os-features p) 'vector)))
-    (when (platform-variant p) (setf (gethash "variant" ht) (platform-variant p)))
-    ht))
+  (json-object
+    ("os" (platform-os p) :when (platform-os p))
+    ("architecture" (platform-architecture p) :when (platform-architecture p))
+    ("os.version" (platform-os-version p) :when (platform-os-version p))
+    ("os.features" (coerce (platform-os-features p) 'vector) :when (platform-os-features p))
+    ("variant" (platform-variant p) :when (platform-variant p))))
 
 (defmethod to-json-value ((d descriptor))
-  (let ((ht (make-hash-table :test 'equal)))
-    (setf (gethash "mediaType" ht) (descriptor-media-type d))
-    (setf (gethash "digest" ht) (format-digest (descriptor-digest d)))
-    (setf (gethash "size" ht) (descriptor-size d))
-    (when (descriptor-urls d)
-      (setf (gethash "urls" ht) (coerce (descriptor-urls d) 'vector)))
-    (when (non-empty-hash-p (descriptor-annotations d))
-      (setf (gethash "annotations" ht) (descriptor-annotations d)))
-    (when (descriptor-artifact-type d)
-      (setf (gethash "artifactType" ht) (descriptor-artifact-type d)))
-    (when (descriptor-platform d)
-      (setf (gethash "platform" ht) (to-json-value (descriptor-platform d))))
-    ht))
+  (json-object
+    ("mediaType" (descriptor-media-type d))
+    ("digest" (format-digest (descriptor-digest d)))
+    ("size" (descriptor-size d))
+    ("urls" (coerce (descriptor-urls d) 'vector) :when (descriptor-urls d))
+    ("annotations" (descriptor-annotations d) :when (non-empty-hash-p (descriptor-annotations d)))
+    ("artifactType" (descriptor-artifact-type d) :when (descriptor-artifact-type d))
+    ("platform" (to-json-value (descriptor-platform d)) :when (descriptor-platform d))))
 
 (defmethod to-json-value ((m manifest))
-  (let ((ht (make-hash-table :test 'equal)))
-    (setf (gethash "schemaVersion" ht) (manifest-schema-version m))
-    (setf (gethash "mediaType" ht) (manifest-media-type m))
-    (when (manifest-artifact-type m)
-      (setf (gethash "artifactType" ht) (manifest-artifact-type m)))
-    (setf (gethash "config" ht) (to-json-value (manifest-config m)))
-    (setf (gethash "layers" ht) (map 'vector #'to-json-value (manifest-layers m)))
-    (when (manifest-subject m)
-      (setf (gethash "subject" ht) (to-json-value (manifest-subject m))))
-    (when (non-empty-hash-p (manifest-annotations m))
-      (setf (gethash "annotations" ht) (manifest-annotations m)))
-    ht))
+  (json-object
+    ("schemaVersion" (manifest-schema-version m))
+    ("mediaType" (manifest-media-type m))
+    ("artifactType" (manifest-artifact-type m) :when (manifest-artifact-type m))
+    ("config" (to-json-value (manifest-config m)))
+    ("layers" (map 'vector #'to-json-value (manifest-layers m)))
+    ("subject" (to-json-value (manifest-subject m)) :when (manifest-subject m))
+    ("annotations" (manifest-annotations m) :when (non-empty-hash-p (manifest-annotations m)))))
 
 (defmethod to-json-value ((idx image-index))
-  (let ((ht (make-hash-table :test 'equal)))
-    (setf (gethash "schemaVersion" ht) (image-index-schema-version idx))
-    (setf (gethash "mediaType" ht) (image-index-media-type idx))
-    (when (image-index-artifact-type idx)
-      (setf (gethash "artifactType" ht) (image-index-artifact-type idx)))
-    (setf (gethash "manifests" ht) (map 'vector #'to-json-value (image-index-manifests idx)))
-    (when (image-index-subject idx)
-      (setf (gethash "subject" ht) (to-json-value (image-index-subject idx))))
-    (when (non-empty-hash-p (image-index-annotations idx))
-      (setf (gethash "annotations" ht) (image-index-annotations idx)))
-    ht))
+  (json-object
+    ("schemaVersion" (image-index-schema-version idx))
+    ("mediaType" (image-index-media-type idx))
+    ("artifactType" (image-index-artifact-type idx) :when (image-index-artifact-type idx))
+    ("manifests" (map 'vector #'to-json-value (image-index-manifests idx)))
+    ("subject" (to-json-value (image-index-subject idx)) :when (image-index-subject idx))
+    ("annotations" (image-index-annotations idx) :when (non-empty-hash-p (image-index-annotations idx)))))
 
 (defun serialize-dep (dep)
   "Serialize a dependency: string -> string, (name . version) -> {name, version}."
   (etypecase dep
     (string dep)
-    (cons (let ((ht (make-hash-table :test 'equal)))
-            (setf (gethash "name" ht) (car dep))
-            (setf (gethash "version" ht) (cdr dep))
-            ht))))
+    (cons (json-object
+            ("name" (car dep))
+            ("version" (cdr dep))))))
+
+(defun serialize-cffi-libraries (libs)
+  "Canonical alist (NAME . PLIST) -> JSON object
+   {NAME: {define-foreign-library, canary, search-path}} (omitting nil fields)."
+  (let ((ht (make-hash-table :test 'equal)))
+    (dolist (lib libs ht)
+      (destructuring-bind (name . plist) lib
+        (setf (gethash name ht)
+              (json-object
+                ("define-foreign-library" (getf plist :define-foreign-library)
+                 :when (getf plist :define-foreign-library))
+                ("canary" (getf plist :canary) :when (getf plist :canary))
+                ("search-path" (getf plist :search-path) :when (getf plist :search-path))))))))
 
 (defmethod to-json-value ((cfg cl-system-config))
-  (let ((ht (make-hash-table :test 'equal)))
-    (setf (gethash "system-name" ht) (config-system-name cfg))
-    (when (config-version cfg) (setf (gethash "version" ht) (config-version cfg)))
-    (when (config-depends-on cfg)
-      (setf (gethash "depends-on" ht)
-            (coerce (mapcar #'serialize-dep (config-depends-on cfg)) 'vector)))
-    (when (config-provides cfg)
-      (setf (gethash "provides" ht) (coerce (config-provides cfg) 'vector)))
-    (when (non-empty-hash-p (config-layer-roles cfg))
-      (setf (gethash "layer-roles" ht) (config-layer-roles cfg)))
-    (when (config-cffi-libraries cfg)
-      (setf (gethash "cffi-libraries" ht) (config-cffi-libraries cfg)))
-    (when (config-grovel-systems cfg)
-      (setf (gethash "grovel-systems" ht) (coerce (config-grovel-systems cfg) 'vector)))
-    (when (config-build-requires cfg)
-      (setf (gethash "build-requires" ht) (config-build-requires cfg)))
-    ht))
+  (json-object
+    ("system-name" (config-system-name cfg))
+    ("version" (config-version cfg) :when (config-version cfg))
+    ("depends-on" (coerce (mapcar #'serialize-dep (config-depends-on cfg)) 'vector)
+                  :when (config-depends-on cfg))
+    ("provides" (coerce (config-provides cfg) 'vector) :when (config-provides cfg))
+    ("layer-roles" (config-layer-roles cfg) :when (non-empty-hash-p (config-layer-roles cfg)))
+    ("cffi-libraries" (serialize-cffi-libraries (config-cffi-libraries cfg))
+                      :when (config-cffi-libraries cfg))
+    ("grovel-systems" (coerce (config-grovel-systems cfg) 'vector) :when (config-grovel-systems cfg))
+    ("build-requires" (config-build-requires cfg) :when (config-build-requires cfg))))
 
 ;;; --- Serialization to JSON string / octets ---
 
@@ -211,6 +215,28 @@
     (string dep)
     (hash-table (cons (gethash "name" dep) (gethash "version" dep)))))
 
+(defun deserialize-cffi-libraries (value)
+  "Parse cffi-libraries JSON -> canonical alist (NAME . PLIST).
+   Accepts the object form {NAME: {define-foreign-library, canary, search-path}} and
+   the legacy array-of-names form [\"libfoo\"] (parsed by yason as a list)."
+  (typecase value
+    (null nil)
+    (hash-table
+     (let (result)
+       (maphash
+        (lambda (name meta)
+          (push (cons name
+                      (loop for (json-key plist-key)
+                              in '(("define-foreign-library" :define-foreign-library)
+                                   ("canary" :canary)
+                                   ("search-path" :search-path))
+                            for v = (and (hash-table-p meta) (gethash json-key meta))
+                            when v append (list plist-key v)))
+                result))
+        value)
+       (nreverse result)))
+    (sequence (map 'list (lambda (name) (list name)) value))))
+
 (defun parse-cl-system-config-from-json (ht)
   (make-cl-system-config
    :system-name (gethash "system-name" ht)
@@ -219,7 +245,7 @@
                  (mapcar #'deserialize-dep (coerce d 'list)))
    :provides (when-let ((p (gethash* "provides" ht))) (coerce p 'list))
    :layer-roles (or (gethash* "layer-roles" ht) (make-hash-table :test 'equal))
-   :cffi-libraries (gethash* "cffi-libraries" ht)
+   :cffi-libraries (deserialize-cffi-libraries (gethash* "cffi-libraries" ht))
    :grovel-systems (when-let ((g (gethash* "grovel-systems" ht))) (coerce g 'list))
    :build-requires (gethash* "build-requires" ht)))
 

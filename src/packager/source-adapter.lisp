@@ -44,7 +44,7 @@
             (start (+ marker (length "github.com/")))
             (tail (subseq repo-or-url start))
             (without-git (if (and (>= (length tail) 4)
-                                  (string= ".git" tail :start1 (- (length tail) 4)))
+                                  (string= ".git" tail :start2 (- (length tail) 4)))
                              (subseq tail 0 (- (length tail) 4))
                              tail))
             (trimmed (if (and (> (length without-git) 0)

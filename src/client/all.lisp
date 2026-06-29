@@ -11,5 +11,7 @@
    :cl-repository-client/constraint-builder
    :cl-repository-client/lockfile
    :cl-repository-client/asdf-integration
+   :cl-repository-client/config
+   :cl-repository-client/source-policy
    :cl-repository-client/quickload
    :cl-repository-client/commands))

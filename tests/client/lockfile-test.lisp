@@ -101,6 +101,19 @@
                (ok (string= (lockfile-entry-overlay-digest entry) "sha256:ovl"))))
         (when (probe-file tmp-path) (delete-file tmp-path))))))
 
+(deftest verify-lockfile-entry-digest-no-digest
+  (testing "verify-lockfile-entry-digest no-ops on an entry without a digest.
+            Regression: commands.lisp must import lockfile-entry-index-digest, otherwise
+            this call hits an undefined function the moment the accessor is invoked."
+    (let ((entry (make-instance 'lockfile-entry
+                                :system "alexandria"
+                                :version "1.4"
+                                :index-digest ""
+                                :registry "ghcr.io")))
+      ;; Empty digest -> early return, registry is never contacted.
+      (ok (null (cl-repository-client/commands::verify-lockfile-entry-digest
+                 entry "ghcr.io" "cl-systems/alexandria" "1.4"))))))
+
 (deftest install-result-struct
   (testing "install-result carries all digest fields"
     (let ((r (make-install-result :path #p"/tmp/test/"

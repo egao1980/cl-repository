@@ -20,6 +20,10 @@ exec ros -Q -- $0 "$@"
                 #:*registries* #:add-registry)
   (:import-from :cl-repository-client/protected-systems
                 #:*protected-system-prefixes*)
+  (:import-from :cl-repository-client/config
+                #:load-merged-config #:generate-default-config)
+  (:import-from :cl-repository-client/source-policy
+                #:apply-source-config)
   (:import-from :cl-repository-packager/build-matrix
                 #:build-package #:build-overlay #:parse-overlay-spec)
   (:import-from :cl-repository-packager/publisher
@@ -51,6 +55,8 @@ exec ros -Q -- $0 "$@"
   (format t "  ql-export <url>       Export Quicklisp dist to OCI registry~%")
   (format t "  publish-github <repo> Package and publish from GitHub (owner/repo or URL)~%")
   (format t "  sync-qlot             Install/publish dependencies from qlfile~%")
+  (format t "  config init           Generate default cl-repo.conf in current directory~%")
+  (format t "  config show           Print effective merged configuration~%")
   (format t "~%Options:~%")
   (format t "  --registry <url>      Registry URL (default: ghcr.io)~%")
   (format t "  --namespace <ns>      Repository namespace (default: cl-systems)~%")
@@ -76,7 +82,15 @@ exec ros -Q -- $0 "$@"
   (format t "  --publish-ql-dependencies Fallback-publish unresolved deps via ql-export~%")
   (format t "  --deps-dist-url <url> Dist URL for ql-export fallback (Quicklisp/Ultralisp)~%")
   (format t "  --all-systems         Publish all .asd systems from source tree~%")
-  (format t "  --protect <name>      Protect a system from updates (repeatable)~%"))
+  (format t "  --protect <name>      Protect a system from updates (repeatable)~%")
+  (format t "~%Source policy (for 'load'):~%")
+  (format t "  --with <name>         Extra dependency to resolve alongside (repeatable)~%")
+  (format t "  --deny <name>         Deny system from all sources (repeatable)~%")
+  (format t "  --deny-from <sys:reg> Deny system from specific registry (repeatable)~%")
+  (format t "  --allow-from <sys:reg> Whitelist: system only from this registry (repeatable)~%")
+  (format t "  --source <sys=oci|ql> Pin system to source type (repeatable)~%")
+  (format t "  --default-source <s>  Default source policy: oci, ql, or any~%")
+  (format t "  --config <path>       Explicit cl-repo.conf path~%"))
 
 (defun parse-options (args)
   "Parse --key value pairs from args. Returns (values command-args options-plist).
@@ -87,7 +101,7 @@ exec ros -Q -- $0 "$@"
         (boolean-flags '("quiet" "dry-run" "incremental" "remote" "force" "skip-catalog"
                          "publish-sources" "publish-dependencies" "recursive-dependencies"
                          "publish-ql-dependencies" "all-systems" "use-lock"))
-        (accumulate-flags '("protect")))
+        (accumulate-flags '("protect" "with" "deny" "deny-from" "allow-from" "source")))
     (loop with i = 0
           while (< i (length args))
           for arg = (nth i args)
@@ -116,6 +130,37 @@ exec ros -Q -- $0 "$@"
                   (incf i))))
     (values (nreverse cmd-args) options)))
 
+;;; Parse helpers for CLI flags
+
+(defun parse-system-registry (s)
+  "Parse 'system:registry' -> (values system registry).
+   Special case: 'system:ql' -> (values system :ql)."
+  (let ((pos (position #\: s)))
+    (if pos
+        (let ((name (subseq s 0 pos))
+              (rest (subseq s (1+ pos))))
+          (values name (if (string-equal rest "ql") :ql rest)))
+        (values s nil))))
+
+(defun parse-deny-from (s)
+  "Parse deny-from CLI arg: 'system:registry' -> (:deny system :from registry)."
+  (multiple-value-bind (name registry) (parse-system-registry s)
+    (if registry
+        (list :deny name :from registry)
+        name)))
+
+(defun parse-allow-from (s)
+  "Parse allow-from CLI arg: 'system:registry' -> (:allow system :from registry)."
+  (multiple-value-bind (name registry) (parse-system-registry s)
+    (list :allow name :from (or registry :any))))
+
+(defun parse-source-spec (s)
+  "Parse source CLI arg: 'system=oci|ql' -> (system :oci|:ql)."
+  (let ((pos (position #\= s)))
+    (when pos
+      (list (subseq s 0 pos)
+            (intern (string-upcase (subseq s (1+ pos))) :keyword)))))
+
 (defun main (&rest argv)
   (when (or (null argv) (member "--help" argv :test #'string=) (member "-h" argv :test #'string=))
     (usage)
@@ -128,6 +173,10 @@ exec ros -Q -- $0 "$@"
            (*dry-run* (or *dry-run* (getf opts :dry-run))))
       (handler-case
           (progn
+            ;; Load config early
+            (let ((config (load-merged-config (getf opts :config))))
+              (when config
+                (apply-source-config config)))
             (when registry-url
               (add-registry registry-url :namespace (or namespace "cl-systems")))
             (dolist (name (getf opts :protect))
@@ -140,7 +189,16 @@ exec ros -Q -- $0 "$@"
                (format *error-output* "~&Error: load requires system name(s)~%")
                (ros:quit 1))
              (cl-repository-client/quickload:load-system
-              cmd-args :force (getf opts :force)))
+              cmd-args
+              :force (getf opts :force)
+              :with (getf opts :with)
+              :deny (append (getf opts :deny)
+                            (mapcar #'parse-deny-from (or (getf opts :deny-from) nil)))
+              :allow (mapcar #'parse-allow-from (or (getf opts :allow-from) nil))
+              :sources (remove nil (mapcar #'parse-source-spec (or (getf opts :source) nil)))
+              :default-source (when (getf opts :default-source)
+                                (intern (string-upcase (getf opts :default-source)) :keyword))
+              :config-path (getf opts :config)))
 
             ((string-equal command "install")
              (unless cmd-args
@@ -368,6 +426,20 @@ exec ros -Q -- $0 "$@"
                                (funcall cleanup-fn)))))
                         (t
                          (format *error-output* "~&Warning: unsupported qlot entry: ~a~%" kind)))))))))
+
+            ((string-equal command "config")
+             (cond
+               ((string-equal (first cmd-args) "init")
+                (let ((path (generate-default-config)))
+                  (format t "~&Generated ~a~%" path)))
+               ((string-equal (first cmd-args) "show")
+                (let ((config (load-merged-config (getf opts :config))))
+                  (let ((*print-case* :downcase) (*print-pretty* t) (*print-right-margin* 100))
+                    (prin1 config *standard-output*)
+                    (terpri))))
+               (t
+                (format *error-output* "~&Usage: cl-repo config [init|show]~%")
+                (ros:quit 1))))
 
               (t
                (format *error-output* "~&Unknown command: ~a~%~%" command)

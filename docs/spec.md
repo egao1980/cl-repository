@@ -386,6 +386,22 @@ OCI packaging metadata can be embedded directly in a `.asd` file using ASDF's `:
 
 ` :layers` is the recommended schema. Legacy `:native-paths` is still accepted and normalized to one `native-library` layer for backward compatibility.
 
+#### `:cffi-libraries` entries
+
+Each `:cffi-libraries` entry is either a bare name string or `(NAME . PLIST)` carrying
+the metadata serialized into the [config blob](#config-blob-schema):
+
+```lisp
+:cffi-libraries ("libplain"                                   ; name only -> search-path defaults to native/
+                 ("libfoo" :define-foreign-library "my-lib::libfoo"
+                           :canary "foo_init"
+                           :search-path "native/"))
+```
+
+At install time these populate `cl-repo-init.lisp`, which pushes each `:search-path`
+onto `cffi:*foreign-library-directories*` so the system's own `define-foreign-library`
+resolves the bundled library (Post-Install, [native deps](requirements/native-deps.md)).
+
 ### Provides Resolution
 
 1. Explicit `:cl-repo :provides` from `.asd` `:properties`

@@ -6,7 +6,8 @@
   (:import-from :cl-oci/descriptor #:make-descriptor #:descriptor-media-type #:descriptor-size)
   (:import-from :cl-oci/digest #:parse-digest #:format-digest #:digest-algorithm)
   (:import-from :cl-oci/platform #:make-platform #:platform-os)
-  (:import-from :cl-oci/config #:cl-system-config #:make-cl-system-config #:config-system-name #:config-depends-on)
+  (:import-from :cl-oci/config #:cl-system-config #:make-cl-system-config #:config-system-name
+                #:config-depends-on #:config-cffi-libraries)
   (:import-from :cl-oci/media-types #:+oci-image-manifest-v1+ #:+oci-image-config-v1+
                 #:+oci-image-layer-tar-gzip+ #:+oci-image-index-v1+))
 (in-package :cl-oci/tests/serialization-test)
@@ -66,3 +67,21 @@
     (ok (string= (cdr (second deps)) "0.5"))
     (ok (stringp (third deps)))
     (ok (string= (third deps) "cffi"))))
+
+(deftest cffi-libraries-round-trip
+  (testing "structured cffi-libraries (name -> define-foreign-library/canary/search-path) survive round-trip"
+    (let* ((cfg (make-cl-system-config
+                 :system-name "cffi-user"
+                 :cffi-libraries '(("libffi" :define-foreign-library "cffi::libffi"
+                                    :canary "ffi_call" :search-path "native/")
+                                   "libplain")))
+           (cfg2 (from-json 'cl-system-config (to-json-string cfg)))
+           (libs (config-cffi-libraries cfg2))
+           (libffi (assoc "libffi" libs :test #'string=))
+           (plain (assoc "libplain" libs :test #'string=)))
+      (ok (= (length libs) 2))
+      (ok (string= (getf (cdr libffi) :define-foreign-library) "cffi::libffi"))
+      (ok (string= (getf (cdr libffi) :canary) "ffi_call"))
+      (ok (string= (getf (cdr libffi) :search-path) "native/"))
+      ;; bare name normalizes to (NAME) with an empty plist
+      (ok (and plain (null (cdr plain)))))))

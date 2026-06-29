@@ -9,4 +9,6 @@
    :cl-repository-client/tests/digest-cache-test
    :cl-repository-client/tests/ocicl-compat-test
    :cl-repository-client/tests/integrity-test
-   :cl-repository-client/tests/protected-systems-test))
+   :cl-repository-client/tests/protected-systems-test
+   :cl-repository-client/tests/config-test
+   :cl-repository-client/tests/source-policy-test))

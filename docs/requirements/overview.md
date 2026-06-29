@@ -17,4 +17,4 @@ Common Lisp lacks a standard distribution system comparable to PyPI, crates.io, 
 
 - Custom registry server implementation (leverage existing OCI registries)
 - Binary FASL distribution (implementation-specific, fragile across versions)
-- Package signing (defer to OCI registry features like cosign/notary)
+- Package signing — planned, see [TODO.md](../../TODO.md#2-package-signing--verification)
