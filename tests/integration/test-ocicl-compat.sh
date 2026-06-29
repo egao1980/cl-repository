@@ -11,6 +11,29 @@ SYSTEM_NAME="hello-test"
 VERSION="0.1.0"
 WORKDIR=""
 
+# Networking retry knobs (override via env). ocicl's HTTP layer occasionally hits a
+# transient "end of file on STRING-INPUT-STREAM" parsing an otherwise-complete
+# response; a bounded retry absorbs that flake without masking real failures.
+RETRIES="${OCICL_INSTALL_RETRIES:-3}"
+RETRY_DELAY="${OCICL_INSTALL_RETRY_DELAY:-3}"
+
+# Run "$@" up to RETRIES times, sleeping RETRY_DELAY between attempts.
+with_retries() {
+  local attempt=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if (( attempt >= RETRIES )); then
+      echo "    command failed after ${RETRIES} attempt(s): $*" >&2
+      return 1
+    fi
+    echo "    attempt ${attempt}/${RETRIES} failed (likely transient); retrying in ${RETRY_DELAY}s..." >&2
+    attempt=$(( attempt + 1 ))
+    sleep "$RETRY_DELAY"
+  done
+}
+
 cleanup() {
   echo "--- cleanup ---"
   docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
@@ -94,8 +117,8 @@ WORKDIR=$(mktemp -d)
 cd "$WORKDIR"
 ocicl setup "$WORKDIR" 2>/dev/null || true
 
-echo "==> Running: ocicl -v -k -r localhost:$PORT/$NAMESPACE install $SYSTEM_NAME:$VERSION"
-ocicl -v -k -r "localhost:$PORT/$NAMESPACE" install "$SYSTEM_NAME:$VERSION"
+echo "==> Running: ocicl -v -k -r localhost:$PORT/$NAMESPACE install $SYSTEM_NAME:$VERSION (retries: $RETRIES, delay: ${RETRY_DELAY}s)"
+with_retries ocicl -v -k -r "localhost:$PORT/$NAMESPACE" install "$SYSTEM_NAME:$VERSION"
 
 # 5. Verify
 echo "==> Verifying installation"
