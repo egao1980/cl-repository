@@ -131,10 +131,10 @@
                         (values repo (select-preferred-version version-tags))
                         (values repo (first tags))))
                   (unless (eq type :ocicl)
-                    (find-via-anchor reg repo system-name)))))
+                    (find-via-anchor reg repo)))))
       (error () nil))))
 
-(defun find-via-anchor (registry repo system-name)
+(defun find-via-anchor (registry repo)
   "Try to find system via system-name anchor at :latest."
   (handler-case
       (let ((obj (pull-manifest registry repo "latest")))
@@ -249,8 +249,7 @@
    sources deny allow default-source
    (lambda ()
      (let* ((*quiet* (or *quiet* silent))
-            (system-list (if (listp systems) systems (list systems)))
-            (installed-any nil))
+            (system-list (if (listp systems) systems (list systems))))
        (ensure-snapshot)
        (load-digest-cache)
        ;; Phase 1: Build install plan via SAT solver
@@ -267,7 +266,6 @@
                                 (and iv (string= iv ver)))))
                (let ((result (ensure-system-installed name :version ver)))
                  (when result
-                   (setf installed-any t)
                    (configure-asdf-source-registry)
                    (record-lockfile-entry result))))))
          ;; Phase 2.5: Quicklisp fallback for missing transitive deps

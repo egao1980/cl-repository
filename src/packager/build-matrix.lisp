@@ -107,28 +107,41 @@
     (string dep)
     (cons (format nil "~a@>=~a" (car dep) (cdr dep)))))
 
+(defmacro setf-when (place value)
+  "SETF PLACE to VALUE only when VALUE is non-nil (VALUE evaluated once)."
+  (let ((v (gensym "VAL")))
+    `(let ((,v ,value))
+       (when ,v (setf ,place ,v)))))
+
+(defun comma-join (items &optional (key #'identity))
+  "Join (KEY ITEM) of ITEMS into a comma-separated string."
+  (format nil "~{~a~^,~}" (mapcar key items)))
+
 (defun make-annotations (spec)
   "Build OCI annotation hash-table from a package-spec."
   (let ((ann (make-hash-table :test 'equal)))
     (setf (gethash +ann-title+ ann) (package-spec-name spec))
-    (when (package-spec-version spec) (setf (gethash +ann-version+ ann) (package-spec-version spec)))
-    (when (package-spec-license spec) (setf (gethash +ann-licenses+ ann) (package-spec-license spec)))
-    (when (package-spec-description spec)
-      (setf (gethash +ann-description+ ann) (package-spec-description spec)))
-    (when (package-spec-author spec) (setf (gethash +ann-authors+ ann) (package-spec-author spec)))
     (setf (gethash +ann-created+ ann) (format-iso-time))
-    (when (package-spec-source-url spec)
-      (setf (gethash +ann-source+ ann) (package-spec-source-url spec)))
-    (when (package-spec-revision spec)
-      (setf (gethash +ann-revision+ ann) (package-spec-revision spec)))
+    (setf-when (gethash +ann-version+ ann) (package-spec-version spec))
+    (setf-when (gethash +ann-licenses+ ann) (package-spec-license spec))
+    (setf-when (gethash +ann-description+ ann) (package-spec-description spec))
+    (setf-when (gethash +ann-authors+ ann) (package-spec-author spec))
+    (setf-when (gethash +ann-source+ ann) (package-spec-source-url spec))
+    (setf-when (gethash +ann-revision+ ann) (package-spec-revision spec))
     (when (package-spec-depends-on spec)
       (setf (gethash +cl-depends-on+ ann)
-            (format nil "~{~a~^,~}" (mapcar #'dep-flat-name (package-spec-depends-on spec))))
+            (comma-join (package-spec-depends-on spec) #'dep-flat-name))
       (setf (gethash +cl-depends-on-versioned+ ann)
-            (format nil "~{~a~^,~}" (mapcar #'dep-versioned-string (package-spec-depends-on spec)))))
+            (comma-join (package-spec-depends-on spec) #'dep-versioned-string)))
     (when (package-spec-provides spec)
-      (setf (gethash +cl-provides+ ann)
-            (format nil "~{~a~^,~}" (package-spec-provides spec))))
+      (setf (gethash +cl-provides+ ann) (comma-join (package-spec-provides spec))))
+    ann))
+
+(defun make-overlay-annotations (overlay layers)
+  "Build the OCI annotation hash-table for a platform OVERLAY manifest over LAYERS."
+  (let ((ann (make-hash-table :test 'equal)))
+    (setf-when (gethash +cl-implementation+ ann) (overlay-spec-lisp overlay))
+    (setf (gethash +cl-layer-roles+ ann) (comma-join layers #'layer-result-role))
     ann))
 
 (defun format-iso-time ()
@@ -344,17 +357,11 @@
                                  :layers overlay-layers
                                  :cffi-libraries (package-spec-cffi-libraries spec))
             (push (cons cfg-digest cfg-octets) all-blobs)
-            (let* ((overlay-ann (make-hash-table :test 'equal))
-                   (_ (when (overlay-spec-lisp overlay)
-                        (setf (gethash +cl-implementation+ overlay-ann)
-                              (overlay-spec-lisp overlay))))
-                   (roles (format nil "~{~a~^,~}" (mapcar #'layer-result-role overlay-layers)))
-                   (_2 (setf (gethash +cl-layer-roles+ overlay-ann) roles))
-                   (bm (build-manifest-for-layers cfg-octets cfg-digest cfg-size
-                                                  overlay-layers
-                                                  :annotations overlay-ann
-                                                  :platform plat)))
-              (declare (ignore _ _2))
+            (let ((bm (build-manifest-for-layers cfg-octets cfg-digest cfg-size
+                                                 overlay-layers
+                                                 :annotations (make-overlay-annotations
+                                                               overlay overlay-layers)
+                                                 :platform plat)))
               (push bm all-manifests)
               (push (built-manifest-descriptor bm) manifest-descriptors)))))
       ;; 4. Build Image Index
@@ -396,17 +403,11 @@
       (multiple-value-bind (cfg-octets cfg-digest cfg-size)
           (build-config-blob system-name :version version :layers real-layers)
         (push (cons cfg-digest cfg-octets) blobs)
-        (let* ((overlay-ann (make-hash-table :test 'equal))
-               (_ (when (overlay-spec-lisp overlay)
-                    (setf (gethash +cl-implementation+ overlay-ann)
-                          (overlay-spec-lisp overlay))))
-               (roles (format nil "~{~a~^,~}" (mapcar #'layer-result-role real-layers)))
-               (_2 (setf (gethash +cl-layer-roles+ overlay-ann) roles))
-               (bm (build-manifest-for-layers cfg-octets cfg-digest cfg-size
-                                              real-layers
-                                              :annotations overlay-ann
-                                              :platform plat)))
-          (declare (ignore _ _2))
+        (let ((bm (build-manifest-for-layers cfg-octets cfg-digest cfg-size
+                                             real-layers
+                                             :annotations (make-overlay-annotations
+                                                           overlay real-layers)
+                                             :platform plat)))
           (make-instance 'overlay-result
                          :blobs (nreverse blobs)
                          :manifest bm))))))

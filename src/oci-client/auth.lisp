@@ -30,7 +30,7 @@
       (setf (gethash key params) value))
     params))
 
-(defun obtain-token (www-authenticate-header &optional auth &key insecure)
+(defun obtain-token (www-authenticate-header &key auth insecure)
   "Request a bearer token from the auth endpoint described in WWW-Authenticate header."
   (let* ((params (parse-www-authenticate www-authenticate-header))
          (realm (gethash "realm" params))

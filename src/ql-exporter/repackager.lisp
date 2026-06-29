@@ -11,7 +11,7 @@
   (:import-from :cl-oci/annotations
                 #:+ann-title+ #:+ann-version+ #:+ann-licenses+ #:+ann-description+
                 #:+ann-created+ #:+ann-authors+ #:+cl-has-native-deps+ #:+cl-cffi-libraries+
-                #:+cl-system-name+ #:+cl-depends-on+)
+                #:+cl-system-name+ #:+cl-depends-on+ #:+cl-provides+)
   (:import-from :cl-oci/serialization #:to-json-string)
   (:import-from :cl-oci/manifest #:make-manifest)
   (:import-from :cl-oci/image-index #:make-image-index)
@@ -46,6 +46,15 @@
       (decode-universal-time (get-universal-time) 0)
     (format nil "~4,'0d-~2,'0d-~2,'0dT~2,'0d:~2,'0d:~2,'0dZ" yr mon day hr min sec)))
 
+(defun build-source-config (project-name version deps provides source-digest)
+  "Build a cl-system-config tagging SOURCE-DIGEST as the source layer."
+  (let ((cfg (make-cl-system-config :system-name project-name
+                                    :version version
+                                    :depends-on deps
+                                    :provides provides)))
+    (setf (gethash source-digest (config-layer-roles cfg)) +role-source+)
+    cfg))
+
 (defun repackage-project (source-tar-gz-data release systems &key version)
   "Repackage a Quicklisp project archive into OCI artifacts.
    SOURCE-TAR-GZ-DATA is the raw .tgz bytes from Quicklisp.
@@ -61,12 +70,8 @@
          (source-digest-obj (compute-digest source-tar-gz-data))
          (source-digest (format-digest source-digest-obj))
          (source-size (length source-tar-gz-data))
-         ;; Build config blob
-         (cfg (make-cl-system-config :system-name project-name
-                                     :version version
-                                     :depends-on all-deps
-                                     :provides provides))
-         (_ (setf (gethash source-digest (config-layer-roles cfg)) +role-source+))
+         ;; Build config blob (source layer tagged inside the helper)
+         (cfg (build-source-config project-name version all-deps provides source-digest))
          (cfg-json (to-json-string cfg))
          (cfg-octets (babel:string-to-octets cfg-json :encoding :utf-8))
          (cfg-digest-obj (compute-digest cfg-octets))
@@ -102,7 +107,6 @@
          (idx-octets (babel:string-to-octets idx-json :encoding :utf-8))
          (idx-digest (format-digest (compute-digest idx-octets)))
          (idx-size (length idx-octets)))
-    (declare (ignore _))
     (make-instance 'repackage-result
                    :index-json idx-json
                    :index-digest idx-digest
@@ -121,6 +125,6 @@
     (setf (gethash +cl-system-name+ ann) name)
     (when deps (setf (gethash +cl-depends-on+ ann) (format nil "~{~a~^,~}" deps)))
     (when provides
-      (setf (gethash "dev.common-lisp.system.provides" ann)
+      (setf (gethash +cl-provides+ ann)
             (format nil "~{~a~^,~}" provides)))
     ann))

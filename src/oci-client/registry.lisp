@@ -60,7 +60,8 @@
   (let* ((headers (dex:response-headers error))
          (www-auth (gethash "www-authenticate" headers)))
     (when www-auth
-      (let ((token (obtain-token www-auth (registry-auth registry)
+      (let ((token (obtain-token www-auth
+                                 :auth (registry-auth registry)
                                  :insecure (registry-insecure-p registry))))
         (if (registry-auth registry)
             (setf (auth-config-token (registry-auth registry)) token)

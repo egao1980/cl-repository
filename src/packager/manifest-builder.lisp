@@ -59,6 +59,7 @@
 (defun build-manifest-for-layers (config-octets config-digest config-size layers
                                   &key artifact-type annotations platform)
   "Build an OCI manifest from a config blob and layer results. Returns a BUILT-MANIFEST."
+  (declare (ignore config-octets))
   (let* ((config-desc (make-descriptor :media-type +cl-system-config-v1+
                                        :digest (parse-digest config-digest)
                                        :size config-size))
@@ -84,6 +85,7 @@
          (manifest-desc (make-descriptor :media-type +oci-image-manifest-v1+
                                          :digest (parse-digest manifest-digest)
                                          :size manifest-size
+                                         :annotations annotations
                                          :platform platform)))
     (make-instance 'built-manifest
                    :json json-str

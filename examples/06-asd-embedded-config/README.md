@@ -33,7 +33,7 @@ ASDF supports a `:properties` plist on system definitions. We use the `:cl-repo`
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `:cffi-libraries` | list of strings | CFFI foreign library names |
+| `:cffi-libraries` | list of names or `(name . plist)` | CFFI foreign libraries; plist keys `:define-foreign-library` `:canary` `:search-path` |
 | `:provides` | list of strings | System names this package provides (default: system name) |
 | `:overlays` | list of plists | Platform-specific overlay specs |
 

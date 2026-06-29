@@ -14,7 +14,8 @@
   (:import-from :cl-repository-client/installer #:install-system #:install-result-path #:systems-root)
   (:import-from :cl-oci/digest #:format-digest #:compute-digest)
   (:import-from :cl-repository-client/lockfile #:lockfile-entry #:read-lockfile #:write-lockfile
-                #:lockfile-entry-system #:lockfile-entry-version #:lockfile-entry-registry)
+                #:lockfile-entry-system #:lockfile-entry-version #:lockfile-entry-registry
+                #:lockfile-entry-index-digest)
   (:import-from :cl-repository-client/constraint-builder #:scan-installed-systems)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/quickload #:*registries*)
