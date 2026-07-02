@@ -81,12 +81,14 @@
   (if (<= (length name) 100)
       (cons "" name)
       (let ((slash-pos nil))
-        (loop for i from (min (length name) 155) downto 1
+        (loop for i from (min (1- (length name)) 155) downto 1
               when (char= (char name i) #\/)
                 do (setf slash-pos i) (return))
         (if (and slash-pos (<= (- (length name) slash-pos 1) 100))
             (cons (subseq name 0 slash-pos) (subseq name (1+ slash-pos)))
-            (cons "" (subseq name 0 100))))))
+            ;; Truncating would silently corrupt the archive; refuse instead.
+            (error "Tar entry name ~s cannot be split into ustar prefix(155)/name(100) fields"
+                   name)))))
 
 (defun write-tar-entry (stream name content)
   "Write a single tar entry (POSIX ustar header + data)."

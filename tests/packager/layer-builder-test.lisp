@@ -73,6 +73,31 @@
         (when (probe-file file1) (delete-file file1))
         (uiop:delete-directory-tree tmpdir :validate t :if-does-not-exist :ignore)))))
 
+(deftest split-tar-name-long-entries
+  (testing "names <= 100 chars stay in the name field"
+    (let ((result (cl-repository-packager/layer-builder::split-tar-name "short/name.lisp")))
+      (ok (string= (car result) ""))
+      (ok (string= (cdr result) "short/name.lisp"))))
+  (testing "names of 101-155 chars split without indexing past the end (regression)"
+    ;; 21 + 85 = 106 chars total: previously crashed with
+    ;; INVALID-ARRAY-INDEX-ERROR at (char name (length name)).
+    (let* ((prefix "cl-protobufs-2.0-rc1/")
+           (name (format nil "~a~a.dylib" prefix (make-string 79 :initial-element #\x)))
+           (result (cl-repository-packager/layer-builder::split-tar-name name)))
+      (ok (string= (car result) "cl-protobufs-2.0-rc1"))
+      (ok (= (length (cdr result)) 85))))
+  (testing "deep paths split at the last slash that fits both fields"
+    (let* ((name (format nil "~a/~a/~a"
+                         (make-string 60 :initial-element #\a)
+                         (make-string 60 :initial-element #\b)
+                         (make-string 60 :initial-element #\c)))
+           (result (cl-repository-packager/layer-builder::split-tar-name name)))
+      (ok (string= (cdr result) (make-string 60 :initial-element #\c)))
+      (ok (= (length (car result)) 121))))
+  (testing "unsplittable names signal instead of silently truncating"
+    (ok (signals (cl-repository-packager/layer-builder::split-tar-name
+                  (make-string 180 :initial-element #\z))))))
+
 (deftest layer-result-title-slot
   (testing "layer-result has an optional title slot"
     (let ((lr (make-instance 'layer-result
