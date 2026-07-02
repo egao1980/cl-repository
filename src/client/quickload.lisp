@@ -267,7 +267,10 @@
                (let ((result (ensure-system-installed name :version ver)))
                  (when result
                    (configure-asdf-source-registry)
-                   (record-lockfile-entry result))))))
+                   (record-lockfile-entry result)
+                   (when (install-result-index-digest result)
+                     (record-installed-digest (install-result-index-digest result)
+                                              (install-result-path result))))))))
          ;; Phase 2.5: Quicklisp fallback for missing transitive deps
          (when *missing-deps-accumulator*
            (try-quicklisp-fallback *missing-deps-accumulator*))

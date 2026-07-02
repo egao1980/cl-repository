@@ -6,9 +6,9 @@
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
   (:import-from :cl-oci-client/registry #:registry #:make-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-manifest-raw #:pull-blob)
-  (:import-from :cl-oci/digest #:format-digest #:compute-digest)
+  (:import-from :cl-oci/digest #:format-digest #:compute-digest #:verify-digest)
   (:import-from :cl-oci/descriptor #:descriptor #:descriptor-digest #:descriptor-media-type
-                #:descriptor-annotations)
+                #:descriptor-size #:descriptor-annotations)
   (:import-from :cl-oci/manifest #:manifest #:manifest-layers #:manifest-config
                 #:manifest-artifact-type)
   (:import-from :cl-oci/media-types #:+cl-system-name-anchor-v1+)
@@ -45,13 +45,49 @@
 
 (defun systems-root () *systems-root*)
 
+(defun safe-path-component-p (string)
+  "T when STRING is safe to use as a single directory component under
+   *systems-root*: non-empty, no path separators, not a dot-only name."
+  (and (stringp string)
+       (plusp (length string))
+       (not (find #\/ string))
+       (not (find #\\ string))
+       (not (find #\Null string))
+       (not (every (lambda (ch) (char= ch #\.)) string)))) ; rejects "." and ".."
+
+(defun check-path-component (string what)
+  "Signal an error unless STRING is a safe path component. Returns STRING.
+   Guards against traversal via registry-controlled names/versions."
+  (unless (safe-path-component-p string)
+    (error "Unsafe ~a ~s: must be a single path component" what string))
+  string)
+
 (defun system-install-path (name version)
   "Path where a system version gets installed."
+  (check-path-component name "system name")
+  (check-path-component version "version")
   (merge-pathnames (format nil "~a/~a/" name version) *systems-root*))
 
 (defstruct install-result
   "Result of installing a system, carrying path and digest info for lockfile."
   path name version index-digest source-digest overlay-digest registry-url)
+
+(defun repository-basename (repository)
+  "Last path segment of an OCI repository, e.g. \"cl-systems/alexandria\" -> \"alexandria\"."
+  (let ((pos (position #\/ repository :from-end t)))
+    (if pos (subseq repository (1+ pos)) repository)))
+
+(defun pull-verified-blob (registry repository descriptor)
+  "Pull the blob named by DESCRIPTOR and verify its size and digest.
+   Signals an error on mismatch; returns the blob octets."
+  (let* ((digest (descriptor-digest descriptor))
+         (blob (pull-blob registry repository (format-digest digest)))
+         (expected-size (descriptor-size descriptor)))
+    (when (and expected-size (/= (length blob) expected-size))
+      (error "Blob size mismatch for ~a: expected ~d bytes, got ~d"
+             (format-digest digest) expected-size (length blob)))
+    (verify-digest blob digest)
+    blob))
 
 (defun install-system (registry-url repository reference &key (type :cl-repo))
   "Install a CL system from an OCI registry.
@@ -62,7 +98,8 @@
     (when *dry-run*
       (msg "~&[dry-run] Would install ~a:~a~%" repository reference)
       (return-from install-system
-        (make-install-result :path (system-install-path repository reference)
+        (make-install-result :path (system-install-path (repository-basename repository)
+                                                        reference)
                              :registry-url registry-url)))
     (multiple-value-bind (body status headers)
         (pull-manifest-raw reg repository reference)
@@ -105,10 +142,8 @@
              (when universal-desc
                (pull-manifest registry repository source-digest)))
            (config-json (when universal-manifest
-                          (pull-blob registry repository
-                                     (format-digest
-                                      (descriptor-digest
-                                       (manifest-config universal-manifest))))))
+                          (pull-verified-blob registry repository
+                                              (manifest-config universal-manifest))))
            (config (when config-json
                      (from-json 'cl-system-config
                                 (babel:octets-to-string config-json :encoding :utf-8))))
@@ -121,8 +156,7 @@
       ;; Extract universal layers (strip OCICL-compatible prefix)
       (when universal-manifest
         (dolist (layer-desc (manifest-layers universal-manifest))
-          (let ((blob (pull-blob registry repository
-                                 (format-digest (descriptor-digest layer-desc)))))
+          (let ((blob (pull-verified-blob registry repository layer-desc)))
             (extract-layer-stripping-prefix blob install-dir strip-prefix))))
       ;; Extract overlay layers -- skip source-role layers (already extracted
       ;; from universal manifest above; overlays include them for OCI client compat).
@@ -133,9 +167,8 @@
                  (pull-manifest registry repository
                                 (format-digest (descriptor-digest overlay-desc))))
                (overlay-config-json
-                 (pull-blob registry repository
-                            (format-digest
-                             (descriptor-digest (manifest-config overlay-manifest)))))
+                 (pull-verified-blob registry repository
+                                     (manifest-config overlay-manifest)))
                (overlay-config
                  (when overlay-config-json
                    (from-json 'cl-system-config
@@ -149,7 +182,7 @@
                                (gethash layer-digest-str
                                         (config-layer-roles config))))))
               (unless (string= role "source")
-                (let ((blob (pull-blob registry repository layer-digest-str)))
+                (let ((blob (pull-verified-blob registry repository layer-desc)))
                   (extract-layer-stripping-prefix blob install-dir strip-prefix)))))))
       ;; Generate cl-repo-init.lisp if needed
       (when (and config (cl-oci/config:config-cffi-libraries config))
@@ -173,9 +206,7 @@
                (and at (string= at +cl-system-name-anchor-v1+))))
     (error "~a:latest is a system-name anchor (no layers). ~
             Use an explicit version tag instead." repository))
-  (let* ((config-json (pull-blob registry repository
-                                 (format-digest
-                                  (descriptor-digest (manifest-config manifest)))))
+  (let* ((config-json (pull-verified-blob registry repository (manifest-config manifest)))
          (config (from-json 'cl-system-config
                             (babel:octets-to-string config-json :encoding :utf-8)))
          (name (config-system-name config))
@@ -184,9 +215,10 @@
          (install-dir (system-install-path name version)))
     (ensure-directories-exist (merge-pathnames "x" install-dir))
     (dolist (layer-desc (manifest-layers manifest))
-      (let ((blob (pull-blob registry repository
-                             (format-digest (descriptor-digest layer-desc)))))
+      (let ((blob (pull-verified-blob registry repository layer-desc)))
         (extract-layer-stripping-prefix blob install-dir strip-prefix)))
+    (when (config-cffi-libraries config)
+      (generate-init-file install-dir config))
     (create-provides-symlinks name (config-provides config))
     (record-file-manifest install-dir)
     (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
@@ -228,14 +260,12 @@
          (title (when ann (gethash +ann-title+ ann))))
     (multiple-value-bind (name version strip-prefix)
         (parse-ocicl-layer-info title)
-      (let* ((name (or name (let ((pos (position #\/ repository :from-end t)))
-                                (if pos (subseq repository (1+ pos)) repository))))
+      (let* ((name (or name (repository-basename repository)))
              (version (or version reference))
              (install-dir (system-install-path name version)))
         (ensure-directories-exist (merge-pathnames "x" install-dir))
         (dolist (ld layers)
-          (let ((blob (pull-blob registry repository
-                                 (format-digest (descriptor-digest ld)))))
+          (let ((blob (pull-verified-blob registry repository ld)))
             (if strip-prefix
                 (extract-layer-stripping-prefix blob install-dir strip-prefix)
                 (extract-layer blob install-dir))))
@@ -248,9 +278,10 @@
 
 (defun extract-layer-stripping-prefix (tar-gz-data target-dir prefix)
   "Extract a tar+gzip layer to TARGET-DIR, stripping PREFIX from entry names."
-  (let ((input (flexi-streams:make-in-memory-input-stream tar-gz-data)))
-    (let ((decompressed (chipz:make-decompressing-stream 'chipz:gzip input)))
-      (extract-tar-stream decompressed target-dir :strip-prefix prefix)
+  (let* ((input (flexi-streams:make-in-memory-input-stream tar-gz-data))
+         (decompressed (chipz:make-decompressing-stream 'chipz:gzip input)))
+    (unwind-protect
+         (extract-tar-stream decompressed target-dir :strip-prefix prefix)
       (close decompressed))))
 
 (defun create-provides-symlinks (canonical-name provides)
@@ -259,7 +290,10 @@
   (when provides
     (let ((canonical-dir (merge-pathnames (format nil "~a/" canonical-name) *systems-root*)))
       (dolist (provided provides)
-        (unless (string= provided canonical-name)
+        (unless (or (string= provided canonical-name)
+                    ;; Provides names come from remote config -- never let them
+                    ;; escape *systems-root* via separators or dot components.
+                    (not (safe-path-component-p provided)))
           (let ((link-path (merge-pathnames (format nil "~a" provided) *systems-root*)))
             (unless (probe-file link-path)
               (handler-case
@@ -288,14 +322,29 @@
 
 (defun extract-layer (tar-gz-data target-dir)
   "Extract a tar+gzip layer to TARGET-DIR."
-  (let ((input (flexi-streams:make-in-memory-input-stream tar-gz-data)))
-    (let ((decompressed (chipz:make-decompressing-stream 'chipz:gzip input)))
-      (extract-tar-stream decompressed target-dir)
+  (let* ((input (flexi-streams:make-in-memory-input-stream tar-gz-data))
+         (decompressed (chipz:make-decompressing-stream 'chipz:gzip input)))
+    (unwind-protect
+         (extract-tar-stream decompressed target-dir)
       (close decompressed))))
+
+(defun safe-tar-entry-name-p (name)
+  "T when tar entry NAME is safe to extract under a target directory:
+   relative, no .. components, and free of characters that could redirect
+   the resulting pathname (backslash, NUL, wildcards, leading ~)."
+  (and (plusp (length name))
+       (char/= (char name 0) #\/)
+       (char/= (char name 0) #\~)
+       (not (find-if (lambda (ch) (member ch '(#\\ #\Null #\* #\? #\[))) name))
+       (loop for start = 0 then (1+ end)
+             for end = (or (position #\/ name :start start) (length name))
+             never (string= name ".." :start1 start :end1 end)
+             until (>= end (length name)))))
 
 (defun extract-tar-stream (stream target-dir &key strip-prefix)
   "Extract tar entries from STREAM to TARGET-DIR.
-   When STRIP-PREFIX is given, remove that prefix from each entry name."
+   When STRIP-PREFIX is given, remove that prefix from each entry name.
+   Signals an error on entries that would escape TARGET-DIR (tar slip)."
   (loop
     (let ((header (make-array 512 :element-type '(unsigned-byte 8))))
       (let ((bytes-read (read-sequence header stream)))
@@ -309,6 +358,10 @@
                        raw-name))
              (size (parse-tar-size header))
              (type (aref header 156)))
+        (when (and (plusp (length name))
+                   (not (string= name "./"))
+                   (not (safe-tar-entry-name-p name)))
+          (error "Refusing to extract unsafe tar entry ~s (path traversal?)" raw-name))
         (if (or (zerop (length name)) (string= name "./"))
             (skip-tar-data stream size)
             (cond
@@ -334,10 +387,10 @@
                (skip-tar-data stream size))))))))
 
 (defun skip-tar-data (stream size)
-  (let ((blocks (ceiling size 512)))
-    (dotimes (i blocks)
-      (let ((buf (make-array 512 :element-type '(unsigned-byte 8))))
-        (read-sequence buf stream)))))
+  "Skip SIZE bytes of tar data (padded to 512-byte blocks)."
+  (let ((buf (make-array 512 :element-type '(unsigned-byte 8))))
+    (dotimes (i (ceiling size 512))
+      (read-sequence buf stream))))
 
 (defun parse-tar-name (header)
   (let ((end (or (position 0 header :end 100) 100)))

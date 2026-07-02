@@ -95,6 +95,22 @@
       (ok (cdr (assoc "lib-v2" bindings :test #'string=)))
       (ok (cdr (assoc "util-v1" bindings :test #'string=))))))
 
+(deftest test-solve-prefers-semantic-latest-version
+  ;; 1.10 > 1.9 semantically, though "1.10" < "1.9" as strings
+  (let ((formula (sat-and (list (sat-or (list (sat-var "foo-v1.9") (sat-var "foo-v1.10")))
+                                (sat-not (sat-and (list (sat-var "foo-v1.9")
+                                                        (sat-var "foo-v1.10"))))))))
+    (let ((bindings (sat-solve formula)))
+      (ok bindings)
+      (ok (cdr (assoc "foo-v1.10" bindings :test #'string=)))
+      (ok (not (cdr (assoc "foo-v1.9" bindings :test #'string=)))))))
+
+(deftest test-replace-folds-constants
+  ;; After substitution the formula should shrink, not keep constant leaves
+  (let* ((expr (sat-and (list (sat-var "x") (sat-or (list (sat-var "x") (sat-var "y"))))))
+         (folded (sat-replace expr "x" t)))
+    (ok (typep folded 'sat-true))))
+
 (deftest test-solve-diamond-deps
   ;; app requires A and B
   ;; A requires D@v1 or D@v2

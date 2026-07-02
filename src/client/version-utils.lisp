@@ -31,24 +31,25 @@ Numeric segments sort after alpha segments and by integer value."
 
 (defun compare-segments (left right)
   "Return -1, 0, 1 for LEFT vs RIGHT segment list."
-  (let ((la (length left))
-        (lb (length right)))
-    (loop for a in left
-          for b in right
-          do (let ((ka (segment-key a))
-                   (kb (segment-key b)))
-               (unless (equal ka kb)
-                 (return (if (or (< (first ka) (first kb))
-                                 (and (= (first ka) (first kb))
-                                      (if (= (first ka) 1)
-                                          (< (second ka) (second kb))
-                                          (string< (second ka) (second kb)))))
-                             -1
-                             1)))))
-    (cond
-      ((< la lb) -1)
-      ((> la lb) 1)
-      (t 0))))
+  (or (loop for a in left
+            for b in right
+            do (let ((ka (segment-key a))
+                     (kb (segment-key b)))
+                 (unless (equal ka kb)
+                   (return (if (or (< (first ka) (first kb))
+                                   (and (= (first ka) (first kb))
+                                        (if (= (first ka) 1)
+                                            (< (second ka) (second kb))
+                                            (string< (second ka) (second kb)))))
+                               -1
+                               1)))))
+      ;; All shared segments equal -- shorter version sorts first.
+      (let ((la (length left))
+            (lb (length right)))
+        (cond
+          ((< la lb) -1)
+          ((> la lb) 1)
+          (t 0)))))
 
 (defun version< (left right)
   "Return T when LEFT should be ordered before RIGHT."

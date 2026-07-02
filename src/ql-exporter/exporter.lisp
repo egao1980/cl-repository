@@ -3,12 +3,14 @@
   (:import-from :dexador)
   (:import-from :babel #:string-to-octets)
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
+  (:import-from :cl-oci/digest #:compute-digest #:digest-hex)
   (:import-from :cl-oci-client/registry #:registry #:make-registry)
   (:import-from :cl-oci-client/push #:push-blob-check-and-push #:push-manifest)
   (:import-from :cl-oci/media-types #:+oci-image-manifest-v1+ #:+oci-image-index-v1+)
   (:import-from :cl-repository-ql-exporter/dist-parser
                 #:ql-dist #:ql-dist-archive-base-url
                 #:ql-release #:ql-release-project #:ql-release-url #:ql-release-prefix
+                #:ql-release-file-md5
                 #:ql-system #:ql-system-project
                 #:fetch-and-parse-dist)
   (:import-from :cl-repository-ql-exporter/repackager
@@ -21,12 +23,19 @@
            #:export-project-to-registry))
 (in-package :cl-repository-ql-exporter/exporter)
 
-(defun download-archive (url)
-  "Download a .tgz archive, return as octet vector."
-  (let ((body (dex:get url :force-binary t)))
-    (etypecase body
-      ((vector (unsigned-byte 8)) body)
-      (string (babel:string-to-octets body :encoding :latin-1)))))
+(defun download-archive (url &key expected-md5)
+  "Download a .tgz archive, return as octet vector.
+   When EXPECTED-MD5 is given (from releases.txt), verify it and signal
+   an error on mismatch so corrupted/tampered archives are never repackaged."
+  (let* ((body (dex:get url :force-binary t))
+         (data (etypecase body
+                 ((vector (unsigned-byte 8)) body)
+                 (string (babel:string-to-octets body :encoding :latin-1)))))
+    (when (and expected-md5 (plusp (length expected-md5)))
+      (let ((actual (digest-hex (compute-digest data :algorithm "md5"))))
+        (unless (string-equal actual expected-md5)
+          (error "MD5 mismatch for ~a: expected ~a, got ~a" url expected-md5 actual))))
+    data))
 
 (defun version-from-prefix (prefix)
   "Extract a version tag from a QL release prefix like 'alexandria-20260101-git'."
@@ -44,7 +53,9 @@
          (ver (or version (version-from-prefix (ql-release-prefix release)))))
     (msg "~&  Downloading ~a..." project-name)
     (force-output)
-    (let ((archive-data (handler-case (download-archive archive-url)
+    (let ((archive-data (handler-case
+                            (download-archive archive-url
+                                              :expected-md5 (ql-release-file-md5 release))
                           (error (e)
                             (msg " FAILED: ~a~%" e)
                             (return-from export-project-to-registry nil)))))

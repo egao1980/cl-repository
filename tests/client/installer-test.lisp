@@ -1,13 +1,89 @@
 (defpackage :cl-repository-client/tests/installer-test
   (:use :cl :rove)
   (:import-from :cl-repository-client/installer #:system-install-path #:role-subdirectory)
-  (:import-from :cl-oci/config #:make-cl-system-config))
+  (:import-from :cl-oci/config #:make-cl-system-config)
+  (:import-from :flexi-streams))
 (in-package :cl-repository-client/tests/installer-test)
 
 (deftest install-path-construction
   (let ((path (system-install-path "alexandria" "1.4")))
     (ok (search "alexandria" (namestring path)))
     (ok (search "1.4" (namestring path)))))
+
+(deftest install-path-rejects-traversal
+  (ok (signals (system-install-path "../evil" "1.0")))
+  (ok (signals (system-install-path "alexandria" "../../etc")))
+  (ok (signals (system-install-path "a/b" "1.0")))
+  (ok (signals (system-install-path ".." "1.0")))
+  (ok (signals (system-install-path "" "1.0"))))
+
+;;; --- tar extraction safety ---
+
+(defun make-tar-header (name size &key (type (char-code #\0)))
+  "Build a minimal 512-byte tar header for tests (checksum not needed by parser)."
+  (let ((header (make-array 512 :element-type '(unsigned-byte 8) :initial-element 0))
+        (name-bytes (babel:string-to-octets name :encoding :utf-8))
+        (size-bytes (babel:string-to-octets (format nil "~11,'0o " size) :encoding :ascii)))
+    (replace header name-bytes :start1 0)
+    (replace header size-bytes :start1 124)
+    (setf (aref header 156) type)
+    header))
+
+(defun make-tar-bytes (entries)
+  "Build raw tar bytes from ENTRIES, a list of (name . content-string)."
+  (flexi-streams:with-output-to-sequence (out)
+    (dolist (entry entries)
+      (let* ((content (babel:string-to-octets (cdr entry) :encoding :utf-8))
+             (size (length content)))
+        (write-sequence (make-tar-header (car entry) size) out)
+        (write-sequence content out)
+        (let ((pad (mod (- 512 (mod size 512)) 512)))
+          (write-sequence (make-array pad :element-type '(unsigned-byte 8)
+                                          :initial-element 0)
+                          out))))
+    ;; End-of-archive: two zero blocks
+    (write-sequence (make-array 1024 :element-type '(unsigned-byte 8) :initial-element 0)
+                    out)))
+
+(defmacro with-temp-extract-dir ((dir) &body body)
+  `(let ((,dir (uiop:ensure-directory-pathname
+                (merge-pathnames (format nil "cl-repo-tar-test-~a-~a/"
+                                         (get-universal-time) (random 1000000))
+                                 (uiop:temporary-directory)))))
+     (ensure-directories-exist ,dir)
+     (unwind-protect (progn ,@body)
+       (uiop:delete-directory-tree ,dir :validate t :if-does-not-exist :ignore))))
+
+(defun extract-tar-bytes (bytes dir)
+  (flexi-streams:with-input-from-sequence (in bytes)
+    (cl-repository-client/installer::extract-tar-stream in dir)))
+
+(deftest extract-tar-normal-entries
+  (with-temp-extract-dir (dir)
+    (extract-tar-bytes (make-tar-bytes '(("hello.lisp" . "(defun hi ())")
+                                         ("sub/file.txt" . "content")))
+                       dir)
+    (ok (uiop:file-exists-p (merge-pathnames "hello.lisp" dir)))
+    (ok (uiop:file-exists-p (merge-pathnames "sub/file.txt" dir)))))
+
+(deftest extract-tar-rejects-parent-traversal
+  (with-temp-extract-dir (dir)
+    (ok (signals (extract-tar-bytes
+                  (make-tar-bytes '(("../escape.txt" . "pwned")))
+                  dir)))
+    (ok (not (uiop:file-exists-p (merge-pathnames "../escape.txt" dir))))))
+
+(deftest extract-tar-rejects-absolute-path
+  (with-temp-extract-dir (dir)
+    (ok (signals (extract-tar-bytes
+                  (make-tar-bytes '(("/tmp/cl-repo-absolute-escape" . "pwned")))
+                  dir)))))
+
+(deftest extract-tar-rejects-nested-dotdot
+  (with-temp-extract-dir (dir)
+    (ok (signals (extract-tar-bytes
+                  (make-tar-bytes '(("safe/../../escape.txt" . "pwned")))
+                  dir)))))
 
 (deftest role-subdirectory-mapping
   (ok (null (cl-repository-client/installer::role-subdirectory "source")))

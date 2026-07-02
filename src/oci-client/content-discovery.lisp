@@ -29,16 +29,16 @@
 
 (defun list-tags-paginated (registry repository &key (page-size 100))
   "List all tags, handling pagination. Returns a list of all tags."
-  (let ((all-tags nil)
+  (let ((pages nil)
         (last nil))
     (loop
       (multiple-value-bind (tags name link)
           (list-tags registry repository :n page-size :last last)
         (declare (ignore name))
-        (setf all-tags (nconc all-tags tags))
+        (push tags pages)
         (if (and link (plusp (length tags)))
             (setf last (car (last tags)))
-            (return all-tags))))))
+            (return (loop for page in (nreverse pages) nconc page)))))))
 
 (defun list-referrers (registry repository digest &key artifact-type)
   "List referrers for a manifest digest. Returns an image-index object."

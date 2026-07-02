@@ -57,12 +57,31 @@
                         (string-equal (rule-name rule) name)))
                  *source-rules*))
 
+(defun registry-host (url)
+  "Extract the host[:port] authority from a registry URL string, lowercased.
+   \"https://ghcr.io/v2\" -> \"ghcr.io\", \"localhost:5050/x\" -> \"localhost:5050\"."
+  (let* ((no-scheme (let ((pos (search "://" url)))
+                      (if pos (subseq url (+ pos 3)) url)))
+         (end (or (position #\/ no-scheme) (length no-scheme))))
+    (string-downcase (subseq no-scheme 0 end))))
+
 (defun registry-matches-p (registry-url rule-from)
-  "Check if REGISTRY-URL matches a rule's :from value."
+  "Check if REGISTRY-URL matches a rule's :from value.
+   String rules match on the URL host (exact host[:port], or bare host
+   matching any port) -- substring matching would let \"evil-ghcr.io.x\"
+   satisfy a \"ghcr.io\" rule."
   (cond
     ((null rule-from) t)
     ((eq rule-from :ql) nil)
-    ((stringp rule-from) (search rule-from registry-url :test #'char-equal))
+    ((stringp rule-from)
+     (let ((host (registry-host registry-url))
+           (rule-host (registry-host rule-from)))
+       (or (string= host rule-host)
+           ;; Rule without a port matches the same host on any port.
+           (let ((colon (position #\: host)))
+             (and colon
+                  (not (find #\: rule-host))
+                  (string= host rule-host :end1 colon))))))
     (t nil)))
 
 ;;; Public API

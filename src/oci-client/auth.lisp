@@ -4,6 +4,7 @@
   (:import-from :yason)
   (:import-from :cl-ppcre)
   (:import-from :cl-base64)
+  (:import-from :quri #:url-encode)
   (:import-from :cl-oci-client/conditions #:auth-error)
   (:export #:auth-config
            #:auth-config-username
@@ -39,7 +40,9 @@
     (unless realm
       (error 'auth-error :status 401 :body "No realm in WWW-Authenticate header"))
     (let* ((url (format nil "~a?service=~a~@[&scope=~a~]"
-                        realm (or service "") scope))
+                        realm
+                        (url-encode (or service ""))
+                        (when scope (url-encode scope))))
            (headers (when (and auth (auth-config-username auth))
                       (list (cons "Authorization"
                                   (format nil "Basic ~a"

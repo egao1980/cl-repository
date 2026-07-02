@@ -14,6 +14,7 @@
            #:digest-hex
            #:make-oci-digest
            #:compute-digest
+           #:compute-file-digest
            #:verify-digest
            #:parse-digest
            #:format-digest
@@ -43,6 +44,13 @@
          (result (ironclad:produce-digest digest-obj)))
     (declare (ignore _))
     (make-oci-digest algorithm (ironclad:byte-array-to-hex-string result))))
+
+(defun compute-file-digest (path &key (algorithm "sha256"))
+  "Compute a digest of the file at PATH by streaming its contents.
+   Returns a DIGEST instance.  Avoids loading the whole file into memory."
+  (make-oci-digest algorithm
+                   (ironclad:byte-array-to-hex-string
+                    (ironclad:digest-file (intern (string-upcase algorithm) :keyword) path))))
 
 (defun parse-digest (digest-string)
   "Parse a digest string like 'sha256:abcdef...' into a DIGEST instance."
