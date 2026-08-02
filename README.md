@@ -188,6 +188,14 @@ cl-repo add-overlay my-cffi-lib \
   (publish-overlay "https://ghcr.io" "my-org/my-project" "my-cffi-lib" "1.0.0" result))
 ```
 
+#### Reusable workflow (native overlays)
+
+For the parallel matrix → artifact → atomic publish pattern (grpc / cl-stack-ssl style), call:
+
+`egao1980/cl-repository/.github/workflows/publish-native-package.yml@main`
+
+See [docs/ci-native-publish.md](docs/ci-native-publish.md). Caller builds `native-<os>-<arch>` artifacts; the reusable job stages Lisp sources, packages overlays, and pushes to `ghcr.io/<owner>/cl-systems/<package>:<version>`.
+
 #### CI Example (GitHub Actions)
 
 ```yaml
