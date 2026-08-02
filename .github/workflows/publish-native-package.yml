@@ -207,14 +207,22 @@ jobs:
           sbcl --noinform --non-interactive \
             --load .cl-repository-ci/scripts/ci/publish-native-package.lisp
 
+          PROVIDES="${{ inputs.provides }}"
+          if [ -n "$PROVIDES" ]; then
+            PRIMARY_OCI_NAME="${PROVIDES%% *}"
+          else
+            PRIMARY_OCI_NAME="${{ inputs.package-name }}"
+          fi
+
           echo "REGISTRY=$REGISTRY" >> "$GITHUB_ENV"
           echo "NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
           echo "PUBLISH_VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+          echo "PRIMARY_OCI_NAME=$PRIMARY_OCI_NAME" >> "$GITHUB_ENV"
 
       - name: Verify published index
         env:
           GITHUB_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
         run: |
           oras manifest fetch \
-            "${REGISTRY}/${NAMESPACE}/${{ inputs.package-name }}:${PUBLISH_VERSION}" \
+            "${REGISTRY}/${NAMESPACE}/${PRIMARY_OCI_NAME}:${PUBLISH_VERSION}" \
             --registry-config <(echo "{\"auths\":{\"${REGISTRY}\":{\"username\":\"${{ github.actor }}\",\"password\":\"${GITHUB_TOKEN}\"}}}")

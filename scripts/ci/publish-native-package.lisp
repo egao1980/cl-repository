@@ -38,8 +38,12 @@
           collect (cons (namestring abs) (file-namestring abs)))))
 
 (let* ((name (env "PKG_NAME"))
-       (version (env "PKG_VERSION"))
-       (description (env "PKG_DESCRIPTION" ""))
+       (version (env "PKG_VERSION")))
+  (unless (and name (plusp (length name)))
+    (error "PKG_NAME required"))
+  (unless (and version (plusp (length version)))
+    (error "PKG_VERSION required"))
+  (let* ((description (env "PKG_DESCRIPTION" ""))
        (license (env "PKG_LICENSE" "MIT"))
        (depends-on (split-ws (env "PKG_DEPENDS_ON" "")))
        (provides (or (split-ws (env "PKG_PROVIDES" "")) (list name)))
@@ -84,10 +88,8 @@
                :cffi-libraries cffi-libs
                :overlays overlays))
        (result (cl-repository-packager/build-matrix:build-package spec)))
-  (unless name (error "PKG_NAME required"))
-  (unless version (error "PKG_VERSION required"))
-  (unless overlays (error "No overlays built from ~a" platforms-file))
-  (format t "~%Publishing ~a:~a overlays=~{~a~^,~}~%" name version platform-lines)
-  (cl-repository-packager/publisher:publish-package
-   reg namespace version result spec :skip-catalog skip-catalog)
-  (format t "Published ~a:~a to ~a/~a~%" name version registry-url namespace))
+    (unless overlays (error "No overlays built from ~a" platforms-file))
+    (format t "~%Publishing ~a:~a overlays=~{~a~^,~}~%" name version platform-lines)
+    (cl-repository-packager/publisher:publish-package
+     reg namespace version result spec :skip-catalog skip-catalog)
+    (format t "Published ~a:~a to ~a/~a~%" name version registry-url namespace)))
