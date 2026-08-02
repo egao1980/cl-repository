@@ -93,6 +93,21 @@
     (ok (registry-allowed-p "alex" "https://ghcr.io/v2"))
     (ok (not (registry-allowed-p "alex" "https://other.io/v2")))))
 
+(deftest test-registry-match-is-host-based-not-substring
+  "A rule host must match the URL host exactly -- not as a substring."
+  (with-clean-policy
+    (push (list :allow "alexandria" :from "ghcr.io") *source-rules*)
+    (ok (registry-allowed-p "alexandria" "https://ghcr.io/v2"))
+    (ok (not (registry-allowed-p "alexandria" "https://evil-ghcr.io.attacker.com/v2")))
+    (ok (not (registry-allowed-p "alexandria" "https://ghcr.io.attacker.com/v2")))))
+
+(deftest test-registry-match-bare-host-matches-any-port
+  (with-clean-policy
+    (push (list :allow "alexandria" :from "localhost") *source-rules*)
+    (ok (registry-allowed-p "alexandria" "http://localhost:5050"))
+    (ok (registry-allowed-p "alexandria" "http://localhost"))
+    (ok (not (registry-allowed-p "alexandria" "http://localhost.evil.com:5050")))))
+
 ;;; ql-allowed-by-rules-p
 
 (deftest test-ql-allowed-by-rules-no-rules

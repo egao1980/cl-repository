@@ -1,6 +1,7 @@
 (defpackage :cl-repository-client/digest-cache
   (:use :cl)
   (:import-from :cl-repository-client/installer #:systems-root)
+  (:import-from :cl-repository-client/atomic-file #:with-atomic-output-file #:read-sexp-file)
   (:export #:*installed-digests*
            #:digest-already-installed-p
            #:record-installed-digest
@@ -25,23 +26,20 @@
 
 (defun load-digest-cache ()
   "Load digest cache from disk."
-  (let ((path (cache-file-path)))
-    (when (probe-file path)
-      (handler-case
-          (with-open-file (s path :direction :input)
-            (let ((data (read s nil nil)))
-              (when (listp data)
-                (clrhash *installed-digests*)
-                (dolist (pair data)
-                  (setf (gethash (car pair) *installed-digests*) (cdr pair))))))
-        (error () nil)))))
+  (handler-case
+      (let ((data (read-sexp-file (cache-file-path))))
+        (when (listp data)
+          (clrhash *installed-digests*)
+          (dolist (pair data)
+            (setf (gethash (car pair) *installed-digests*) (cdr pair)))))
+    (error () nil)))
 
 (defun save-digest-cache ()
   "Persist digest cache to disk."
   (let ((path (cache-file-path)))
     (ensure-directories-exist path)
     (handler-case
-        (with-open-file (s path :direction :output :if-exists :supersede)
+        (with-atomic-output-file (s path)
           (let ((entries nil))
             (maphash (lambda (k v) (push (cons k v) entries)) *installed-digests*)
             (write entries :stream s :readably t)))

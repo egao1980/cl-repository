@@ -1,7 +1,8 @@
 (defpackage :cl-repository-client/integrity
   (:use :cl)
   (:import-from :cl-oci/runtime #:*quiet* #:msg)
-  (:import-from :cl-oci/digest #:compute-digest #:format-digest)
+  (:import-from :cl-oci/digest #:compute-file-digest #:format-digest)
+  (:import-from :cl-repository-client/atomic-file #:with-atomic-output-file #:read-sexp-file)
   (:export #:record-file-manifest
            #:verify-installed-system
            #:verify-all-systems
@@ -24,12 +25,8 @@
 ;;; --- Recording ---
 
 (defun hash-file (path)
-  "Compute SHA-256 digest of a file. Returns formatted digest string."
-  (let ((content (with-open-file (s path :direction :input :element-type '(unsigned-byte 8))
-                   (let ((buf (make-array (file-length s) :element-type '(unsigned-byte 8))))
-                     (read-sequence buf s)
-                     buf))))
-    (format-digest (compute-digest content))))
+  "Compute SHA-256 digest of a file (streaming). Returns formatted digest string."
+  (format-digest (compute-file-digest path)))
 
 (defun collect-files (directory)
   "Recursively collect all regular files under DIRECTORY.
@@ -57,7 +54,7 @@
          (entries (mapcar (lambda (rel)
                             (cons rel (hash-file (merge-pathnames rel dir))))
                           files)))
-    (with-open-file (s manifest-path :direction :output :if-exists :supersede)
+    (with-atomic-output-file (s manifest-path)
       (format s ";;; cl-repo file manifest -- auto-generated, do not edit~%")
       (let ((*print-case* :downcase))
         (prin1 `((:manifest-version . 1)
@@ -73,12 +70,9 @@
   "Load file manifest from INSTALL-DIR. Returns alist of (rel-path . digest) or NIL."
   (let ((path (merge-pathnames *manifest-filename*
                                (uiop:ensure-directory-pathname install-dir))))
-    (when (probe-file path)
-      (handler-case
-          (with-open-file (s path :direction :input)
-            (let ((data (read s nil nil)))
-              (cdr (assoc :files data))))
-        (error () nil)))))
+    (handler-case
+        (cdr (assoc :files (read-sexp-file path)))
+      (error () nil))))
 
 (defun verify-installed-system (install-dir &key name version)
   "Verify files in INSTALL-DIR against its manifest.

@@ -56,25 +56,34 @@
 (defun cmd-install (reference &key registry-url namespace
                                     with deny allow sources default-source)
   "Install a CL system. REFERENCE can be 'name', 'name:version', or 'registry/ns/name:ver'.
-   WITH, DENY, ALLOW, SOURCES, DEFAULT-SOURCE: see load-system for semantics."
-  (declare (ignore with))
+   WITH: extra references installed alongside; strings or (name :version v) forms.
+   DENY, ALLOW, SOURCES, DEFAULT-SOURCE: see load-system for semantics."
   (call-with-policy-overrides
    sources deny allow default-source
    (lambda ()
-     (multiple-value-bind (host repo tag) (parse-reference reference)
-       (let* ((reg-url (or host registry-url *default-registry*))
-              (full-repo (if host repo
-                             (format nil "~a/~a" (or namespace *default-namespace*) repo)))
-              ;; Extract system name from repo path
-              (sys-name (let ((slash (position #\/ full-repo :from-end t)))
-                          (if slash (subseq full-repo (1+ slash)) full-repo))))
-         (when (system-denied-p sys-name)
-           (error "System ~a is denied by source policy" sys-name))
-         (when (and reg-url (not (registry-allowed-p sys-name reg-url)))
-           (error "System ~a is not allowed from registry ~a" sys-name reg-url))
-         (install-system reg-url full-repo tag)
-         (unless *dry-run*
-           (configure-asdf-source-registry)))))))
+     (dolist (ref (cons reference (mapcar #'with-entry-reference with)))
+       (multiple-value-bind (host repo tag) (parse-reference ref)
+         (let* ((reg-url (or host registry-url *default-registry*))
+                (full-repo (if host repo
+                               (format nil "~a/~a" (or namespace *default-namespace*) repo)))
+                ;; Extract system name from repo path
+                (sys-name (let ((slash (position #\/ full-repo :from-end t)))
+                            (if slash (subseq full-repo (1+ slash)) full-repo))))
+           (when (system-denied-p sys-name)
+             (error "System ~a is denied by source policy" sys-name))
+           (when (and reg-url (not (registry-allowed-p sys-name reg-url)))
+             (error "System ~a is not allowed from registry ~a" sys-name reg-url))
+           (install-system reg-url full-repo tag)
+           (unless *dry-run*
+             (configure-asdf-source-registry))))))))
+
+(defun with-entry-reference (entry)
+  "Turn a :with entry (string or (name :version v)) into an install reference."
+  (etypecase entry
+    (string entry)
+    (cons (let ((name (string (first entry)))
+                (version (getf (rest entry) :version)))
+            (if version (format nil "~a:~a" name version) name)))))
 
 (defun cmd-list (&key remote)
   "List systems. Without REMOTE, lists locally installed. With REMOTE, queries catalog referrers."

@@ -105,18 +105,26 @@
                        (build-result-index-json build-result)
                        :content-type +oci-image-index-v1+)
         (msg " done~%")))
-    ;; 5. Create/update system-name anchors + referrers
+    ;; 5. Create/update system-name anchors + referrers.
+    ;; Non-fatal: the package itself is fully published at this point.  On
+    ;; GHCR the shared <namespace>/catalog package is writable only by the
+    ;; repo whose workflow first created it; other repos' GITHUB_TOKENs get
+    ;; 403 here unless granted access in the package's Actions settings.
     (unless skip-catalog
-      (let ((root-digest (ensure-root-anchor reg namespace)))
-        (dolist (system-name provides)
-          (let* ((sys-repo (format nil "~a/~a" namespace system-name))
-                 (anchor-digest (ensure-system-name-anchor reg sys-repo system-name canonical
-                                                           (or (package-spec-version spec) tag))))
-            ;; Push provider referrer into system-name repo
-            (push-provider-referrer reg sys-repo anchor-digest spec tag)
-            ;; Push catalog referrer into per-project catalog repo
-            (push-catalog-referrer reg namespace root-digest system-name
-                                   (or (package-spec-version spec) tag))))))
+      (handler-case
+          (let ((root-digest (ensure-root-anchor reg namespace)))
+            (dolist (system-name provides)
+              (let* ((sys-repo (format nil "~a/~a" namespace system-name))
+                     (anchor-digest (ensure-system-name-anchor reg sys-repo system-name canonical
+                                                               (or (package-spec-version spec) tag))))
+                ;; Push provider referrer into system-name repo
+                (push-provider-referrer reg sys-repo anchor-digest spec tag)
+                ;; Push catalog referrer into per-project catalog repo
+                (push-catalog-referrer reg namespace root-digest system-name
+                                       (or (package-spec-version spec) tag)))))
+        (registry-error (e)
+          (msg "~&  Warning: catalog/anchor publishing failed (~a); package itself is published.~%"
+               e))))
     (msg "~&Published ~a:~a (digest: ~a, provides: ~{~a~^, ~})~%"
          primary-repo tag (build-result-index-digest build-result) provides)
     (build-result-index-digest build-result)))

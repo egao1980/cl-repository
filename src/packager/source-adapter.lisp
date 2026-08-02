@@ -63,14 +63,19 @@
     (format nil "https://github.com/~a.git" normalized)))
 
 (defun make-temp-source-root ()
-  "Create a unique temp directory for source checkout."
-  (let* ((stamp (get-universal-time))
-         (token (random 1000000))
-         (root (uiop:ensure-directory-pathname
-                (merge-pathnames (format nil "cl-repo-source-~a-~a/" stamp token)
-                                 (uiop:temporary-directory)))))
-    (ensure-directories-exist root)
-    root))
+  "Create a unique temp directory for source checkout.
+   Uses a freshly seeded random state so parallel publishes started in the
+   same second (or from images with identical *random-state*) cannot collide;
+   retries on the (unlikely) existing-directory case."
+  (loop
+    (let* ((stamp (get-universal-time))
+           (token (random most-positive-fixnum (make-random-state t)))
+           (root (uiop:ensure-directory-pathname
+                  (merge-pathnames (format nil "cl-repo-source-~a-~a/" stamp token)
+                                   (uiop:temporary-directory)))))
+      (unless (uiop:directory-exists-p root)
+        (ensure-directories-exist root)
+        (return root)))))
 
 (defun trim-output (value)
   "Trim whitespace from command output VALUE."

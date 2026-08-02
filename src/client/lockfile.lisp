@@ -1,5 +1,6 @@
 (defpackage :cl-repository-client/lockfile
   (:use :cl)
+  (:import-from :cl-repository-client/atomic-file #:with-atomic-output-file #:read-sexp-file)
   (:export #:lockfile-entry
            #:lockfile-entry-system
            #:lockfile-entry-version
@@ -47,15 +48,11 @@
 
 (defun read-lockfile (&optional (path (lockfile-path)))
   "Read a lockfile, returning a list of LOCKFILE-ENTRY objects."
-  (if (probe-file path)
-      (with-open-file (s path :direction :input)
-        (let ((data (read s nil nil)))
-          (mapcar #'plist-to-entry data)))
-      nil))
+  (mapcar #'plist-to-entry (read-sexp-file path)))
 
 (defun write-lockfile (entries &optional (path (lockfile-path)))
   "Write a lockfile from a list of LOCKFILE-ENTRY objects."
-  (with-open-file (s path :direction :output :if-exists :supersede)
+  (with-atomic-output-file (s path)
     (format s ";;; cl-repo.lock -- auto-generated, do not edit~%")
     (let ((*print-case* :downcase))
       (prin1 (mapcar #'entry-to-plist entries) s))

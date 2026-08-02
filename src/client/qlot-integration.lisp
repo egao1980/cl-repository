@@ -203,11 +203,12 @@ Supports line-oriented and simple s-expression lock files."
         (values (nreverse entries) resolved-path)))
     ;; Pass 2: s-expression lock format
     (with-open-file (stream resolved-path :direction :input)
-      (loop for form = (read stream nil :eof)
-            until (eq form :eof)
-            do (let ((entry (maybe-entry-from-lock-form form)))
-                 (when entry
-                   (push entry entries)))))
+      (let ((*read-eval* nil))
+        (loop for form = (read stream nil :eof)
+              until (eq form :eof)
+              do (let ((entry (maybe-entry-from-lock-form form)))
+                   (when entry
+                     (push entry entries))))))
     (if entries
         (values (nreverse entries) resolved-path)
         (error "Could not parse qlfile.lock format at ~a" resolved-path))))
