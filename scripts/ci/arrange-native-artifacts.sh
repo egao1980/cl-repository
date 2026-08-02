@@ -30,20 +30,18 @@ for dir in "$ART"/native-*; do
   target="lib/${os}-${arch}"
   mkdir -p "$target"
 
-  if [ -d "$dir/lib" ] || [ -d "$dir/grovel" ]; then
-    if [ -d "$dir/lib" ]; then
-      cp -a "$dir/lib"/. "$target/"
-    fi
-    if [ -d "$dir/grovel" ]; then
-      gdest="grovel/${os}-${arch}"
-      mkdir -p "$gdest"
-      cp -a "$dir/grovel"/. "$gdest/"
-    fi
+  if [ -d "$dir/lib" ]; then
+    cp -a "$dir/lib"/. "$target/"
   else
     cp -a "$dir"/. "$target/"
   fi
+  if [ -d "$dir/grovel" ]; then
+    gdest="grovel/${os}-${arch}"
+    mkdir -p "$gdest"
+    cp -a "$dir/grovel"/. "$gdest/"
+  fi
 
-  if [ -z "$(find "$target" -type f 2>/dev/null | head -1)" ]; then
+  if [ -z "$(find "$target" \( -type f -o -type l \) 2>/dev/null | head -1)" ]; then
     echo "error: no native files under ${target} (from ${dir})" >&2
     exit 1
   fi
