@@ -85,12 +85,21 @@ jobs:
 
 | Script | Role |
 |--------|------|
-| `scripts/ci/arrange-native-artifacts.sh` | `native-*` → `lib/<os>-<arch>/` + platforms.txt |
+| `scripts/ci/arrange-native-artifacts.sh` | `native-*` → `lib/<os>-<arch>/` (+ `grovel/` if nested) + platforms.txt |
 | `scripts/ci/stage-lisp-source.sh` | copy `source-paths` into staging |
-| `scripts/ci/publish-native-package.lisp` | build-package + publish-package |
+| `scripts/ci/publish-native-package.lisp` | build-package + publish-package (`cffi-grovel-output` when `grovel/` present) |
 
 ## Contract
 
 - Artifact names **must** be `native-<os>-<arch>`
 - Overlay file lists use **absolute** paths from arranged `lib/` (via `uiop:directory-files`) so the source tarball stays Lisp-only
 - Publish uses `:skip-catalog t` by default (cross-repo catalog 403)
+
+### Artifact layouts
+
+| Layout | Contents of `native-<os>-<arch>/` | Arranged as |
+|--------|-----------------------------------|-------------|
+| Flat | `libfoo.so` … | `lib/<os>-<arch>/` → role `native-library` |
+| Nested | `lib/` + `grovel/` | `lib/<os>-<arch>/` → `native-library`; `grovel/<os>-<arch>/` → `cffi-grovel-output` |
+
+Nested is required for packages that ship pre-groveled CFFI (event backends). Flat remains the OpenSSL / pure-native path.
