@@ -30,9 +30,11 @@ for dir in "$ART"/native-*; do
   target="lib/${os}-${arch}"
   mkdir -p "$target"
 
+  # Nested: lib/ and optional grovel/. Flat: files at artifact root (no lib/).
+  # Do not flatten grovel/ into native lib/ when lib/ is absent.
   if [ -d "$dir/lib" ]; then
     cp -a "$dir/lib"/. "$target/"
-  else
+  elif [ ! -d "$dir/grovel" ]; then
     cp -a "$dir"/. "$target/"
   fi
   if [ -d "$dir/grovel" ]; then
