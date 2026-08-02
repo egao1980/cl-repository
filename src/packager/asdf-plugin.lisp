@@ -14,13 +14,24 @@
 
 (defun normalize-dep (dep)
   "Normalize an ASDF dependency spec, preserving version constraints.
-   Plain deps -> string. (:version \"name\" \"ver\") -> (\"name\" . \"ver\")."
-  (etypecase dep
-    (string (string-downcase dep))
-    (symbol (string-downcase (symbol-name dep)))
-    (cons (if (and (eq (first dep) :version) (>= (length dep) 3))
-              (cons (string-downcase (string (second dep))) (string (third dep)))
-              (string-downcase (string (second dep)))))))
+   Plain deps -> string. (:version \"name\" \"ver\") -> (\"name\" . \"ver\").
+   (:feature EXPR DEP) -> DEP when EXPR is true in *features*, else NIL.
+   Callers should REMOVE NIL from the result list."
+  (cond
+    ((stringp dep) (string-downcase dep))
+    ((symbolp dep) (string-downcase (symbol-name dep)))
+    ((and (consp dep) (eq (first dep) :version) (>= (length dep) 3))
+     (cons (normalize-dep (second dep)) (string (third dep))))
+    ((and (consp dep) (eq (first dep) :feature) (>= (length dep) 3))
+     (when (uiop:featurep (second dep))
+       (normalize-dep (third dep))))
+    ((and (consp dep) (eq (first dep) :require))
+     nil)
+    ((consp dep)
+     (normalize-dep (or (find-if #'stringp dep)
+                        (find-if #'symbolp dep)
+                        (second dep))))
+    (t nil)))
 
 (defun system-cl-repo-properties (system)
   "Extract :cl-repo value from SYSTEM's :properties.
@@ -76,7 +87,8 @@
                    :license (asdf:system-licence system)
                    :description (asdf:system-description system)
                    :author (asdf:system-author system)
-                   :depends-on (mapcar #'normalize-dep (asdf:system-depends-on system))
+                   :depends-on (remove nil (mapcar #'normalize-dep
+                                                   (asdf:system-depends-on system)))
                    :provides provides
                    :cffi-libraries (getf cl-repo :cffi-libraries)
                    :overlays (mapcar #'parse-overlay-spec
