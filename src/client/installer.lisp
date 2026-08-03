@@ -299,10 +299,17 @@
               (handler-case
                   (progn
                     (ensure-directories-exist *systems-root*)
-                    ;; Use uiop for portable symlink creation
-                    #+sbcl (sb-posix:symlink (namestring canonical-dir) (namestring link-path))
+                    ;; Reader must not see sb-posix:symlink on Windows SBCL (symbol absent).
+                    #+(and sbcl unix)
+                    (sb-posix:symlink (namestring canonical-dir) (namestring link-path))
                     #+(and (not sbcl) unix)
                     (uiop:run-program (list "ln" "-s" (namestring canonical-dir) (namestring link-path)))
+                    #+windows
+                    (uiop:run-program
+                     (list "cmd" "/c" "mklink" "/J"
+                           (uiop:native-namestring link-path)
+                           (uiop:native-namestring canonical-dir))
+                     :error-output t)
                     (msg "~&  Symlink ~a -> ~a~%" provided canonical-name))
                 (error (e)
                   (msg "~&  Warning: could not create symlink ~a: ~a~%" provided e))))))))))
