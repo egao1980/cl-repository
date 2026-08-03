@@ -284,6 +284,15 @@
          (extract-tar-stream decompressed target-dir :strip-prefix prefix)
       (close decompressed))))
 
+(defun make-directory-link (link-path target-dir)
+  "Create a directory symlink/junction LINK-PATH -> TARGET-DIR (portable)."
+  (let ((link (uiop:native-namestring link-path))
+        (target (uiop:native-namestring target-dir)))
+    #+windows
+    (uiop:run-program (list "cmd" "/c" "mklink" "/J" link target) :error-output t)
+    #-windows
+    (uiop:run-program (list "ln" "-s" target link) :error-output t)))
+
 (defun create-provides-symlinks (canonical-name provides)
   "Create symlinks for provided system names that differ from the canonical name.
    E.g., systems/cffi-toolchain -> systems/cffi"
@@ -299,17 +308,7 @@
               (handler-case
                   (progn
                     (ensure-directories-exist *systems-root*)
-                    ;; Reader must not see sb-posix:symlink on Windows SBCL (symbol absent).
-                    #+(and sbcl unix)
-                    (sb-posix:symlink (namestring canonical-dir) (namestring link-path))
-                    #+(and (not sbcl) unix)
-                    (uiop:run-program (list "ln" "-s" (namestring canonical-dir) (namestring link-path)))
-                    #+windows
-                    (uiop:run-program
-                     (list "cmd" "/c" "mklink" "/J"
-                           (uiop:native-namestring link-path)
-                           (uiop:native-namestring canonical-dir))
-                     :error-output t)
+                    (make-directory-link link-path canonical-dir)
                     (msg "~&  Symlink ~a -> ~a~%" provided canonical-name))
                 (error (e)
                   (msg "~&  Warning: could not create symlink ~a: ~a~%" provided e))))))))))
