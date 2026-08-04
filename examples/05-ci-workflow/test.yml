@@ -17,7 +17,7 @@ jobs:
           - 5050:5000
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Roswell
         uses: 40ants/setup-lisp@v4

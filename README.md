@@ -203,7 +203,7 @@ jobs:
   publish-source:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cl-repo publish my-cffi-lib --registry ghcr.io --namespace "${{ github.repository }}"
 
   add-overlay:
@@ -221,7 +221,7 @@ jobs:
             lib: lib/darwin-arm64/libfoo.dylib
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: make native  # build the .so/.dylib
       - run: |
           cl-repo add-overlay my-cffi-lib \

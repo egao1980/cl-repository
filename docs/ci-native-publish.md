@@ -39,13 +39,13 @@ jobs:
             runner: macos-latest
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build natives
         run: ./scripts/build-natives.sh   # → lib/${{ matrix.os }}-${{ matrix.arch }}/
       - run: |
           mkdir -p native-bundle
           cp -a "lib/${{ matrix.os }}-${{ matrix.arch }}/." native-bundle/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: native-${{ matrix.os }}-${{ matrix.arch }}
           path: native-bundle/
