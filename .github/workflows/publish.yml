@@ -17,7 +17,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Roswell
         run: |
@@ -62,7 +62,7 @@ jobs:
           qlot exec ros -l /tmp/publish.lisp
 
       - name: Install ORAS
-        uses: oras-project/setup-oras@v1
+        uses: oras-project/setup-oras@v2
 
       - name: Verify published artifacts
         run: |

@@ -29,7 +29,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Roswell
         run: |
@@ -118,7 +118,7 @@ jobs:
 
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build libcalc
         run: make -C libcalc/
@@ -188,7 +188,7 @@ jobs:
   #   permissions:
   #     packages: write
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v5
   #     - name: Build libcalc
   #       run: make -C libcalc/
   #     - name: Add ABI-specific overlay
