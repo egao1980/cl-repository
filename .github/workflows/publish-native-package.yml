@@ -9,14 +9,14 @@
 #     with:
 #       package-name: cl-stack-ssl
 #       version: 3.4.1
-#       depends-on: cl+ssl
-#       cffi-libraries: libssl libcrypto
+#       # depends-on / cffi-libraries / provides optional — prefer .asd :cl-repo
 #       source-paths: |
 #         cl-stack-ssl.asd
 #         src
 #         LICENSE
 #         README.md
 #         NOTICE
+#       packager-tag: "0.10.0"
 #     secrets: inherit
 #     permissions:
 #       packages: write
@@ -56,17 +56,17 @@ on:
         type: string
         default: MIT
       depends-on:
-        description: Space-separated ASDF dependencies
+        description: Optional override; empty → .asd :depends-on via auto-package-spec
         required: false
         type: string
         default: ""
       provides:
-        description: Space-separated provides (default package-name)
+        description: Optional override; empty → .asd :cl-repo :provides
         required: false
         type: string
         default: ""
       cffi-libraries:
-        description: Space-separated cffi library labels for config blob
+        description: Optional override; empty → .asd :cl-repo :cffi-libraries
         required: false
         type: string
         default: ""
@@ -78,7 +78,7 @@ on:
         description: cl-repository-packager OCI tag
         required: false
         type: string
-        default: "0.8.0"
+        default: "0.10.0"
       skip-catalog:
         description: Skip shared namespace catalog write
         required: false
@@ -89,6 +89,11 @@ on:
         required: false
         type: string
         default: native-artifacts
+      source-overlay-artifact:
+        description: Optional artifact to unpack over workspace after checkout (e.g. synced-source)
+        required: false
+        type: string
+        default: ""
       ci-ref:
         description: cl-repository git ref for scripts/ci helpers
         required: false
@@ -109,6 +114,13 @@ jobs:
     steps:
       - name: Checkout caller repository
         uses: actions/checkout@v4
+
+      - name: Apply source overlay artifact
+        if: inputs.source-overlay-artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.source-overlay-artifact }}
+          path: ${{ github.workspace }}
 
       - name: Checkout cl-repository CI scripts
         uses: actions/checkout@v4

@@ -2,10 +2,12 @@
 
 Workflow: [`.github/workflows/publish-native-package.yml`](../.github/workflows/publish-native-package.yml)
 
-Formalizes the pattern used by `grpc` / `cl-protobufs` / `cl-stack-ssl`:
+Formalizes the pattern used by `cl-stack-brotli` / `cl-stack-zstd` / `event-backend-*` / `cl-stack-ssl`:
 
 1. **Caller** builds natives on a matrix and uploads artifacts `native-<os>-<arch>`
-2. **This workflow** arranges `lib/<os>-<arch>/`, stages a Lisp-only source tree, runs `cl-repository-packager`, publishes to `ghcr.io/<owner>/cl-systems/<package>:<version>`, verifies with `oras`
+2. **This workflow** arranges `lib/<os>-<arch>/`, stages a Lisp-only source tree, runs `auto-package-spec` from the `.asd` + artifact overlays, publishes to `ghcr.io/<owner>/cl-systems/<package>:<version>`, verifies with `oras`
+
+Packaging truth is the **`.asd`** (`:version` / `:depends-on` / `:properties (:cl-repo …)`). YAML `depends-on` / `cffi-libraries` / `provides` are optional overrides only.
 
 ## Caller skeleton
 
@@ -57,9 +59,7 @@ jobs:
     with:
       package-name: my-lib
       version: ${{ inputs.version || github.ref_name }}  # strip v* in a prior step if needed
-      description: "…"
-      depends-on: cffi
-      cffi-libraries: libfoo
+      packager-tag: "0.10.0"
       source-paths: |
         my-lib.asd
         src
@@ -68,16 +68,19 @@ jobs:
     secrets: inherit
 ```
 
+Declare `:cffi-libraries` / `:overlays` / `:provides` under `:properties (:cl-repo …)` in `my-lib.asd`. Overlay relative paths in the `.asd` are inventory for docs/consumers; CI replaces them with absolute artifact paths at publish time.
+
 ## Inputs (summary)
 
 | Input | Required | Notes |
 |-------|----------|-------|
 | `package-name` | yes | OCI repo + ASDF name |
-| `version` | yes | tag |
+| `version` | yes | tag (overrides `.asd` `:version` when set) |
 | `source-paths` | yes | Lisp-only files/dirs (natives stay in artifacts) |
-| `depends-on` / `cffi-libraries` / `provides` | no | space-separated |
+| `depends-on` / `cffi-libraries` / `provides` / `description` / `license` | no | optional overrides; prefer `.asd` |
 | `namespace` | no | default `<owner>/cl-systems` |
-| `packager-tag` | no | default `0.8.0` |
+| `packager-tag` | no | default `0.10.0` |
+| `source-overlay-artifact` | no | unpack over workspace after checkout (e.g. version-synced `.asd`) |
 | `skip-catalog` | no | default `true` |
 | `ci-ref` | no | cl-repository ref for `scripts/ci` (default `main`) |
 
@@ -87,7 +90,7 @@ jobs:
 |--------|------|
 | `scripts/ci/arrange-native-artifacts.sh` | `native-*` → `lib/<os>-<arch>/` (+ `grovel/` if nested) + platforms.txt |
 | `scripts/ci/stage-lisp-source.sh` | copy `source-paths` into staging |
-| `scripts/ci/publish-native-package.lisp` | build-package + publish-package (`cffi-grovel-output` when `grovel/` present) |
+| `scripts/ci/publish-native-package.lisp` | `auto-package-spec` + artifact overlays → publish (`cffi-grovel-output` when `grovel/` present) |
 
 ## Contract
 
