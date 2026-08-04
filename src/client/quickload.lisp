@@ -40,6 +40,9 @@
   (:import-from :babel #:octets-to-string)
   (:export #:*registries*
            #:add-registry
+           #:ensure-systems
+           #:ensure-system-dependencies
+           #:installed-system-version
            #:load-system))
 (in-package :cl-repository-client/quickload)
 
@@ -223,7 +226,136 @@
                  dep (source-for dep))))
       loaded)))
 
-;;; Main entry point
+;;; Main entry points
+
+(defun ensure-systems (systems &key silent version force
+                                    with sources deny allow default-source
+                                    config-path)
+  "Resolve and install SYSTEMS from OCI registries, then Quicklisp for leftovers.
+   Does **not** ASDF-load — use for CI install before overlays are wired.
+   Same keyword args as LOAD-SYSTEM (SOURCES/DENY/ALLOW/DEFAULT-SOURCE, WITH, …).
+
+   Resolution order per system: configured registries (e.g. ghcr.io packages
+   published from GitHub via cl-stack-systems) → QL fallback when policy allows."
+  (ensure-config-loaded config-path)
+  (call-with-policy-overrides
+   sources deny allow default-source
+   (lambda ()
+     (let* ((*quiet* (or *quiet* silent))
+            (system-list (mapcar (lambda (s) (string-downcase (string s)))
+                                 (if (listp systems) systems (list systems)))))
+       (ensure-snapshot)
+       (load-digest-cache)
+       (let ((plan (compute-install-plan system-list :version version :force force
+                                                     :with with)))
+         (dolist (entry plan)
+           (let ((name (car entry))
+                 (ver (cdr entry)))
+             (unless (or (system-denied-p name)
+                         (and (not force)
+                              (system-already-installed-p name)
+                              (let ((iv (installed-system-version name)))
+                                (and iv (string= iv (princ-to-string ver))))))
+               (let ((result (ensure-system-installed name :version ver)))
+                 (when result
+                   (configure-asdf-source-registry)
+                   (record-lockfile-entry result)
+                   (when (install-result-index-digest result)
+                     (record-installed-digest (install-result-index-digest result)
+                                              (install-result-path result))))))))
+         ;; QL only after all OCI pulls — loading cffi/cl+ssl mid-flight breaks HTTPS.
+         (when *missing-deps-accumulator*
+           (try-quicklisp-fallback *missing-deps-accumulator*))
+         (configure-asdf-source-registry)
+         system-list)))))
+
+(defun asdf-dep-name (dep)
+  "Normalize an ASDF :depends-on entry to a downcased system name, or NIL if skipped."
+  (cond
+    ((stringp dep) (string-downcase dep))
+    ((and (symbolp dep) (not (keywordp dep)))
+     (string-downcase (symbol-name dep)))
+    ((and (consp dep) (eq (first dep) :version) (>= (length dep) 2))
+     (asdf-dep-name (second dep)))
+    ((and (consp dep) (eq (first dep) :feature) (>= (length dep) 3))
+     (when (uiop:featurep (second dep))
+       (asdf-dep-name (third dep))))
+    ((and (consp dep) (eq (first dep) :require))
+     nil)
+    (t nil)))
+
+(defun system-direct-deps (system)
+  "Direct ASDF dependency names for SYSTEM (string or asdf:system)."
+  (let ((sys (if (typep system 'asdf:system)
+                 system
+                 (asdf:find-system system nil))))
+    (when sys
+      (remove nil (mapcar #'asdf-dep-name (asdf:system-depends-on sys))))))
+
+(defun collect-missing-asdf-deps (local-roots &optional extras)
+  "Walk ASDF :depends-on from LOCAL-ROOTS (findable systems). Return names that
+   are not yet findable via ASDF — those need OCI/QL install. EXTRAS are always
+   considered (CI-only systems). Does not return LOCAL-ROOTS themselves."
+  (let ((seen (make-hash-table :test #'equal))
+        (local (mapcar (lambda (s) (string-downcase (string s))) local-roots))
+        (missing '()))
+    (labels ((local-p (n) (member n local :test #'string=))
+             (walk (name)
+               (let ((n (string-downcase (string name))))
+                 (unless (gethash n seen)
+                   (setf (gethash n seen) t)
+                   (cond
+                     ((local-p n)
+                      (let ((sys (asdf:find-system n nil)))
+                        (when sys
+                          (dolist (d (system-direct-deps sys))
+                            (walk d)))))
+                     ((asdf:find-system n nil)
+                      (dolist (d (system-direct-deps n))
+                        (walk d)))
+                     (t
+                      (pushnew n missing :test #'string=)))))))
+      (dolist (r local) (walk r))
+      (dolist (e (mapcar (lambda (s) (string-downcase (string s)))
+                         (uiop:ensure-list extras)))
+        (walk e))
+      (nreverse missing))))
+
+(defun ensure-system-dependencies (system-name &key (also-tests t) with silent version force
+                                                    sources deny allow default-source
+                                                    config-path)
+  "Install dependency closure for a **local** SYSTEM-NAME (checkout on CL_SOURCE_REGISTRY).
+
+   Walks ASDF :depends-on (transitively while systems are findable). Missing names
+   go through ENSURE-SYSTEMS (OCI registries → QL fallback). Does not install or
+   ASDF-load SYSTEM-NAME itself.
+
+   ALSO-TESTS (default T): also walk SYSTEM-NAME/tests when that system exists.
+   WITH: extra CI-only systems not in the .asd (e.g. event-backend-libuv, cl-stack-ssl)."
+  (let* ((name (string-downcase (string system-name)))
+         (sys (or (asdf:find-system name nil)
+                  (error "ensure-system-dependencies: system ~a not findable via ASDF ~
+(is the checkout on CL_SOURCE_REGISTRY?)" name)))
+         (test-name (format nil "~a/tests" name))
+         (local-roots (list name))
+         (extras (mapcar (lambda (s) (string-downcase (string s)))
+                         (uiop:ensure-list with))))
+    (declare (ignore sys))
+    (when also-tests
+      (let ((ts (if (stringp also-tests)
+                    (string-downcase also-tests)
+                    test-name)))
+        (when (asdf:find-system ts nil)
+          (push ts local-roots))))
+    (let ((targets (collect-missing-asdf-deps local-roots extras)))
+      (msg "~&; cl-repo: ensure deps for local ~a → ~{~a~^, ~}~%" name targets)
+      (when targets
+        (ensure-systems targets
+                        :silent silent :version version :force force
+                        :sources sources :deny deny :allow allow
+                        :default-source default-source
+                        :config-path config-path)))
+    (values)))
 
 (defun load-system (systems &key silent version force
                                   with sources deny allow default-source
@@ -244,48 +376,24 @@
      (cl-repo:load-system \"alexandria\")
      (cl-repo:load-system \"grpc\" :with '(\"rove\") :sources '((\"float-features\" :ql)))
      (cl-repo:load-system \"my-app\" :force t :deny '(\"bad-lib\"))"
-  (ensure-config-loaded config-path)
-  (call-with-policy-overrides
-   sources deny allow default-source
-   (lambda ()
-     (let* ((*quiet* (or *quiet* silent))
-            (system-list (if (listp systems) systems (list systems))))
-       (ensure-snapshot)
-       (load-digest-cache)
-       ;; Phase 1: Build install plan via SAT solver
-       (let ((plan (compute-install-plan system-list :version version :force force
-                                                     :with with)))
-         ;; Phase 2: Install everything in the plan
-         (dolist (entry plan)
-           (let ((name (car entry))
-                 (ver (cdr entry)))
-             (unless (or (system-denied-p name)
-                         (and (not force)
-                              (system-already-installed-p name)
-                              (let ((iv (installed-system-version name)))
-                                (and iv (string= iv ver)))))
-               (let ((result (ensure-system-installed name :version ver)))
-                 (when result
-                   (configure-asdf-source-registry)
-                   (record-lockfile-entry result)
-                   (when (install-result-index-digest result)
-                     (record-installed-digest (install-result-index-digest result)
-                                              (install-result-path result))))))))
-         ;; Phase 2.5: Quicklisp fallback for missing transitive deps
-         (when *missing-deps-accumulator*
-           (try-quicklisp-fallback *missing-deps-accumulator*))
-         ;; Phase 3: Load via ASDF
-         (configure-asdf-source-registry)
+  (let ((system-list (ensure-systems systems
+                                     :silent silent :version version :force force
+                                     :with with :sources sources :deny deny
+                                     :allow allow :default-source default-source
+                                     :config-path config-path)))
+    (call-with-policy-overrides
+     sources deny allow default-source
+     (lambda ()
+       (let ((*quiet* (or *quiet* silent)))
          (load-system-init-files)
          (dolist (sys system-list)
-           (let ((name (string-downcase (string sys))))
-             (msg "~&; cl-repo: loading ~a~%" name)
-             (handler-case (asdf:load-system name)
-               (error (e)
-                 (msg "~&; cl-repo: failed to load ~a: ~a~%" name e))))))
-       (if (= (length system-list) 1)
-           (first system-list)
-           system-list)))))
+           (msg "~&; cl-repo: loading ~a~%" sys)
+           (handler-case (asdf:load-system sys)
+             (error (e)
+               (msg "~&; cl-repo: failed to load ~a: ~a~%" sys e)))))))
+    (if (= (length system-list) 1)
+        (first system-list)
+        system-list)))
 
 (defun compute-install-plan (system-names &key version force with)
   "Use SAT solver to compute full transitive install plan.
