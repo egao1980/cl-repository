@@ -23,3 +23,13 @@
     (ok (consp result))
     (ok (string= (car result) "babel"))
     (ok (string= (cdr result) "0.5"))))
+
+(deftest test-normalize-feature-simple
+  (ok (string= (normalize-dep '(:feature :win32 "winhttp")) "winhttp")))
+
+(deftest test-normalize-feature-or-expression
+  (ok (string= (normalize-dep '(:feature (:or :win32 :windows :mswindows) "winhttp"))
+               "winhttp")))
+
+(deftest test-normalize-require-dropped
+  (ok (null (normalize-dep '(:require :sb-posix)))))

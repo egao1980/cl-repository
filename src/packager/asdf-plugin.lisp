@@ -14,13 +14,23 @@
 
 (defun normalize-dep (dep)
   "Normalize an ASDF dependency spec, preserving version constraints.
-   Plain deps -> string. (:version \"name\" \"ver\") -> (\"name\" . \"ver\")."
+   Plain deps -> string. (:version \"name\" \"ver\") -> (\"name\" . \"ver\").
+   (:feature EXPR DEP) -> normalize DEP (feature expression ignored for metadata).
+   (:require MOD) -> NIL (dropped by callers that remove NIL)."
   (etypecase dep
     (string (string-downcase dep))
     (symbol (string-downcase (symbol-name dep)))
-    (cons (if (and (eq (first dep) :version) (>= (length dep) 3))
-              (cons (string-downcase (string (second dep))) (string (third dep)))
-              (string-downcase (string (second dep)))))))
+    (cons
+     (case (first dep)
+       (:version
+        (cons (string-downcase (string (second dep))) (string (third dep))))
+       (:feature
+        ;; (:feature <expr> <dep>) — expr may be a list, e.g. (:or :win32 …)
+        (normalize-dep (third dep)))
+       (:require
+        nil)
+       (t
+        (string-downcase (string (second dep))))))))
 
 (defun system-cl-repo-properties (system)
   "Extract :cl-repo value from SYSTEM's :properties.
@@ -32,9 +42,22 @@
       (cons (cdr (assoc :cl-repo props :test #'eq)))
       (null nil))))
 
+(defun test-system-name-p (name)
+  "True for ASDF names that look like test systems (not primary OCI packages)."
+  (let* ((n (string-downcase name))
+         (len (length n)))
+    (flet ((suffixp (suffix)
+             (let ((slen (length suffix)))
+               (and (>= len slen)
+                    (string= n suffix :start1 (- len slen))))))
+      (or (search "/tests" n)
+          (search "/test" n)
+          (suffixp "-test")
+          (suffixp "-tests")))))
+
 (defun discover-provided-systems (source-dir)
   "Scan SOURCE-DIR for top-level *.asd files and extract system names from defsystem forms.
-   Returns a deduplicated list of system name strings."
+   Returns a deduplicated list of system name strings (test systems omitted)."
   (let ((names nil)
         (*read-eval* nil)
         (*package* (find-package :cl-user)))
@@ -51,7 +74,8 @@
                       do (let ((name (etypecase (second form)
                                        (string (second form))
                                        (symbol (string-downcase (symbol-name (second form)))))))
-                           (pushnew name names :test #'string=)))))
+                           (unless (test-system-name-p name)
+                             (pushnew name names :test #'string=))))))
         (error () nil)))
     (nreverse names)))
 
@@ -76,7 +100,7 @@
                    :license (asdf:system-licence system)
                    :description (asdf:system-description system)
                    :author (asdf:system-author system)
-                   :depends-on (mapcar #'normalize-dep (asdf:system-depends-on system))
+                   :depends-on (remove nil (mapcar #'normalize-dep (asdf:system-depends-on system)))
                    :provides provides
                    :cffi-libraries (getf cl-repo :cffi-libraries)
                    :overlays (mapcar #'parse-overlay-spec
