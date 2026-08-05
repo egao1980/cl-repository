@@ -15,7 +15,7 @@ on:
 env:
   REGISTRY: ghcr.io
   NAMESPACE: ${{ github.repository }}
-  SBCL_VERSION: 2.4.11
+  SBCL_VERSION: 2.6.7
 
 jobs:
   # ── Build native library on each platform ───────────────────────────

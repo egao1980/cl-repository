@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  SBCL_VERSION: 2.4.11
+  SBCL_VERSION: 2.6.7
 
 jobs:
   docs-localization:
