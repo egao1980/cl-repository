@@ -55,6 +55,23 @@
           (suffixp "-test")
           (suffixp "-tests")))))
 
+(defun normalize-metadata-string (value)
+  "Coerce ASDF metadata (author/description) to a single-line string or NIL.
+   Lists (common for :author) become comma-separated; required because OCI
+   annotation values must be strings (GHCR rejects JSON arrays → MANIFEST_INVALID)."
+  (cond
+    ((null value) nil)
+    ((stringp value)
+     (let ((s (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
+       (when (plusp (length s))
+         (with-output-to-string (out)
+           (loop for c across s
+                 do (write-char (if (member c '(#\Newline #\Return #\Tab)) #\Space c)
+                                out))))))
+    ((and (consp value) (every #'stringp value))
+     (normalize-metadata-string (format nil "~{~a~^, ~}" value)))
+    (t (normalize-metadata-string (princ-to-string value)))))
+
 (defun discover-provided-systems (source-dir)
   "Scan SOURCE-DIR for top-level *.asd files and extract system names from defsystem forms.
    Returns a deduplicated list of system name strings (test systems omitted)."
@@ -98,8 +115,9 @@
                    :version (asdf:component-version system)
                    :source-dir source-dir
                    :license (asdf:system-licence system)
-                   :description (asdf:system-description system)
-                   :author (asdf:system-author system)
+                   :description (normalize-metadata-string (asdf:system-description system))
+                   ;; ASDF :author may be a list (esrap) — OCI annotations require strings.
+                   :author (normalize-metadata-string (asdf:system-author system))
                    :depends-on (remove nil (mapcar #'normalize-dep (asdf:system-depends-on system)))
                    :provides provides
                    :cffi-libraries (getf cl-repo :cffi-libraries)
