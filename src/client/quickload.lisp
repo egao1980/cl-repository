@@ -36,7 +36,7 @@
   (:import-from :cl-repository-client/source-policy
                 #:*source-policy* #:*source-rules* #:*default-source*
                 #:apply-source-config #:call-with-policy-overrides
-                #:source-for #:ql-allowed-p #:system-denied-p)
+                #:source-for #:ql-allowed-p #:oci-allowed-p #:system-denied-p)
   (:import-from :babel #:octets-to-string)
   (:export #:*registries*
            #:add-registry
@@ -395,53 +395,88 @@
         (first system-list)
         system-list)))
 
+(defun %merge-plan-entries (plan entries)
+  "Push ENTRIES onto PLAN unless the system name is already present."
+  (dolist (entry entries)
+    (unless (find (car entry) plan :key #'car :test #'string=)
+      (push entry plan)))
+  plan)
+
+(defun %plan-fallback-after-resolution-error (name version plan &key with-p)
+  "After SAT dependency-resolution-error: try direct OCI install and/or QL.
+   Returns updated PLAN. Mutates *missing-deps-accumulator*."
+  (cond
+    ((oci-allowed-p name)
+     (msg "~&; cl-repo: ~:[~;--with ~]~a: OCI SAT failed, trying direct install~%"
+          with-p name)
+     (if (system-already-installed-p name)
+         plan
+         (progn (push (cons name version) plan) plan)))
+    ((ql-allowed-p name)
+     (msg "~&; cl-repo: ~:[~;--with ~]~a: OCI skipped (source :ql), queueing Quicklisp~%"
+          with-p name)
+     (pushnew name *missing-deps-accumulator* :test #'string=)
+     plan)
+    (t plan)))
+
+(defun %resolve-one-into-plan (name version plan &key force with-p)
+  "Resolve NAME into PLAN / *missing-deps-accumulator*. Returns updated PLAN."
+  (cond
+    ((system-denied-p name)
+     (msg "~&; cl-repo: skipping denied system ~a~%" name)
+     plan)
+    ((and (not force) (or (asdf:find-system name nil)
+                          (system-protected-p name)))
+     (msg "~&; cl-repo: ~a already available via ASDF~%" name)
+     plan)
+    ((find name plan :key #'car :test #'string=)
+     plan)
+    ;; :ql-only — do not call OCI SAT (it errors \"not found in any registry\"
+    ;; when OCI is policy-blocked, and the old handler dropped the system).
+    ((and (ql-allowed-p name) (not (oci-allowed-p name)))
+     (msg "~&; cl-repo: ~a source=:ql, queueing Quicklisp~%" name)
+     (pushnew name *missing-deps-accumulator* :test #'string=)
+     plan)
+    (t
+     (handler-case
+         (multiple-value-bind (resolved missing)
+             (build-install-plan name (or version :latest) *registries* :force force)
+           (setf plan (%merge-plan-entries plan resolved))
+           (dolist (m missing)
+             (pushnew m *missing-deps-accumulator* :test #'string=))
+           plan)
+       (dependency-resolution-error (e)
+         (msg "~&; cl-repo: ~a~%" e)
+         (%plan-fallback-after-resolution-error name version plan :with-p with-p))
+       (error (e)
+         (msg "~&; cl-repo: SAT resolution unavailable for ~a (~a), trying direct~%"
+              name e)
+         (if (system-already-installed-p name)
+             plan
+             (progn (push (cons name version) plan) plan)))))))
+
 (defun compute-install-plan (system-names &key version force with)
   "Use SAT solver to compute full transitive install plan.
    Pins already-installed systems unless FORCE is true.
    Skips systems that are protected (see SYSTEM-PROTECTED-P).
    WITH: extra systems to resolve alongside (separate SAT passes).
-   Sets *missing-deps-accumulator* as a side-effect."
+   Sets *missing-deps-accumulator* as a side-effect.
+
+   Source policy:
+   - :ql-only systems skip OCI SAT and go straight to QL fallback.
+   - On dependency-resolution-error, fall back to direct OCI install when
+     OCI is allowed, else queue QL when allowed (cl-stack#165)."
   (let ((plan nil))
     (setf *missing-deps-accumulator* nil)
-    ;; Resolve main systems
     (dolist (name-raw system-names)
       (let ((name (string-downcase (string name-raw))))
-        (if (and (not force) (or (asdf:find-system name nil)
-                                 (system-protected-p name)))
-            (msg "~&; cl-repo: ~a already available via ASDF~%" name)
-            (handler-case
-                (multiple-value-bind (resolved missing)
-                    (build-install-plan name (or version :latest) *registries* :force force)
-                  (dolist (entry resolved)
-                    (unless (find (car entry) plan :key #'car :test #'string=)
-                      (push entry plan)))
-                  (dolist (m missing)
-                    (pushnew m *missing-deps-accumulator* :test #'string=)))
-              (dependency-resolution-error (e)
-                (msg "~&; cl-repo: ~a~%" e))
-              (error (e)
-                (msg "~&; cl-repo: SAT resolution unavailable for ~a (~a), trying direct~%" name e)
-                (unless (system-already-installed-p name)
-                  (push (cons name version) plan)))))))
-    ;; Resolve :with extras (separate SAT pass each)
+        (setf plan (%resolve-one-into-plan name version plan :force force))))
     (dolist (extra-raw (or with nil))
       (multiple-value-bind (extra-name extra-version)
           (if (consp extra-raw)
               (values (first extra-raw) (getf (rest extra-raw) :version))
               (values (string extra-raw) nil))
         (let ((name (string-downcase (string extra-name))))
-          (unless (or (asdf:find-system name nil)
-                      (find name plan :key #'car :test #'string=))
-            (handler-case
-                (multiple-value-bind (resolved missing)
-                    (build-install-plan name (or extra-version :latest) *registries* :force force)
-                  (dolist (entry resolved)
-                    (unless (find (car entry) plan :key #'car :test #'string=)
-                      (push entry plan)))
-                  (dolist (m missing)
-                    (pushnew m *missing-deps-accumulator* :test #'string=)))
-              (dependency-resolution-error (e)
-                (msg "~&; cl-repo: --with ~a: ~a~%" name e))
-              (error (e)
-                (msg "~&; cl-repo: --with ~a failed: ~a~%" name e)))))))
+          (setf plan (%resolve-one-into-plan name extra-version plan
+                                            :force force :with-p t)))))
     (nreverse plan)))
