@@ -276,13 +276,18 @@
                              :version version
                              :registry-url registry-url)))))
 
+(defun gunzip-octets (tar-gz-data)
+  "Gunzip octet vector to a fresh octet vector.
+   Uses chipz:DECOMPRESS (buffer API) — portable on ABCL/etc. where
+   chipz:MAKE-DECOMPRESSING-STREAM is unsupported (no Gray-streams feature)."
+  (let ((input (coerce tar-gz-data '(simple-array (unsigned-byte 8) (*)))))
+    (chipz:decompress nil 'chipz:gzip input)))
+
 (defun extract-layer-stripping-prefix (tar-gz-data target-dir prefix)
   "Extract a tar+gzip layer to TARGET-DIR, stripping PREFIX from entry names."
-  (let* ((input (flexi-streams:make-in-memory-input-stream tar-gz-data))
-         (decompressed (chipz:make-decompressing-stream 'chipz:gzip input)))
-    (unwind-protect
-         (extract-tar-stream decompressed target-dir :strip-prefix prefix)
-      (close decompressed))))
+  (let* ((plain (gunzip-octets tar-gz-data))
+         (stream (flexi-streams:make-in-memory-input-stream plain)))
+    (extract-tar-stream stream target-dir :strip-prefix prefix)))
 
 (defun make-directory-link (link-path target-dir)
   "Create a directory symlink/junction LINK-PATH -> TARGET-DIR (portable)."
@@ -328,11 +333,9 @@
 
 (defun extract-layer (tar-gz-data target-dir)
   "Extract a tar+gzip layer to TARGET-DIR."
-  (let* ((input (flexi-streams:make-in-memory-input-stream tar-gz-data))
-         (decompressed (chipz:make-decompressing-stream 'chipz:gzip input)))
-    (unwind-protect
-         (extract-tar-stream decompressed target-dir)
-      (close decompressed))))
+  (let* ((plain (gunzip-octets tar-gz-data))
+         (stream (flexi-streams:make-in-memory-input-stream plain)))
+    (extract-tar-stream stream target-dir)))
 
 (defun safe-tar-entry-name-p (name)
   "T when tar entry NAME is safe to extract under a target directory:
