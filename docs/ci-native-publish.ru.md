@@ -16,3 +16,5 @@ Caller собирает native-артефакты `native-<os>-<arch>` → reusa
 Nested нужен пакетам с pre-groveled CFFI (event backends). Flat — путь OpenSSL / pure-native.
 
 Полный caller skeleton, inputs и контракт — в английской версии.
+
+(2026-08-14) Дефолт `packager-tag` — **0.16.0**.
