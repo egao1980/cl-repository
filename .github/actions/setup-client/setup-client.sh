@@ -318,6 +318,13 @@ if [[ "${PULL_DEPS}" == "true" || "${PULL_DEPS}" == "1" ]]; then
 fi
 
 SOURCE_REGISTRY="${WORKSPACE}//:${DEST}//:"
+if command -v cygpath >/dev/null 2>&1; then
+  # SBCL/ASDF on Windows wants D:/…, not the MSYS /d/… mount used by tar.
+  CLIENT_DIR="$(cygpath -m "${CLIENT_DIR}")"
+  DEST="$(cygpath -m "${DEST}")"
+  WORKSPACE="$(cygpath -m "${WORKSPACE}")"
+  SOURCE_REGISTRY="${WORKSPACE}//:${DEST}//:"
+fi
 
 if [[ -n "${GITHUB_ENV:-}" ]]; then
   {

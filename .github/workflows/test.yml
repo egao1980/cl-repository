@@ -134,6 +134,7 @@ jobs:
         uses: ./.github/actions/setup-client
 
       - name: Load client via CL_SOURCE_REGISTRY
+        shell: bash
         run: |
           : "${CL_REPOSITORY_CLIENT_VERSION:?}"
           : "${CL_SOURCE_REGISTRY:?}"
