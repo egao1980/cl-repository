@@ -16,3 +16,5 @@ Caller が `native-<os>-<arch>` をビルド → reusable workflow が `lib/<os>
 CFFI grovel 済み成果物を載せるパッケージ（event backends）は Nested。OpenSSL など純 native は Flat。
 
 Caller skeleton / inputs / 契約の詳細は英文を参照。
+
+（2026-08-14）`packager-tag` デフォルトは **0.16.0**。
