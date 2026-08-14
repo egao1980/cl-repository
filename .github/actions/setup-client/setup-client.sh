@@ -172,10 +172,22 @@ resolve_system() {
 pull_extract() {
   local ref="$1"
   local dest="$2"
-  local tmp
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cl-repo-pull.XXXXXX")"
+  local tmp attempt=1 max=4 delay=4
   mkdir -p "${dest}"
-  oras pull "${ref}" -o "${tmp}"
+  while true; do
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/cl-repo-pull.XXXXXX")"
+    if oras pull "${ref}" -o "${tmp}"; then
+      break
+    fi
+    rm -rf "${tmp}"
+    if [[ "${attempt}" -ge "${max}" ]]; then
+      die "oras pull failed after ${max} attempts: ${ref}"
+    fi
+    log "  oras pull retry ${attempt}/${max} in ${delay}s: ${ref}"
+    sleep "${delay}"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
   shopt -s nullglob
   local f
   for f in "${tmp}"/*.tar.gz; do
@@ -314,13 +326,6 @@ if [[ "${PULL_DEPS}" == "true" || "${PULL_DEPS}" == "1" ]]; then
       [[ -n "${s}" ]] && seeds+=("${s}")
     done < <(qlfile_seeds "${QLFILE}")
     pull_system_tree "${DEST}" "${seeds[@]}"
-    # Linux-published OCI depends-on omits (:feature :windows "winhttp") on dexador.
-    case "$(uname -s)" in
-      MINGW*|MSYS*|CYGWIN*)
-        log "Pulling Windows feature deps omitted from OCI annotations"
-        pull_system_tree "${DEST}" winhttp
-        ;;
-    esac
   else
     log "No qlfile in extracted client; skipping dep pull"
   fi
