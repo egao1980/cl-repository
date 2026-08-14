@@ -116,7 +116,11 @@ jobs:
         run: bash tests/integration/test-ocicl-compat.sh
 
   setup-client-action:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
       packages: read
