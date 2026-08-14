@@ -1,0 +1,52 @@
+name: Setup Roswell + SBCL
+description: >-
+  Install Roswell (Unix script / Windows zip) and optionally sbcl-bin.
+  Shared by consumer test.yml and native publish-oci.yml after setup-client.
+
+inputs:
+  sbcl-version:
+    description: sbcl-bin version (e.g. 2.6.7). Ignored when install-sbcl is false.
+    required: false
+    default: "2.6.7"
+  roswell-version:
+    description: Windows Roswell zip tag (Unix uses install-for-ci.sh).
+    required: false
+    default: "26.02.116"
+  install-sbcl:
+    description: If true, ros install sbcl-bin/$sbcl-version and ros use it.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Roswell (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
+        echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+
+    - name: Install Roswell (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      env:
+        ROSWELL_VERSION: ${{ inputs.roswell-version }}
+      run: |
+        VER="${ROSWELL_VERSION:-26.02.116}"
+        curl -sL "https://github.com/roswell/roswell/releases/download/v${VER}/roswell_${VER}_amd64.zip" \
+          -o /tmp/roswell.zip
+        rm -rf /c/roswell && mkdir -p /c/roswell
+        unzip -qo /tmp/roswell.zip -d /c/roswell
+        echo "/c/roswell/roswell" >> "$GITHUB_PATH"
+        echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+
+    - name: Install SBCL
+      if: inputs.install-sbcl == 'true'
+      shell: bash
+      env:
+        SBCL_VERSION: ${{ inputs.sbcl-version }}
+      run: |
+        VER="${SBCL_VERSION:-2.6.7}"
+        ros install "sbcl-bin/${VER}"
+        ros use "sbcl-bin/${VER}"

@@ -196,6 +196,23 @@ For the parallel matrix → artifact → atomic publish pattern (grpc / cl-stack
 
 See [docs/ci-native-publish.md](docs/ci-native-publish.md). Caller builds `native-<os>-<arch>` artifacts; the reusable job stages Lisp sources, packages overlays, and pushes to `ghcr.io/<owner>/cl-systems/<package>:<version>`.
 
+#### Setup client (composite action)
+
+Consumer test jobs should **not** copy-paste `oras pull` / QL bootstrap. Use:
+
+```yaml
+permissions:
+  contents: read
+  packages: read
+steps:
+  - uses: actions/checkout@v5
+  - uses: egao1980/cl-repository/.github/actions/setup-client@main
+  - run: ros -l scripts/ci-install.lisp -q
+  - run: ros -l scripts/ci-test.lisp -q
+```
+
+The action resolves `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → annotated semver → `oras pull`, extracts under `.cl-repository/`, and writes `CL_SOURCE_REGISTRY`. **Do not pin a git tag of this repo for the Lisp client** — pass `version` only to freeze the OCI artifact. Call the action in **every job** that needs the client (runner disks are not shared). Details: [`.github/actions/setup-client`](.github/actions/setup-client/).
+
 #### CI Example (GitHub Actions)
 
 ```yaml

@@ -114,3 +114,25 @@ jobs:
 
       - name: Run OCICL compatibility test
         run: bash tests/integration/test-ocicl-compat.sh
+
+  setup-client-action:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-roswell
+
+      - name: Setup cl-repository-client from OCI
+        id: cl-repo
+        uses: ./.github/actions/setup-client
+
+      - name: Load client via CL_SOURCE_REGISTRY
+        run: |
+          : "${CL_REPOSITORY_CLIENT_VERSION:?}"
+          : "${CL_SOURCE_REGISTRY:?}"
+          echo "Resolved client ${CL_REPOSITORY_CLIENT_VERSION}"
+          echo "registry ${CL_SOURCE_REGISTRY}"
+          ros -e '(asdf:load-system "cl-repository-client")' -e '(format t "~&loaded cl-repository-client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' -q

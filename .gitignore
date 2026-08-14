@@ -1,3 +1,5 @@
+.cl-repository/
+
 *.fasl
 *.fas
 *.lib
