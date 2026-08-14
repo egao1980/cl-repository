@@ -264,9 +264,20 @@ Signals an error for unresolved dependencies."
       (finalize)
       (nreverse published))))
 
-(defun build-packages-from-source (source-dir &key source-url revision isolate-provides)
+(defun %apply-version-override (spec version)
+  "When VERSION is non-NIL, force PACKAGE-SPEC-VERSION before build-package.
+   Must run before build-package so the tarball prefix (`name-version/`),
+   config blob, and OCI annotations stay consistent with the published tag
+   (see cl-stack#174 / cl-stack-systems#24)."
+  (when version
+    (setf (package-spec-version spec) version))
+  spec)
+
+(defun build-packages-from-source (source-dir &key source-url revision isolate-provides version)
   "Build all systems discovered in SOURCE-DIR.
-Returns an alist of (spec . result)."
+Returns an alist of (spec . result).
+VERSION, when given, overrides every system's .asd :version on the specs
+before packaging (same force applied to each)."
   (let* ((systems (discover-project-systems source-dir))
          (source-dir-ns (namestring source-dir))
          (built nil))
@@ -279,14 +290,17 @@ Returns an alist of (spec . result)."
       (let ((spec (auto-package-spec system-name)))
         (setf (package-spec-source-url spec) source-url)
         (setf (package-spec-revision spec) revision)
+        (%apply-version-override spec version)
         (when isolate-provides
           ;; In bulk mode publish each system as its own canonical package.
           (setf (package-spec-provides spec) (list (package-spec-name spec))))
         (push (cons spec (build-package spec)) built)))
     (nreverse built)))
 
-(defun build-package-from-source (source-dir &key system-name source-url revision)
-  "Build package from SOURCE-DIR and return (values spec result)."
+(defun build-package-from-source (source-dir &key system-name source-url revision version)
+  "Build package from SOURCE-DIR and return (values spec result).
+VERSION, when given, overrides the .asd :version on the spec before
+build-package (tarball prefix + annotations + tag stay aligned)."
   (let* ((resolved-system (resolve-system-name source-dir system-name))
          (source-dir-ns (namestring source-dir)))
     (asdf:initialize-source-registry
@@ -295,11 +309,13 @@ Returns an alist of (spec . result)."
     (let ((spec (auto-package-spec resolved-system)))
       (setf (package-spec-source-url spec) source-url)
       (setf (package-spec-revision spec) revision)
+      (%apply-version-override spec version)
       (values spec (build-package spec)))))
 
-(defun build-package-from-github (repo-or-url &key ref system-name)
+(defun build-package-from-github (repo-or-url &key ref system-name version)
   "Build package from a GitHub repository.
-Returns (values spec result cleanup-fn)."
+Returns (values spec result cleanup-fn).
+VERSION is forwarded to BUILD-PACKAGE-FROM-SOURCE."
   (let ((repo-url (github-repo-url repo-or-url)))
     (multiple-value-bind (source-dir revision cleanup-fn)
         (clone-git-source repo-url :ref ref)
@@ -308,5 +324,6 @@ Returns (values spec result cleanup-fn)."
                                      :system-name system-name
                                      :source-url (format nil "https://github.com/~a"
                                                          (normalize-github-repo repo-or-url))
-                                     :revision revision)
+                                     :revision revision
+                                     :version version)
         (values spec result cleanup-fn)))))

@@ -1,11 +1,12 @@
 (defpackage :cl-repository-packager/tests/source-adapter-test
   (:use :cl :rove)
-  (:import-from :cl-oci/annotations #:+ann-source+ #:+ann-revision+)
+  (:import-from :cl-oci/annotations #:+ann-source+ #:+ann-revision+ #:+ann-version+)
   (:import-from :cl-oci/descriptor #:descriptor-annotations)
   (:import-from :cl-repository-packager/source-adapter
                 #:github-repo-reference-p #:normalize-github-repo #:build-package-from-source)
   (:import-from :cl-repository-packager/build-matrix
-                #:package-spec #:package-spec-name #:build-package #:build-result-manifests)
+                #:package-spec #:package-spec-name #:package-spec-version
+                #:build-package #:build-result-manifests)
   (:import-from :cl-repository-packager/manifest-builder
                 #:built-manifest #:built-manifest-descriptor))
 (in-package :cl-repository-packager/tests/source-adapter-test)
@@ -30,12 +31,12 @@
       (format stream "(in-package :cl-user)~%"))
     dir))
 
-(defun write-test-system (dir system-name)
+(defun write-test-system (dir system-name &key (version "0.1.0"))
   (with-open-file (stream (merge-pathnames (format nil "~a.asd" system-name) dir)
                           :direction :output
                           :if-exists :supersede)
-    (format stream "(defsystem \"~a\" :version \"0.1.0\" :components ((:file \"~a\")))~%"
-            system-name system-name))
+    (format stream "(defsystem \"~a\" :version \"~a\" :components ((:file \"~a\")))~%"
+            system-name version system-name))
   (with-open-file (stream (merge-pathnames (format nil "~a.lisp" system-name) dir)
                           :direction :output
                           :if-exists :supersede)
@@ -64,10 +65,28 @@
     (unwind-protect
          (progn
            (write-test-system source-dir "app-main")
-           (write-test-system source-dir "app-test")
+           (write-test-system source-dir "app-extra")
            (ok (signals (build-package-from-source source-dir) 'error))
            (multiple-value-bind (spec result)
                (build-package-from-source source-dir :system-name "app-main")
              (declare (ignore result))
              (ok (string= (package-spec-name spec) "app-main"))))
+      (uiop:delete-directory-tree source-dir :validate t :if-does-not-exist :ignore))))
+
+(deftest build-package-from-source-version-override
+  "`:version` must land on the spec before build-package so annotations
+   (and thus the tarball prefix) match the forced OCI tag — cl-stack#174."
+  (let ((source-dir (make-temp-source-dir)))
+    (unwind-protect
+         (progn
+           (write-test-system source-dir "ver-lag" :version "0.1.6")
+           (multiple-value-bind (spec result)
+               (build-package-from-source source-dir
+                                          :system-name "ver-lag"
+                                          :version "0.1.7")
+             (ok (string= (package-spec-version spec) "0.1.7"))
+             (let* ((manifest (first (build-result-manifests result)))
+                    (ann (descriptor-annotations
+                          (built-manifest-descriptor manifest))))
+               (ok (string= (gethash +ann-version+ ann) "0.1.7")))))
       (uiop:delete-directory-tree source-dir :validate t :if-does-not-exist :ignore))))
