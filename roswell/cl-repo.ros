@@ -70,6 +70,8 @@ exec ros -Q -- $0 "$@"
   (format t "  --lisp <impl>         CL implementation for add-overlay (optional)~%")
   (format t "  --native-paths <p>    Comma-separated native lib paths for add-overlay~%")
   (format t "  --tag <tag>           Version tag for add-overlay (default: from .asd or latest)~%")
+  (format t "  --version <ver>       Force package version before build (publish / publish-github);~%")
+  (format t "                        overrides .asd :version for tarball prefix + annotations~%")
   (format t "  --skip-catalog        Skip writing catalog anchors/referrers~%")
   (format t "  --ref <ref>           Git ref (tag/branch/commit) for publish-github/sync-qlot~%")
   (format t "  --system <name>       ASDF system to package when source has multiple .asd files~%")
@@ -226,14 +228,38 @@ exec ros -Q -- $0 "$@"
              (cmd-info (first cmd-args) :registry-url registry-url :namespace namespace))
 
             ((string-equal command "publish")
-             (if (getf opts :all-systems)
-                 (let* ((source-dir (uiop:getcwd))
-                        (reg (or registry-url "ghcr.io"))
-                        (ns (or namespace "cl-systems"))
-                        (built (build-packages-from-source source-dir :isolate-provides t)))
-                   (dolist (pair built)
-                     (let* ((spec (car pair))
-                            (result (cdr pair))
+             (let ((forced-version (or (getf opts :version) (getf opts :tag))))
+               (if (getf opts :all-systems)
+                   (let* ((source-dir (uiop:getcwd))
+                          (reg (or registry-url "ghcr.io"))
+                          (ns (or namespace "cl-systems"))
+                          (built (build-packages-from-source source-dir
+                                                             :isolate-provides t
+                                                             :version forced-version)))
+                     (dolist (pair built)
+                       (let* ((spec (car pair))
+                              (result (cdr pair))
+                              (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
+                                       "latest")))
+                         (ensure-dependencies-published spec reg ns
+                                                        :publish-missing (not (null (getf opts :publish-dependencies)))
+                                                        :recursive (not (null (getf opts :recursive-dependencies)))
+                                                        :publish-ql-dependencies (not (null (getf opts :publish-ql-dependencies)))
+                                                        :deps-dist-url (getf opts :deps-dist-url)
+                                                        :skip-catalog (getf opts :skip-catalog))
+                         (publish-package reg ns tag result spec
+                                          :skip-catalog (getf opts :skip-catalog))))
+                     (cl-oci/runtime:msg "~&Published all systems: ~{~a~^, ~}~%"
+                                         (discover-project-systems (uiop:getcwd))))
+                   (let* ((system-name (or (first cmd-args)
+                                           (pathname-name (first (directory "*.asd")))))
+                          (spec (auto-package-spec system-name))
+                          (reg (or registry-url "ghcr.io"))
+                          (ns (or namespace "cl-systems")))
+                     (when forced-version
+                       (setf (cl-repository-packager/build-matrix:package-spec-version spec)
+                             forced-version))
+                     (let* ((result (build-package spec))
                             (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
                                      "latest")))
                        (ensure-dependencies-published spec reg ns
@@ -243,25 +269,7 @@ exec ros -Q -- $0 "$@"
                                                       :deps-dist-url (getf opts :deps-dist-url)
                                                       :skip-catalog (getf opts :skip-catalog))
                        (publish-package reg ns tag result spec
-                                        :skip-catalog (getf opts :skip-catalog))))
-                   (cl-oci/runtime:msg "~&Published all systems: ~{~a~^, ~}~%"
-                                       (discover-project-systems (uiop:getcwd))))
-                 (let* ((system-name (or (first cmd-args)
-                                         (pathname-name (first (directory "*.asd")))))
-                        (spec (auto-package-spec system-name))
-                        (reg (or registry-url "ghcr.io"))
-                        (ns (or namespace "cl-systems"))
-                        (result (build-package spec))
-                        (tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
-                                 "latest")))
-                   (ensure-dependencies-published spec reg ns
-                                                  :publish-missing (not (null (getf opts :publish-dependencies)))
-                                                  :recursive (not (null (getf opts :recursive-dependencies)))
-                                                  :publish-ql-dependencies (not (null (getf opts :publish-ql-dependencies)))
-                                                  :deps-dist-url (getf opts :deps-dist-url)
-                                                  :skip-catalog (getf opts :skip-catalog))
-                   (publish-package reg ns tag result spec
-                                    :skip-catalog (getf opts :skip-catalog)))))
+                                        :skip-catalog (getf opts :skip-catalog)))))))
 
             ((string-equal command "add-overlay")
              (let* ((system-name (or (first cmd-args)
@@ -323,6 +331,7 @@ exec ros -Q -- $0 "$@"
              (let* ((repo (first cmd-args))
                     (ref (getf opts :ref))
                     (system-name (getf opts :system))
+                    (forced-version (or (getf opts :version) (getf opts :tag)))
                     (reg (or registry-url "ghcr.io"))
                     (ns (or namespace "cl-systems")))
                (if (getf opts :all-systems)
@@ -333,7 +342,8 @@ exec ros -Q -- $0 "$@"
                                                                    :source-url (format nil "https://github.com/~a"
                                                                                        (cl-repository-packager/source-adapter:normalize-github-repo repo))
                                                                    :revision revision
-                                                                   :isolate-provides t)))
+                                                                   :isolate-provides t
+                                                                   :version forced-version)))
                             (dolist (pair built)
                               (let* ((spec (car pair))
                                      (result (cdr pair))
@@ -350,7 +360,8 @@ exec ros -Q -- $0 "$@"
                        (when cleanup-fn
                          (funcall cleanup-fn))))
                    (multiple-value-bind (spec result cleanup-fn)
-                       (build-package-from-github repo :ref ref :system-name system-name)
+                       (build-package-from-github repo :ref ref :system-name system-name
+                                                  :version forced-version)
                      (unwind-protect
                           (let ((tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
                                          (or ref "latest"))))
@@ -387,7 +398,8 @@ exec ros -Q -- $0 "$@"
                       (cond
                         ((eq kind :github)
                          (multiple-value-bind (spec result cleanup-fn)
-                             (build-package-from-github name :ref ref :system-name (getf opts :system))
+                             (build-package-from-github name :ref ref :system-name (getf opts :system)
+                                                        :version (or (getf opts :version) (getf opts :tag)))
                            (unwind-protect
                                 (let ((tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
                                                ref
@@ -410,7 +422,8 @@ exec ros -Q -- $0 "$@"
                                     (build-package-from-source source-dir
                                                                :system-name (getf opts :system)
                                                                :source-url name
-                                                               :revision revision)
+                                                               :revision revision
+                                                               :version (or (getf opts :version) (getf opts :tag)))
                                   (let ((tag (or (cl-repository-packager/build-matrix:package-spec-version spec)
                                                  ref
                                                  "latest")))
