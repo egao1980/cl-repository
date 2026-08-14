@@ -116,7 +116,11 @@ jobs:
         run: bash tests/integration/test-ocicl-compat.sh
 
   setup-client-action:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
       packages: read
@@ -130,6 +134,7 @@ jobs:
         uses: ./.github/actions/setup-client
 
       - name: Load client via CL_SOURCE_REGISTRY
+        shell: bash
         run: |
           : "${CL_REPOSITORY_CLIENT_VERSION:?}"
           : "${CL_SOURCE_REGISTRY:?}"

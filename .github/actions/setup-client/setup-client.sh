@@ -19,6 +19,12 @@ else
   DEST="${WORKSPACE}/${DEST_IN}"
 fi
 
+# Git Bash tar/oras on windows-latest cannot -C a D:\… path (GITHUB_WORKSPACE).
+if command -v cygpath >/dev/null 2>&1; then
+  WORKSPACE="$(cygpath -u "${WORKSPACE}")"
+  DEST="$(cygpath -u "${DEST}")"
+fi
+
 CLIENT_NS="${IMAGE%/*}"
 PY=""
 for cand in python3 python; do
@@ -31,6 +37,9 @@ done
 
 log() { printf '%s\n' "$*"; }
 die() { printf 'setup-client: %s\n' "$*" >&2; exit 1; }
+# Git Bash on Windows: Python print() and some pipes use CRLF. Strip CR so
+# oras refs stay "image:0.16.0" rather than "image:0.16.0\r".
+nocr() { printf '%s' "${1//$'\r'/}"; }
 
 oras_login() {
   [[ -z "${TOKEN}" ]] && return 0
@@ -41,19 +50,37 @@ oras_login() {
 parse_manifest() {
   "${PY}" -c '
 import json, sys
+def emit(v):
+    sys.stdout.buffer.write(str(v or "").replace("\r", "").encode("utf-8") + b"\n")
 d = json.load(sys.stdin)
 ann = d.get("annotations") or {}
-print(ann.get("org.opencontainers.image.version") or "")
-print(ann.get("dev.common-lisp.alias-for") or "")
-print(d.get("artifactType") or "")
-print(ann.get("dev.common-lisp.system.depends-on") or "")
+emit(ann.get("org.opencontainers.image.version") or "")
+emit(ann.get("dev.common-lisp.alias-for") or "")
+emit(d.get("artifactType") or "")
+emit(ann.get("dev.common-lisp.system.depends-on") or "")
 '
+}
+
+load_manifest_fields() {
+  local json="$1"
+  {
+    read -r MF_VER
+    read -r MF_ALIAS
+    read -r MF_ATYPE
+    read -r MF_DEPS || true
+  } < <(printf '%s\n' "${json}" | parse_manifest)
+  MF_VER="$(nocr "${MF_VER}")"
+  MF_ALIAS="$(nocr "${MF_ALIAS}")"
+  MF_ATYPE="$(nocr "${MF_ATYPE}")"
+  MF_DEPS="$(nocr "${MF_DEPS}")"
 }
 
 highest_tag() {
   # stdin: oras repo tags; stdout: best pull tag (version-like preferred)
   "${PY}" -c '
 import re, sys
+def emit(v):
+    sys.stdout.buffer.write(str(v).replace("\r", "").encode("utf-8") + b"\n")
 tags = [t.strip() for t in sys.stdin if t.strip() and t.strip() != "latest"]
 def key(t):
     m = re.match(r"^v?(\d+(?:\.\d+)*)", t)
@@ -64,9 +91,9 @@ vers = [(key(t), t) for t in tags]
 vers = [(k, t) for k, t in vers if k is not None]
 if vers:
     vers.sort()
-    print(vers[-1][1])
+    emit(vers[-1][1])
 elif tags:
-    print(tags[-1])
+    emit(tags[-1])
 '
 }
 
@@ -103,12 +130,8 @@ resolve_system() {
 
   if [[ -z "${want}" || "${want}" == latest ]]; then
     if json="$(fetch_manifest "${image}:latest" 2>/dev/null)"; then
-      {
-        read -r ver
-        read -r alias
-        read -r atype
-        read -r deps || true
-      } < <(printf '%s\n' "${json}" | parse_manifest)
+      load_manifest_fields "${json}"
+      ver="${MF_VER}"; alias="${MF_ALIAS}"; atype="${MF_ATYPE}"; deps="${MF_DEPS}"
       if is_anchor "${atype}"; then
         [[ -n "${ver}" ]] || die "anchor ${image}:latest has no org.opencontainers.image.version"
         if fetch_manifest "${image}:${ver}" >/dev/null 2>&1; then
@@ -117,13 +140,8 @@ resolve_system() {
           RESOLVED_REF="${CLIENT_NS}/${alias}:${ver}"
           RESOLVED_VER="${ver}"
           json="$(fetch_manifest "${RESOLVED_REF}")"
-          {
-            read -r ver
-            read -r alias
-            read -r atype
-            read -r deps || true
-          } < <(printf '%s\n' "${json}" | parse_manifest)
-          RESOLVED_DEPS="${deps}"
+          load_manifest_fields "${json}"
+          RESOLVED_DEPS="${MF_DEPS}"
           return 0
         else
           die "resolved ${image}:latest → ${ver}, but ${image}:${ver} is missing"
@@ -135,23 +153,18 @@ resolve_system() {
         fi
       fi
     else
-      tag="$(oras repo tags "${image}" 2>/dev/null | highest_tag || true)"
+      tag="$(nocr "$(oras repo tags "${image}" 2>/dev/null | highest_tag || true)")"
       [[ -n "${tag}" ]] || return 1
     fi
   else
-    tag="${want}"
+    tag="$(nocr "${want}")"
   fi
 
   json="$(fetch_manifest "${image}:${tag}")" || return 1
-  {
-    read -r ver
-    read -r alias
-    read -r atype
-    read -r deps || true
-  } < <(printf '%s\n' "${json}" | parse_manifest)
+  load_manifest_fields "${json}"
   RESOLVED_REF="${image}:${tag}"
-  RESOLVED_VER="${ver:-${tag}}"
-  RESOLVED_DEPS="${deps}"
+  RESOLVED_VER="${MF_VER:-${tag}}"
+  RESOLVED_DEPS="${MF_DEPS}"
 }
 
 pull_extract() {
@@ -194,10 +207,11 @@ with open(path, encoding="utf-8") as f:
         if name not in skip:
             out.append(name)
 seen = set()
+buf = sys.stdout.buffer
 for n in out:
     if n not in seen:
         seen.add(n)
-        print(n)
+        buf.write(n.replace("\r", "").encode("utf-8") + b"\n")
 ' "${qlfile}"
 }
 
@@ -294,6 +308,7 @@ if [[ "${PULL_DEPS}" == "true" || "${PULL_DEPS}" == "1" ]]; then
     log "Pulling client bootstrap deps from OCI (${SYSTEMS_NS})"
     seeds=()
     while IFS= read -r s; do
+      s="$(nocr "${s}")"
       [[ -n "${s}" ]] && seeds+=("${s}")
     done < <(qlfile_seeds "${QLFILE}")
     pull_system_tree "${DEST}" "${seeds[@]}"
@@ -303,6 +318,13 @@ if [[ "${PULL_DEPS}" == "true" || "${PULL_DEPS}" == "1" ]]; then
 fi
 
 SOURCE_REGISTRY="${WORKSPACE}//:${DEST}//:"
+if command -v cygpath >/dev/null 2>&1; then
+  # SBCL/ASDF on Windows wants D:/…, not the MSYS /d/… mount used by tar.
+  CLIENT_DIR="$(cygpath -m "${CLIENT_DIR}")"
+  DEST="$(cygpath -m "${DEST}")"
+  WORKSPACE="$(cygpath -m "${WORKSPACE}")"
+  SOURCE_REGISTRY="${WORKSPACE}//:${DEST}//:"
+fi
 
 if [[ -n "${GITHUB_ENV:-}" ]]; then
   {
