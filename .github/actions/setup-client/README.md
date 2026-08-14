@@ -12,7 +12,11 @@ permissions:
 steps:
   - uses: actions/checkout@v5
   - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  # CL_SOURCE_REGISTRY, CL_REPOSITORY_CLIENT_DIR, CL_REPOSITORY_CLIENT_VERSION
+  - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+    with:
+      sbcl-version: ${{ env.SBCL_VERSION }}
+      roswell-version: ${{ env.ROSWELL_VERSION }}
+  # CL_SOURCE_REGISTRY / CL_REPOSITORY_CLIENT_DIR already on GITHUB_ENV
   - run: ros -l scripts/ci-install.lisp -q
   - run: ros -l scripts/ci-test.lisp -q
 ```

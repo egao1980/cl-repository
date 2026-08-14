@@ -123,15 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Roswell
-        run: |
-          curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
-          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
-
-      - name: Install SBCL
-        run: |
-          ros install "sbcl-bin/$SBCL_VERSION"
-          ros use "sbcl-bin/$SBCL_VERSION"
+      - uses: ./.github/actions/setup-roswell
 
       - name: Setup cl-repository-client from OCI
         id: cl-repo
