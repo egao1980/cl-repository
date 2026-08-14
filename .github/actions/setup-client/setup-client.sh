@@ -83,7 +83,9 @@ def emit(v):
     sys.stdout.buffer.write(str(v).replace("\r", "").encode("utf-8") + b"\n")
 tags = [t.strip() for t in sys.stdin if t.strip() and t.strip() != "latest"]
 def key(t):
-    m = re.match(r"^v?(\d+(?:\.\d+)*)", t)
+    # Whole tag must be a semver. SHAs like 677cabae… start with digits and
+    # must not outrank 0.24.1.
+    m = re.fullmatch(r"v?(\d+(?:\.\d+)*)", t)
     if not m:
         return None
     return tuple(int(x) for x in m.group(1).split("."))
@@ -320,10 +322,11 @@ fi
 SOURCE_REGISTRY="${WORKSPACE}//:${DEST}//:"
 if command -v cygpath >/dev/null 2>&1; then
   # SBCL/ASDF on Windows wants D:/…, not the MSYS /d/… mount used by tar.
+  # ASDF splits CL_SOURCE_REGISTRY on ';' on Windows — ':' would split D: drives.
   CLIENT_DIR="$(cygpath -m "${CLIENT_DIR}")"
   DEST="$(cygpath -m "${DEST}")"
   WORKSPACE="$(cygpath -m "${WORKSPACE}")"
-  SOURCE_REGISTRY="${WORKSPACE}//:${DEST}//:"
+  SOURCE_REGISTRY="${WORKSPACE}//;${DEST}//;"
 fi
 
 if [[ -n "${GITHUB_ENV:-}" ]]; then
