@@ -19,6 +19,12 @@ else
   DEST="${WORKSPACE}/${DEST_IN}"
 fi
 
+# Git Bash tar/oras on windows-latest cannot -C a D:\… path (GITHUB_WORKSPACE).
+if command -v cygpath >/dev/null 2>&1; then
+  WORKSPACE="$(cygpath -u "${WORKSPACE}")"
+  DEST="$(cygpath -u "${DEST}")"
+fi
+
 CLIENT_NS="${IMAGE%/*}"
 PY=""
 for cand in python3 python; do
