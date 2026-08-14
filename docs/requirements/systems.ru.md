@@ -18,3 +18,5 @@
 - exporter как bootstrap-механизм для экосистемы.
 
 Для точных интерфейсов и требований по каждому модулю см. английскую версию.
+
+(2026-08-14) HTTP в `cl-oci-client` / `ql-exporter`: `http-protocol` + `http-backend-dexador` (вместо прямого dexador).

@@ -10,4 +10,11 @@ ql flexi-streams
 ql cl-ppcre
 ql cl-base64
 ql trivial-features
+ql blackbird
+ql cl-cookie
+ql trivial-gray-streams
 ql rove
+# cl-stack HTTP (wire protocol + dexador backend; replaces direct dexador in oci-client)
+github egao1980/http-protocol
+github egao1980/http-encoding-chipz
+github egao1980/http-backend-dexador

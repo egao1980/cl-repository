@@ -1,6 +1,6 @@
 (defpackage :cl-repository-ql-exporter/dist-parser
   (:use :cl)
-  (:import-from :dexador)
+  (:import-from :cl-oci-client/http #:http-exchange)
   (:import-from :babel #:octets-to-string)
   (:export #:ql-dist
            #:ql-dist-name
@@ -99,10 +99,13 @@
 
 (defun fetch-text (url)
   "Fetch a URL and return its content as a string."
-  (let ((body (dex:get url)))
+  (multiple-value-bind (body status)
+      (http-exchange :get url :force-binary nil :verify t)
+    (unless (<= 200 status 299)
+      (error "Failed to fetch ~a (HTTP ~a)" url status))
     (etypecase body
       (string body)
-      ((vector (unsigned-byte 8)) (babel:octets-to-string body :encoding :utf-8)))))
+      ((vector (unsigned-byte 8)) (octets-to-string body :encoding :utf-8)))))
 
 (defun fetch-and-parse-dist (distinfo-url)
   "Fetch and parse a complete Quicklisp dist.

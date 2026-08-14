@@ -1,5 +1,5 @@
 (defsystem "cl-repository-ql-exporter"
-  :version "0.1.0"
+  :version "0.2.0"
   :author "Nikolai Matiushev"
   :license "MIT"
   :description "Quicklisp/Ultralisp to OCI artifact exporter"
@@ -18,5 +18,6 @@
   :perform (test-op (o c)
             (symbol-call :rove :run c)))
 
-(register-system-packages "dexador" '(:dexador :dex))
+(register-system-packages "http-protocol" '(:http-protocol :http))
+(register-system-packages "http-backend-dexador" '(:http-backend-dexador))
 (register-system-packages "babel" '(:babel))

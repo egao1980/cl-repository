@@ -1,11 +1,11 @@
 (defpackage :cl-oci-client/registry
   (:use :cl)
-  (:import-from :dexador)
-  (:import-from :quri)
   (:import-from :cl-oci-client/conditions #:registry-error #:auth-error)
   (:import-from :cl-oci-client/auth
                 #:auth-config #:auth-config-token #:make-auth-config
                 #:obtain-token #:make-auth-headers)
+  (:import-from :cl-oci-client/http
+                #:http-exchange #:response-header-value)
   (:export #:registry
            #:registry-url
            #:registry-auth
@@ -39,26 +39,12 @@
       path
       (format nil "~a~a" (base-url registry) path)))
 
-(defun ping (registry)
-  "Check if the registry supports OCI Distribution Spec (GET /v2/)."
-  (let ((url (api-url registry "/v2/")))
-    (handler-case
-        (let ((resp (dex:get url :headers (make-auth-headers (registry-auth registry))
-                                 :insecure (registry-insecure-p registry))))
-          (declare (ignore resp))
-          t)
-      (dex:http-request-failed (e)
-        (if (= (dex:response-status e) 401)
-            (handle-auth-challenge registry e)
-            (error 'registry-error
-                   :status (dex:response-status e)
-                   :url url
-                   :body (dex:response-body e)))))))
+(defun %verify (registry)
+  (not (registry-insecure-p registry)))
 
-(defun handle-auth-challenge (registry error)
+(defun handle-auth-challenge (registry headers)
   "Handle 401 by extracting WWW-Authenticate and obtaining a token."
-  (let* ((headers (dex:response-headers error))
-         (www-auth (gethash "www-authenticate" headers)))
+  (let ((www-auth (response-header-value headers "www-authenticate")))
     (when www-auth
       (let ((token (obtain-token www-auth
                                  :auth (registry-auth registry)
@@ -67,6 +53,21 @@
             (setf (auth-config-token (registry-auth registry)) token)
             (setf (registry-auth registry) (make-auth-config :token token)))
         t))))
+
+(defun ping (registry)
+  "Check if the registry supports OCI Distribution Spec (GET /v2/)."
+  (let ((url (api-url registry "/v2/")))
+    (multiple-value-bind (body status headers)
+        (http-exchange :get url
+                       :headers (make-auth-headers (registry-auth registry))
+                       :force-binary nil
+                       :verify (%verify registry))
+      (declare (ignore body))
+      (cond
+        ((<= 200 status 299) t)
+        ((= status 401)
+         (handle-auth-challenge registry headers))
+        (t (error 'registry-error :status status :url url :body body))))))
 
 (defun registry-request (registry method path &key content content-type headers
                                                  accept (handle-auth t))
@@ -80,29 +81,26 @@
                               (when accept
                                 (list (cons "Accept" accept)))
                               headers)))
-    (let ((insecure (registry-insecure-p registry)))
-      (handler-case
-        (multiple-value-bind (body status resp-headers)
-            (ecase method
-              (:get (dex:get url :headers all-headers :force-binary t :insecure insecure))
-              (:head (dex:head url :headers all-headers :insecure insecure))
-              (:put (dex:put url :headers all-headers :content content :force-binary t :insecure insecure))
-              (:post (dex:post url :headers all-headers :content content :force-binary t :insecure insecure))
-              (:patch (dex:request url :method :patch :headers all-headers
-                                       :content content :force-binary t :insecure insecure))
-              (:delete (dex:delete url :headers all-headers :insecure insecure)))
-          (values body status resp-headers))
-      (dex:http-request-failed (e)
-        (cond
-          ((and handle-auth (= (dex:response-status e) 401))
-           (handle-auth-challenge registry e)
-           (registry-request registry method path
-                             :content content :content-type content-type
-                             :headers headers :accept accept :handle-auth nil))
-          (t (error 'registry-error
-                    :status (dex:response-status e)
-                    :url url
-                    :body (dex:response-body e)))))))))
+    (multiple-value-bind (body status resp-headers)
+        (http-exchange method url
+                       :headers all-headers
+                       :content content
+                       :force-binary t
+                       :verify (%verify registry)
+                       ;; Blobs/manifests are opaque octets — don't CE-decode.
+                       :decompress nil)
+      (cond
+        ((<= 200 status 299)
+         (values body status resp-headers))
+        ((and handle-auth (= status 401))
+         (handle-auth-challenge registry resp-headers)
+         (registry-request registry method path
+                           :content content :content-type content-type
+                           :headers headers :accept accept :handle-auth nil))
+        (t (error 'registry-error
+                  :status status
+                  :url url
+                  :body body))))))
 
 (defun parse-reference (reference)
   "Parse a reference like 'ghcr.io/namespace/name:tag' or 'registry/name@sha256:...'

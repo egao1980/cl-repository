@@ -18,3 +18,5 @@
 - exporter はエコシステム移行用 bootstrap として扱う
 
 各モジュールの詳細要件は英語版を参照してください。
+
+（2026-08-14）`cl-oci-client` / `ql-exporter` の HTTP は `http-protocol` + `http-backend-dexador`（旧 dexador 直呼びを置換）。

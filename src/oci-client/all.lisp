@@ -2,6 +2,7 @@
   (:nicknames :cl-oci-client)
   (:use-reexport
    :cl-oci-client/conditions
+   :cl-oci-client/http
    :cl-oci-client/auth
    :cl-oci-client/registry
    :cl-oci-client/pull
