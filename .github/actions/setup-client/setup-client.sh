@@ -82,6 +82,11 @@ skip_dep() {
   [[ "${name}" == */* ]]
 }
 
+oci_pkg_name() {
+  # GHCR paths cannot contain '+'; packager maps cl+ssl → cl-plus-ssl.
+  printf '%s' "${1//+/-plus-}"
+}
+
 fetch_manifest() {
   oras manifest fetch "$1"
 }
@@ -221,7 +226,7 @@ pull_system_tree() {
   shift
   local -a queue=("$@")
   local seen=" "
-  local name ns deps dep pulled qi
+  local name ns deps dep pulled qi oci_name pkg
   qi=0
 
   while [[ "${qi}" -lt "${#queue[@]}" ]]; do
@@ -238,17 +243,22 @@ pull_system_tree() {
 
     pulled=0
     deps=""
-    for ns in "${SYSTEMS_NS}" "${CLIENT_NS}"; do
-      if resolve_system "${ns}/${name}" latest; then
-        log "  oras pull ${RESOLVED_REF}"
-        pull_extract "${RESOLVED_REF}" "${dest}"
-        deps="${RESOLVED_DEPS}"
-        pulled=1
-        break
-      fi
+    oci_name="$(oci_pkg_name "${name}")"
+    for pkg in "${oci_name}" "${name}"; do
+      [[ -n "${pkg}" ]] || continue
+      for ns in "${SYSTEMS_NS}" "${CLIENT_NS}"; do
+        if resolve_system "${ns}/${pkg}" latest; then
+          log "  oras pull ${RESOLVED_REF}"
+          pull_extract "${RESOLVED_REF}" "${dest}"
+          deps="${RESOLVED_DEPS}"
+          pulled=1
+          break 2
+        fi
+      done
+      [[ "${pkg}" == "${name}" ]] && break
     done
     if [[ "${pulled}" -ne 1 ]]; then
-      die "not in OCI: ${name} (tried ${SYSTEMS_NS}/${name} and ${CLIENT_NS}/${name})"
+      die "not in OCI: ${name} (tried ${SYSTEMS_NS}/{${oci_name},${name}} and ${CLIENT_NS}/{${oci_name},${name}})"
     fi
     if [[ -n "${deps}" ]]; then
       IFS=',' read -r -a dep_arr <<< "${deps}"
@@ -267,11 +277,13 @@ oras_login
 
 log "Resolving ${IMAGE}:${VERSION}"
 resolve_system "${IMAGE}" "${VERSION}" || die "failed to resolve ${IMAGE}:${VERSION}"
-log "Resolved cl-repository-client → ${RESOLVED_VER} (${RESOLVED_REF})"
+CLIENT_VER="${RESOLVED_VER}"
+CLIENT_REF="${RESOLVED_REF}"
+log "Resolved cl-repository-client → ${CLIENT_VER} (${CLIENT_REF})"
 
 rm -rf "${DEST}"
 mkdir -p "${DEST}"
-pull_extract "${RESOLVED_REF}" "${DEST}"
+pull_extract "${CLIENT_REF}" "${DEST}"
 
 CLIENT_DIR="$(find_client_dir "${DEST}")" \
   || die "cl-repository-client.asd not found after oras pull into ${DEST}"
@@ -295,7 +307,7 @@ SOURCE_REGISTRY="${WORKSPACE}//:${DEST}//:"
 if [[ -n "${GITHUB_ENV:-}" ]]; then
   {
     printf 'CL_REPOSITORY_CLIENT_DIR=%s\n' "${CLIENT_DIR}"
-    printf 'CL_REPOSITORY_CLIENT_VERSION=%s\n' "${RESOLVED_VER}"
+    printf 'CL_REPOSITORY_CLIENT_VERSION=%s\n' "${CLIENT_VER}"
     printf 'CL_REPOSITORY_DEST=%s\n' "${DEST}"
     printf 'CL_SOURCE_REGISTRY=%s\n' "${SOURCE_REGISTRY}"
   } >> "${GITHUB_ENV}"
@@ -304,12 +316,12 @@ fi
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
     printf 'client-dir=%s\n' "${CLIENT_DIR}"
-    printf 'client-version=%s\n' "${RESOLVED_VER}"
+    printf 'client-version=%s\n' "${CLIENT_VER}"
     printf 'dest=%s\n' "${DEST}"
     printf 'source-registry=%s\n' "${SOURCE_REGISTRY}"
   } >> "${GITHUB_OUTPUT}"
 fi
 
 log "client-dir=${CLIENT_DIR}"
-log "client-version=${RESOLVED_VER}"
+log "client-version=${CLIENT_VER}"
 log "CL_SOURCE_REGISTRY=${SOURCE_REGISTRY}"

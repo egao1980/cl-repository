@@ -54,7 +54,7 @@ jobs:
 | `dest` | `.cl-repository` | Extract root |
 | `oras-version` | `1.2.3` | |
 
-Roswell is not required for this action. Client Lisp deps come from `ghcr.io/egao1980/cl-systems` (`:latest` anchor if present, otherwise highest version tag). Missing packages fail the step.
+Roswell is not required for this action. Client Lisp deps come from `ghcr.io/egao1980/cl-systems` (`:latest` anchor if present, otherwise highest version tag). ASDF names with `+` map to GHCR `-plus-` (`cl+ssl` → `cl-plus-ssl`). Missing packages fail the step.
 
 ## Outputs / env
 
