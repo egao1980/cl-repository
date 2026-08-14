@@ -172,10 +172,22 @@ resolve_system() {
 pull_extract() {
   local ref="$1"
   local dest="$2"
-  local tmp
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cl-repo-pull.XXXXXX")"
+  local tmp attempt=1 max=4 delay=4
   mkdir -p "${dest}"
-  oras pull "${ref}" -o "${tmp}"
+  while true; do
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/cl-repo-pull.XXXXXX")"
+    if oras pull "${ref}" -o "${tmp}"; then
+      break
+    fi
+    rm -rf "${tmp}"
+    if [[ "${attempt}" -ge "${max}" ]]; then
+      die "oras pull failed after ${max} attempts: ${ref}"
+    fi
+    log "  oras pull retry ${attempt}/${max} in ${delay}s: ${ref}"
+    sleep "${delay}"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
   shopt -s nullglob
   local f
   for f in "${tmp}"/*.tar.gz; do
