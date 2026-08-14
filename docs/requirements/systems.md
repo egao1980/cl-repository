@@ -20,7 +20,7 @@ OCI Distribution Spec v1.1 HTTP client.
 - Pull: manifests, blobs, HEAD checks
 - Push: monolithic blob upload, manifest PUT, blob mount
 - Content discovery: tag listing, referrers API
-- Dependencies: cl-oci, dexador, quri, cl-ppcre, cl-base64
+- Dependencies: cl-oci, http-protocol, http-backend-dexador, quri, cl-ppcre, cl-base64
 
 ## cl-repository-packager
 
@@ -53,4 +53,4 @@ Quicklisp/Ultralisp to OCI bulk exporter.
 - Repackager: convert QL archive to OCI layers + manifest + index
 - Incremental sync: HEAD-check based skip logic
 - Exporter: orchestrate download -> repackage -> push pipeline
-- Dependencies: cl-oci-client, cl-repository-packager, dexador
+- Dependencies: cl-oci-client, cl-repository-packager, http-protocol

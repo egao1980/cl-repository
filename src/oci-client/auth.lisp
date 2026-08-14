@@ -1,11 +1,12 @@
 (defpackage :cl-oci-client/auth
   (:use :cl)
-  (:import-from :dexador)
   (:import-from :yason)
   (:import-from :cl-ppcre)
   (:import-from :cl-base64)
+  (:import-from :babel #:octets-to-string)
   (:import-from :quri #:url-encode)
   (:import-from :cl-oci-client/conditions #:auth-error)
+  (:import-from :cl-oci-client/http #:http-exchange)
   (:export #:auth-config
            #:auth-config-username
            #:auth-config-password
@@ -50,14 +51,19 @@
                                            (format nil "~a:~a"
                                                    (auth-config-username auth)
                                                    (or (auth-config-password auth) ""))))))))
-           (response (handler-case
-                         (dex:get url :headers headers :insecure insecure)
-                       (dex:http-request-failed (e)
-                         (error 'auth-error
-                                :status (dex:response-status e)
-                                :url url
-                                :body (dex:response-body e)))))
-           (json (yason:parse response)))
+           (body (multiple-value-bind (resp status)
+                     (http-exchange :get url
+                                    :headers headers
+                                    :force-binary nil
+                                    :verify (not insecure))
+                   (unless (<= 200 status 299)
+                     (error 'auth-error :status status :url url :body resp))
+                   resp))
+           (text (etypecase body
+                   (string body)
+                   ((vector (unsigned-byte 8))
+                    (octets-to-string body :encoding :utf-8))))
+           (json (yason:parse text)))
       (or (gethash "token" json)
           (gethash "access_token" json)
           (error 'auth-error :status 401 :body "No token in auth response")))))

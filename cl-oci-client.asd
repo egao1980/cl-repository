@@ -1,5 +1,5 @@
 (defsystem "cl-oci-client"
-  :version "0.1.0"
+  :version "0.2.0"
   :author "Nikolai Matiushev"
   :license "MIT"
   :description "OCI Distribution Spec v1.1 HTTP client"
@@ -17,6 +17,9 @@
   :perform (test-op (o c)
             (symbol-call :rove :run c)))
 
+(register-system-packages "http-protocol" '(:http-protocol :http))
+(register-system-packages "http-backend-dexador" '(:http-backend-dexador))
+(register-system-packages "http-encoding-chipz" '(:http-encoding-chipz))
 (register-system-packages "dexador" '(:dexador :dex))
 (register-system-packages "quri" '(:quri))
 (register-system-packages "cl-ppcre" '(:cl-ppcre))

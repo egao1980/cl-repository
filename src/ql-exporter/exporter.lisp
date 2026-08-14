@@ -1,6 +1,6 @@
 (defpackage :cl-repository-ql-exporter/exporter
   (:use :cl)
-  (:import-from :dexador)
+  (:import-from :cl-oci-client/http #:http-exchange)
   (:import-from :babel #:string-to-octets)
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
   (:import-from :cl-oci/digest #:compute-digest #:digest-hex)
@@ -27,10 +27,14 @@
   "Download a .tgz archive, return as octet vector.
    When EXPECTED-MD5 is given (from releases.txt), verify it and signal
    an error on mismatch so corrupted/tampered archives are never repackaged."
-  (let* ((body (dex:get url :force-binary t))
+  (let* ((body (multiple-value-bind (resp status)
+                   (http-exchange :get url :force-binary t :verify t :decompress nil)
+                 (unless (<= 200 status 299)
+                   (error "Failed to download ~a (HTTP ~a)" url status))
+                 resp))
          (data (etypecase body
                  ((vector (unsigned-byte 8)) body)
-                 (string (babel:string-to-octets body :encoding :latin-1)))))
+                 (string (string-to-octets body :encoding :latin-1)))))
     (when (and expected-md5 (plusp (length expected-md5)))
       (let ((actual (digest-hex (compute-digest data :algorithm "md5"))))
         (unless (string-equal actual expected-md5)
