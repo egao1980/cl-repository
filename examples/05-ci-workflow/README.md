@@ -22,7 +22,20 @@ Key steps:
 
 ## GitHub Actions: Test with cl-repo
 
-`.github/workflows/test.yml` installs dependencies from an OCI registry before running tests.
+Bootstrap the client with the composite action (OCI `:latest`, not a git pin), then `ci-install` / `ci-test`:
+
+```yaml
+permissions:
+  contents: read
+  packages: read
+steps:
+  - uses: actions/checkout@v5
+  - uses: egao1980/cl-repository/.github/actions/setup-client@main
+  - run: ros -l scripts/ci-install.lisp -q
+  - run: ros -l scripts/ci-test.lisp -q
+```
+
+`.github/workflows/test.yml` in this example still shows a local-registry variant. Production consumer CI uses GHCR via `setup-client`.
 
 ## Consuming published packages
 

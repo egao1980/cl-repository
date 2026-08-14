@@ -1,0 +1,76 @@
+name: Setup cl-repository-client
+description: >-
+  Pull cl-repository-client (and its Lisp bootstrap deps) from OCI with oras.
+  Defaults to the :latest system-name anchor — do not pin a git tag of
+  cl-repository. Writes CL_SOURCE_REGISTRY / CL_REPOSITORY_CLIENT_* for
+  subsequent steps in this job; re-run the action in any other job that
+  needs the client (same pattern as setup-node).
+
+inputs:
+  version:
+    description: OCI tag. "latest" resolves the system-name anchor to a semver, then pulls that tag.
+    required: false
+    default: latest
+  image:
+    description: Client image without a tag
+    required: false
+    default: ghcr.io/egao1980/cl-repository/cl-repository-client
+  systems:
+    description: Namespace for bootstrap Lisp deps (qlfile systems)
+    required: false
+    default: ghcr.io/egao1980/cl-systems
+  dest:
+    description: Extract directory (relative to github.workspace, or absolute)
+    required: false
+    default: .cl-repository
+  pull-deps:
+    description: Also oras-pull client qlfile deps from cl-systems (OCI only; fail if missing)
+    required: false
+    default: "true"
+  oras-version:
+    description: oras CLI version
+    required: false
+    default: "1.2.3"
+  token:
+    description: Token for oras login to GHCR
+    required: false
+    default: ${{ github.token }}
+  username:
+    description: GHCR username for oras login
+    required: false
+    default: ${{ github.actor }}
+
+outputs:
+  client-dir:
+    description: Extracted client source directory (cl-oci-<ver>/)
+    value: ${{ steps.setup.outputs.client-dir }}
+  client-version:
+    description: Resolved semver actually pulled
+    value: ${{ steps.setup.outputs.client-version }}
+  dest:
+    description: Absolute extract root
+    value: ${{ steps.setup.outputs.dest }}
+  source-registry:
+    description: CL_SOURCE_REGISTRY value written to GITHUB_ENV
+    value: ${{ steps.setup.outputs.source-registry }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install oras
+      uses: oras-project/setup-oras@v2
+      with:
+        version: ${{ inputs.oras-version }}
+
+    - name: Pull cl-repository-client from OCI
+      id: setup
+      shell: bash
+      env:
+        CL_REPOSITORY_CLIENT_IMAGE: ${{ inputs.image }}
+        CL_REPOSITORY_CLIENT_VERSION: ${{ inputs.version }}
+        CL_REPOSITORY_SYSTEMS: ${{ inputs.systems }}
+        CL_REPOSITORY_DEST: ${{ inputs.dest }}
+        CL_REPOSITORY_PULL_DEPS: ${{ inputs.pull-deps }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        GITHUB_ACTOR: ${{ inputs.username }}
+      run: bash "${GITHUB_ACTION_PATH}/setup-client.sh"

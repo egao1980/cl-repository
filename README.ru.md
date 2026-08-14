@@ -188,6 +188,23 @@ cl-repo add-overlay my-cffi-lib \
   (publish-overlay "https://ghcr.io" "my-org/my-project" "my-cffi-lib" "1.0.0" result))
 ```
 
+#### Setup client (composite action)
+
+Тестовые job'ы потребителей не должны копировать `oras pull` / QL bootstrap. Используйте:
+
+```yaml
+permissions:
+  contents: read
+  packages: read
+steps:
+  - uses: actions/checkout@v5
+  - uses: egao1980/cl-repository/.github/actions/setup-client@main
+  - run: ros -l scripts/ci-install.lisp -q
+  - run: ros -l scripts/ci-test.lisp -q
+```
+
+Action резолвит `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → semver из аннотации → `oras pull`, распаковывает в `.cl-repository/` и пишет `CL_SOURCE_REGISTRY`. **Не пиньте git-тег этого репозитория как версию Lisp-клиента** — `version` только чтобы заморозить OCI-артефакт. Вызывайте action в **каждом job**, которому нужен клиент. Подробности: [`.github/actions/setup-client`](.github/actions/setup-client/).
+
 #### Пример CI (GitHub Actions)
 
 ```yaml

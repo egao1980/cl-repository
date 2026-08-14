@@ -188,6 +188,23 @@ cl-repo add-overlay my-cffi-lib \
   (publish-overlay "https://ghcr.io" "my-org/my-project" "my-cffi-lib" "1.0.0" result))
 ```
 
+#### Setup client（composite action）
+
+コンシューマの test job に `oras pull` / QL bootstrap をコピペしないでください。次を使います:
+
+```yaml
+permissions:
+  contents: read
+  packages: read
+steps:
+  - uses: actions/checkout@v5
+  - uses: egao1980/cl-repository/.github/actions/setup-client@main
+  - run: ros -l scripts/ci-install.lisp -q
+  - run: ros -l scripts/ci-test.lisp -q
+```
+
+action は `ghcr.io/egao1980/cl-repository/cl-repository-client:latest`（system-name **anchor**）→ アノテーションの semver → `oras pull` し、`.cl-repository/` に展開して `CL_SOURCE_REGISTRY` を書き込みます。**Lisp クライアントの版としてこのリポジトリの git タグをピンしないでください** — OCI 成果物を凍結するときだけ `version` を渡します。クライアントが必要な **各 job** で action を呼んでください。詳細: [`.github/actions/setup-client`](.github/actions/setup-client/)。
+
 #### CI 例（GitHub Actions）
 
 ```yaml
