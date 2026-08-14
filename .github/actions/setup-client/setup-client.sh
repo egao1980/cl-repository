@@ -314,6 +314,13 @@ if [[ "${PULL_DEPS}" == "true" || "${PULL_DEPS}" == "1" ]]; then
       [[ -n "${s}" ]] && seeds+=("${s}")
     done < <(qlfile_seeds "${QLFILE}")
     pull_system_tree "${DEST}" "${seeds[@]}"
+    # Linux-published OCI depends-on omits (:feature :windows "winhttp") on dexador.
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*)
+        log "Pulling Windows feature deps omitted from OCI annotations"
+        pull_system_tree "${DEST}" winhttp
+        ;;
+    esac
   else
     log "No qlfile in extracted client; skipping dep pull"
   fi
