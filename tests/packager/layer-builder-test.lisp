@@ -98,6 +98,29 @@
     (ok (signals (cl-repository-packager/layer-builder::split-tar-name
                   (make-string 180 :initial-element #\z))))))
 
+(deftest exclude-cl-repository-dir
+  (testing "build-layer-from-directory omits .cl-repository"
+    (let* ((tmpdir (uiop:ensure-directory-pathname
+                    (format nil "/tmp/cl-repo-lb-excl-~a/" (get-universal-time))))
+           (kept (merge-pathnames "kept.lisp" tmpdir))
+           (junk-dir (merge-pathnames ".cl-repository/stolen/" tmpdir))
+           (junk (merge-pathnames "stolen.lisp" junk-dir)))
+      (unwind-protect
+           (progn
+             (ensure-directories-exist kept)
+             (ensure-directories-exist junk)
+             (with-open-file (s kept :direction :output :if-exists :supersede)
+               (write-string "(defpackage :kept)" s))
+             (with-open-file (s junk :direction :output :if-exists :supersede)
+               (write-string "(defpackage :stolen)" s))
+             (let* ((layer (build-layer-from-directory tmpdir "source"))
+                    (names (tar-entry-names (layer-result-data layer))))
+               (ok (find "kept.lisp" names :test #'string=)
+                   "project file is packed")
+               (ok (not (find-if (lambda (n) (search ".cl-repository" n)) names))
+                   "bootstrap tree is not packed")))
+        (uiop:delete-directory-tree tmpdir :validate t :if-does-not-exist :ignore)))))
+
 (deftest layer-result-title-slot
   (testing "layer-result has an optional title slot"
     (let ((lr (make-instance 'layer-result
