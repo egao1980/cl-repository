@@ -25,8 +25,11 @@
    (title :type (or null string) :initarg :title :accessor layer-result-title :initform nil)))
 
 (defparameter *excluded-dirs*
-  '(".git" ".qlot" ".lake" "__pycache__" "node_modules")
-  "Directory names to exclude from packaging.")
+  '(".git" ".qlot" ".lake" ".cl-repository" "__pycache__" "node_modules")
+  "Directory names to exclude from packaging.
+   .cl-repository is the setup-client bootstrap tree written into the
+   checkout; packing it produces a multi-MB layer that can fail extract
+   (parse-integer junk in string \"orm, manifes\").")
 
 (defun excluded-dir-p (dir)
   "Return T if DIR's name matches an excluded directory."
