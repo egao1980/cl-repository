@@ -1,29 +1,12 @@
-# .github/workflows/test.yml
-# Bootstrap cl-repository-client from OCI (:latest), then install/test via cl-repo.
+# Consumer test.yml — canned reusable workflow. No per-repo Lisp scripts.
 name: Test
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: egao1980/cl-repository/.github/actions/setup-client@main
-
-      - name: Install Roswell
-        uses: 40ants/setup-lisp@v4
-        with:
-          roswell-version: latest
-
-      - name: Install deps from GHCR and run tests
-        run: |
-          ros -l scripts/ci-install.lisp -q
-          ros -l scripts/ci-test.lisp -q
+    uses: egao1980/cl-repository/.github/workflows/test-system.yml@main

@@ -418,6 +418,23 @@ resolves the bundled library (Post-Install, [native deps](requirements/native-de
 | `provides` | `:cl-repo :provides` or auto-detected or fallback |
 | `cffi-libraries` | `:cl-repo :cffi-libraries` |
 | `overlays` | `:cl-repo :overlays` |
+| `ci` | `:cl-repo :ci` — consumer CI extras only; ignored by `auto-package-spec` |
+
+### Consumer CI (`:ci`)
+
+Canned GitHub Actions (`ci` / `test-system.yml` / `publish-source.yml`) read the checkout `.asd`. Honest `:depends-on` plus `system/tests` is enough. Optional extras that are **not** in the asd:
+
+```lisp
+:properties
+(:cl-repo
+ (:ci (:with ("dissect")
+       :sources (("rove" :ql))
+       :also-tests t
+       :load-before-test ("cl-stack-ssl")
+       :record-versions (("cl-stack-ssl" . "CL_STACK_SSL_VERSION")))))
+```
+
+Hooks (only if needed): `scripts/ci/pre-install.lisp` and the other `scripts/ci/{pre,post}-{install,test,publish}.lisp` files. Do not copy per-repo `ci-install.lisp` / `publish-checkout.lisp`.
 
 ## Compatibility
 

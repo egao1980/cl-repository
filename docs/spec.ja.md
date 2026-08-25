@@ -27,6 +27,10 @@
 
 config blob の `cffi-libraries` は各ネイティブライブラリに `define-foreign-library`・`canary`・`search-path` を対応付けます。インストール時に `search-path` が（`cl-repo-init.lisp` 経由で）`cffi:*foreign-library-directories*` へ追加され、システム自身の `define-foreign-library` が同梱ライブラリを解決できます。`.asd` では名前文字列または `(name . plist)` を指定できます。
 
+## コンシューマ CI（`:ci`）
+
+`.asd` の `:properties (:cl-repo (:ci …))` は canned GH Action（`ci` / `test-system.yml`）が読む CI 追加分です。`auto-package-spec` は無視します。リポジトリごとに `ci-install.lisp` をコピーしないでください。
+
 ## 注意
 
 厳密な仕様（media types、anchors/referrers、layer roles、JSON 例）は `docs/spec.md` を参照してください。

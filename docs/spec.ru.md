@@ -27,6 +27,10 @@
 
 В config-блобе `cffi-libraries` сопоставляет каждой нативной библиотеке метаданные: `define-foreign-library`, `canary` и `search-path`. При установке `search-path` добавляется в `cffi:*foreign-library-directories*` (через `cl-repo-init.lisp`), чтобы `define-foreign-library` находил поставляемую библиотеку. В `.asd` запись допускается как имя-строка, так и `(имя . plist)`.
 
+## CI потребителя (`:ci`)
+
+`:properties (:cl-repo (:ci …))` в `.asd` — доп. поля для canned GH Action (`ci` / `test-system.yml`). `auto-package-spec` их игнорирует. Не копируйте `ci-install.lisp` по репозиториям.
+
 ## Важно
 
 Полные нормативные требования (media types, anchors/referrers, layer roles, примеры JSON) см. в `docs/spec.md`.

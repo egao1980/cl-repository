@@ -188,9 +188,17 @@ cl-repo add-overlay my-cffi-lib \
   (publish-overlay "https://ghcr.io" "my-org/my-project" "my-cffi-lib" "1.0.0" result))
 ```
 
-#### Setup client (composite action)
+#### CI потребителя (canned actions)
 
-Тестовые job'ы потребителей не должны копировать `oras pull` / QL bootstrap. Используйте:
+Не копируйте `ci-install.lisp` / `ci-test.lisp` / `publish-checkout.lisp`. Метаданные пакета и CI — в `.asd` (`:depends-on` + `:properties (:cl-repo …)`). Хуки в `scripts/ci/` только если canned-пути недостаточно.
+
+```yaml
+jobs:
+  test:
+    uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
+```
+
+Или по шагам:
 
 ```yaml
 permissions:
@@ -199,11 +207,16 @@ permissions:
 steps:
   - uses: actions/checkout@v5
   - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  - run: ros -l scripts/ci-install.lisp -q
-  - run: ros -l scripts/ci-test.lisp -q
+  - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+  - uses: egao1980/cl-repository/.github/actions/ci@main
+    with: { phase: install }
+  - uses: egao1980/cl-repository/.github/actions/ci@main
+    with: { phase: test }
 ```
 
-Action резолвит `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → semver из аннотации → `oras pull`, распаковывает в `.cl-repository/` и пишет `CL_SOURCE_REGISTRY`. **Не пиньте git-тег этого репозитория как версию Lisp-клиента** — `version` только чтобы заморозить OCI-артефакт. Вызывайте action в **каждом job**, которому нужен клиент. Подробности: [`.github/actions/setup-client`](.github/actions/setup-client/).
+Source-only publish: `publish-source.yml`. Native: `publish-native-package.yml`. Подробности: [`.github/actions/ci`](.github/actions/ci/).
+
+`setup-client` резолвит `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → semver из аннотации → `oras pull`, распаковывает в `.cl-repository/` и пишет `CL_SOURCE_REGISTRY`. **Не пиньте git-тег этого репозитория как версию Lisp-клиента** — `version` только чтобы заморозить OCI-артефакт. Вызывайте `setup-client` в **каждом job**, которому нужен клиент.
 
 #### Пример CI (GitHub Actions)
 

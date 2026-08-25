@@ -1,0 +1,83 @@
+# Reusable consumer test: checkout + setup-client + setup-roswell + ci install/test.
+#
+#   jobs:
+#     test:
+#       uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
+#
+# Optional inputs: system, os-json, extra-with, sbcl-version, client-version.
+# Caller does not copy ci-install.lisp / ci-test.lisp.
+name: Test CL system
+
+on:
+  workflow_call:
+    inputs:
+      system:
+        description: ASDF system (empty → discover from *.asd)
+        required: false
+        type: string
+        default: ""
+      os-json:
+        description: JSON array of runner labels
+        required: false
+        type: string
+        default: '["ubuntu-latest","macos-latest","windows-latest"]'
+      extra-with:
+        description: Space-separated CI extras (merged with .asd :ci :with)
+        required: false
+        type: string
+        default: ""
+      sbcl-version:
+        required: false
+        type: string
+        default: "2.6.7"
+      roswell-version:
+        required: false
+        type: string
+        default: "26.02.116"
+      client-version:
+        description: setup-client OCI tag (default latest anchor)
+        required: false
+        type: string
+        default: "latest"
+      actions-ref:
+        description: git ref of this repo for composite actions (default main)
+        required: false
+        type: string
+        default: "main"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os-json) }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      SBCL_VERSION: ${{ inputs.sbcl-version }}
+      ROSWELL_VERSION: ${{ inputs.roswell-version }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: egao1980/cl-repository/.github/actions/setup-client@${{ inputs.actions-ref }}
+        with:
+          version: ${{ inputs.client-version }}
+
+      - uses: egao1980/cl-repository/.github/actions/setup-roswell@${{ inputs.actions-ref }}
+        with:
+          sbcl-version: ${{ env.SBCL_VERSION }}
+          roswell-version: ${{ env.ROSWELL_VERSION }}
+
+      - uses: egao1980/cl-repository/.github/actions/ci@${{ inputs.actions-ref }}
+        with:
+          phase: install
+          system: ${{ inputs.system }}
+          with: ${{ inputs.extra-with }}
+
+      - uses: egao1980/cl-repository/.github/actions/ci@${{ inputs.actions-ref }}
+        with:
+          phase: test
+          system: ${{ inputs.system }}

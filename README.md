@@ -196,9 +196,17 @@ For the parallel matrix → artifact → atomic publish pattern (grpc / cl-stack
 
 See [docs/ci-native-publish.md](docs/ci-native-publish.md). Caller builds `native-<os>-<arch>` artifacts; the reusable job stages Lisp sources, packages overlays, and pushes to `ghcr.io/<owner>/cl-systems/<package>:<version>`.
 
-#### Setup client (composite action)
+#### Consumer CI (canned actions)
 
-Consumer test jobs should **not** copy-paste `oras pull` / QL bootstrap. Use:
+Do **not** copy `ci-install.lisp` / `ci-test.lisp` / `publish-checkout.lisp`. Packaging and CI extras live in the `.asd` (`:depends-on` + `:properties (:cl-repo …)`). Hooks in `scripts/ci/` only when the canned path is not enough.
+
+```yaml
+jobs:
+  test:
+    uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
+```
+
+Or compose:
 
 ```yaml
 permissions:
@@ -207,11 +215,16 @@ permissions:
 steps:
   - uses: actions/checkout@v5
   - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  - run: ros -l scripts/ci-install.lisp -q
-  - run: ros -l scripts/ci-test.lisp -q
+  - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+  - uses: egao1980/cl-repository/.github/actions/ci@main
+    with: { phase: install }
+  - uses: egao1980/cl-repository/.github/actions/ci@main
+    with: { phase: test }
 ```
 
-The action resolves `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → annotated semver → `oras pull`, extracts under `.cl-repository/`, and writes `CL_SOURCE_REGISTRY`. **Do not pin a git tag of this repo for the Lisp client** — pass `version` only to freeze the OCI artifact. Call the action in **every job** that needs the client (runner disks are not shared). Details: [`.github/actions/setup-client`](.github/actions/setup-client/).
+Source-only publish: `egao1980/cl-repository/.github/workflows/publish-source.yml@main`. Natives: `publish-native-package.yml`. Details: [`.github/actions/ci`](.github/actions/ci/).
+
+`setup-client` resolves `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → annotated semver → `oras pull`, extracts under `.cl-repository/`, and writes `CL_SOURCE_REGISTRY`. **Do not pin a git tag of this repo for the Lisp client** — pass `version` only to freeze the OCI artifact. Call `setup-client` in **every job** that needs the client (runner disks are not shared).
 
 #### CI Example (GitHub Actions)
 

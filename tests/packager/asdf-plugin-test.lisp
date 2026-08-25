@@ -126,3 +126,32 @@
                (ok (null (package-spec-overlays spec)))))
         (asdf:clear-system "asd-test2")
         (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
+
+(deftest auto-package-spec-ignores-ci-plist
+  (testing ":ci extras do not leak into package-spec"
+    (let ((dir (uiop:ensure-directory-pathname
+                (merge-pathnames (format nil "cl-repo-asd-ci-~a/" (get-universal-time))
+                                 (uiop:temporary-directory)))))
+      (ensure-directories-exist dir)
+      (with-open-file (s (merge-pathnames "asd-ci.asd" dir)
+                         :direction :output :if-exists :supersede)
+        (format s "(defsystem \"asd-ci\"~%")
+        (format s "  :version \"1.2.3\"~%")
+        (format s "  :properties (:cl-repo (:provides (\"asd-ci\")~%")
+        (format s "                         :ci (:with (\"dissect\") :sources ((\"rove\" :ql)))))~%")
+        (format s "  :components ((:file \"m\")))~%"))
+      (with-open-file (s (merge-pathnames "m.lisp" dir)
+                         :direction :output :if-exists :supersede)
+        (format s "(defpackage :asd-ci (:use :cl))~%"))
+      (unwind-protect
+           (progn
+             (asdf:initialize-source-registry
+              `(:source-registry (:tree ,(namestring dir)) :inherit-configuration))
+             (asdf:clear-system "asd-ci")
+             (let ((spec (auto-package-spec "asd-ci")))
+               (ok (string= (package-spec-name spec) "asd-ci"))
+               (ok (string= (package-spec-version spec) "1.2.3"))
+               (ok (equal (cl-repository-packager/build-matrix::package-spec-provides spec)
+                          '("asd-ci")))))
+        (asdf:clear-system "asd-ci")
+        (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))

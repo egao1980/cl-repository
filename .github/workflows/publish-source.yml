@@ -1,0 +1,82 @@
+# Reusable first-party source-only publish (auto-package-spec from the checkout .asd).
+#
+#   jobs:
+#     publish:
+#       uses: egao1980/cl-repository/.github/workflows/publish-source.yml@main
+#       with:
+#         version: ${{ inputs.version }}
+#       permissions:
+#         contents: read
+#         packages: write
+#
+# Natives still use publish-native-package.yml. No per-repo publish-checkout.lisp.
+name: Publish source package
+
+on:
+  workflow_call:
+    inputs:
+      system:
+        description: ASDF system (empty → discover from *.asd)
+        required: false
+        type: string
+        default: ""
+      version:
+        description: OCI tag (empty → .asd :version)
+        required: false
+        type: string
+        default: ""
+      packager-version:
+        required: false
+        type: string
+        default: "latest"
+      namespace:
+        required: false
+        type: string
+        default: "egao1980/cl-systems"
+      sbcl-version:
+        required: false
+        type: string
+        default: "2.6.7"
+      roswell-version:
+        required: false
+        type: string
+        default: "26.02.116"
+      client-version:
+        required: false
+        type: string
+        default: "latest"
+      actions-ref:
+        description: git ref of this repo for composite actions (default main)
+        required: false
+        type: string
+        default: "main"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SBCL_VERSION: ${{ inputs.sbcl-version }}
+      ROSWELL_VERSION: ${{ inputs.roswell-version }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: egao1980/cl-repository/.github/actions/setup-client@${{ inputs.actions-ref }}
+        with:
+          version: ${{ inputs.client-version }}
+
+      - uses: egao1980/cl-repository/.github/actions/setup-roswell@${{ inputs.actions-ref }}
+        with:
+          sbcl-version: ${{ env.SBCL_VERSION }}
+          roswell-version: ${{ env.ROSWELL_VERSION }}
+
+      - uses: egao1980/cl-repository/.github/actions/ci@${{ inputs.actions-ref }}
+        with:
+          phase: publish
+          system: ${{ inputs.system }}
+          version: ${{ inputs.version }}
+          packager-version: ${{ inputs.packager-version }}
+          oci-namespace: ${{ inputs.namespace }}
