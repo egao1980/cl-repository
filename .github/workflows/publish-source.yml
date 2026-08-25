@@ -45,11 +45,6 @@ on:
         required: false
         type: string
         default: "latest"
-      actions-ref:
-        description: git ref of this repo for composite actions (default main)
-        required: false
-        type: string
-        default: "main"
 
 jobs:
   publish:
@@ -64,16 +59,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: egao1980/cl-repository/.github/actions/setup-client@${{ inputs.actions-ref }}
+      # uses: cannot interpolate inputs/github — GH parse-time restriction.
+      - uses: egao1980/cl-repository/.github/actions/setup-client@main
         with:
           version: ${{ inputs.client-version }}
 
-      - uses: egao1980/cl-repository/.github/actions/setup-roswell@${{ inputs.actions-ref }}
+      - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
         with:
           sbcl-version: ${{ env.SBCL_VERSION }}
           roswell-version: ${{ env.ROSWELL_VERSION }}
 
-      - uses: egao1980/cl-repository/.github/actions/ci@${{ inputs.actions-ref }}
+      - uses: egao1980/cl-repository/.github/actions/ci@main
         with:
           phase: publish
           system: ${{ inputs.system }}
