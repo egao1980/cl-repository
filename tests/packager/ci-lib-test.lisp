@@ -85,3 +85,16 @@
   (ok (equal (cl-repository-ci-lib:split-ws "a, b") '("a" "b")))
   (let ((cl-repository-ci-lib::*extra-with* '("hooked")))
     (ok (member "hooked" (cl-repository-ci-lib:ci-with nil) :test #'string=))))
+
+(deftest run.lisp-readable-before-packager
+  "ros -l run.lisp reads the whole file before %ensure-packager. Package-qualified
+   packager/oci-client symbols blow up install+test (schema-protocol canary)."
+  (let* ((root (uiop:pathname-directory-pathname
+                (asdf:system-source-file "cl-repository-packager")))
+         (text (uiop:read-file-string (merge-pathnames ".github/actions/ci/run.lisp" root))))
+    (dolist (pkg '("cl-repository-packager/asdf-plugin:"
+                   "cl-repository-packager/build-matrix:"
+                   "cl-repository-packager/publisher:"
+                   "cl-oci-client/auth:"
+                   "cl-oci-client/registry:"))
+      (ok (not (search pkg text)) pkg))))
