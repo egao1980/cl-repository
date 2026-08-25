@@ -89,3 +89,8 @@ scripts/ci/post-publish.lisp
 | `packager-version` | `latest` | Packager OCI tag |
 
 `shell: bash` (Windows). Call `setup-client` + `setup-roswell` in **this** job first.
+
+`run.lisp` is loaded in one `ros -l` before the packager exists. Keep
+`cl-repository-packager/*` and `cl-oci-client/*` symbols in `publish.lisp`
+(loaded after `%ensure-packager`). GitHub also forbids expressions in `uses:`
+— reusable workflows pin composite actions at `@main`.
