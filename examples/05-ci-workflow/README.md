@@ -10,32 +10,21 @@ push to main ──> GitHub Actions ──> build OCI artifact ──> push to G
                                     cl-repo:load-system ◄─────┘
 ```
 
-## GitHub Actions: Publish on tag
+## GitHub Actions: Publish
 
-`.github/workflows/publish.yml` builds and pushes the system to GHCR when a version tag is pushed.
-
-Key steps:
-1. Set up SBCL via Roswell
-2. Load the packager
-3. Build the OCI artifact
-4. Push to `ghcr.io/<owner>/<repo>/<name>:<version>`
+`.github/workflows/publish.yml` calls the reusable `publish-source.yml` (`.asd` + `auto-package-spec`). No per-repo `publish-checkout.lisp`.
 
 ## GitHub Actions: Test with cl-repo
 
-Bootstrap the client with the composite action (OCI `:latest`, not a git pin), then `ci-install` / `ci-test`:
+Do **not** copy `scripts/ci-install.lisp`. Call the reusable workflow (reads `.asd`):
 
 ```yaml
-permissions:
-  contents: read
-  packages: read
-steps:
-  - uses: actions/checkout@v5
-  - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  - run: ros -l scripts/ci-install.lisp -q
-  - run: ros -l scripts/ci-test.lisp -q
+jobs:
+  test:
+    uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
 ```
 
-`.github/workflows/test.yml` in this example still shows a local-registry variant. Production consumer CI uses GHCR via `setup-client`.
+CI extras that are not in `:depends-on` go in `:properties (:cl-repo (:ci (:with … :sources …)))`. Hooks: `scripts/ci/pre-test.lisp` etc. See `.github/actions/ci/README.md`.
 
 ## Consuming published packages
 

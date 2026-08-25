@@ -1,0 +1,56 @@
+name: cl-repo CI
+description: >-
+  Install, test, or publish a checkout from .asd metadata
+  (:depends-on + :properties :cl-repo :ci). Optional hooks in scripts/ci/.
+  Requires setup-client + setup-roswell in this job first.
+
+inputs:
+  phase:
+    description: install | test | publish
+    required: true
+  system:
+    description: ASDF system name. Empty → discover from *.asd (unique primary).
+    required: false
+    default: ""
+  with:
+    description: Extra CI systems (space-separated), merged with .asd :ci :with
+    required: false
+    default: ""
+  registry:
+    description: OCI registry URL for cl-repo:add-registry (install)
+    required: false
+    default: "https://ghcr.io"
+  namespace:
+    description: Registry namespace for project deps
+    required: false
+    default: "egao1980/cl-systems"
+  version:
+    description: OCI tag for publish (empty → .asd :version)
+    required: false
+    default: ""
+  packager-version:
+    description: cl-repository-packager OCI tag (publish)
+    required: false
+    default: "latest"
+  oci-namespace:
+    description: Publish namespace
+    required: false
+    default: "egao1980/cl-systems"
+
+runs:
+  using: composite
+  steps:
+    - name: cl-repo ${{ inputs.phase }}
+      shell: bash
+      env:
+        CL_REPO_CI_PHASE: ${{ inputs.phase }}
+        CL_REPO_SYSTEM: ${{ inputs.system }}
+        CL_REPO_CI_WITH: ${{ inputs.with }}
+        CL_REPO_REGISTRY: ${{ inputs.registry }}
+        CL_REPO_NAMESPACE: ${{ inputs.namespace }}
+        PKG_VERSION: ${{ inputs.version }}
+        PACKAGER_VERSION: ${{ inputs.packager-version }}
+        OCI_NAMESPACE: ${{ inputs.oci-namespace }}
+        GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_ACTOR: ${{ github.actor }}
+      run: ros -l "${GITHUB_ACTION_PATH}/run.lisp" -q

@@ -17,9 +17,13 @@ steps:
       sbcl-version: ${{ env.SBCL_VERSION }}
       roswell-version: ${{ env.ROSWELL_VERSION }}
   # CL_SOURCE_REGISTRY / CL_REPOSITORY_CLIENT_DIR already on GITHUB_ENV
-  - run: ros -l scripts/ci-install.lisp -q
-  - run: ros -l scripts/ci-test.lisp -q
+  - uses: egao1980/cl-repository/.github/actions/ci@main
+    with: { phase: install }
+  - uses: egao1980/cl-repository/.github/actions/ci@main
+    with: { phase: test }
 ```
+
+Prefer the reusable workflow `test-system.yml` (no per-repo Lisp scripts). See [../ci](../ci/).
 
 Use `@main` for the **action YAML**. The **artifact** still tracks GHCR `latest` unless you pass `version`.
 
@@ -40,7 +44,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: egao1980/cl-repository/.github/actions/setup-client@main
-      - run: ros -l scripts/ci-install.lisp -q
+      - uses: egao1980/cl-repository/.github/actions/ci@main
+        with: { phase: install }
 ```
 
 ## Inputs / env

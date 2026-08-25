@@ -188,9 +188,17 @@ cl-repo add-overlay my-cffi-lib \
   (publish-overlay "https://ghcr.io" "my-org/my-project" "my-cffi-lib" "1.0.0" result))
 ```
 
-#### Setup client（composite action）
+#### コンシューマ CI（canned actions）
 
-コンシューマの test job に `oras pull` / QL bootstrap をコピペしないでください。次を使います:
+`ci-install.lisp` / `ci-test.lisp` / `publish-checkout.lisp` をコピーしないでください。パッケージと CI 追加分は `.asd`（`:depends-on` + `:properties (:cl-repo …)`）に置きます。足りないときだけ `scripts/ci/` フック。
+
+```yaml
+jobs:
+  test:
+    uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
+```
+
+または:
 
 ```yaml
 permissions:
@@ -199,11 +207,16 @@ permissions:
 steps:
   - uses: actions/checkout@v5
   - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  - run: ros -l scripts/ci-install.lisp -q
-  - run: ros -l scripts/ci-test.lisp -q
+  - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+  - uses: egao1980/cl-repository/.github/actions/ci@main
+    with: { phase: install }
+  - uses: egao1980/cl-repository/.github/actions/ci@main
+    with: { phase: test }
 ```
 
-action は `ghcr.io/egao1980/cl-repository/cl-repository-client:latest`（system-name **anchor**）→ アノテーションの semver → `oras pull` し、`.cl-repository/` に展開して `CL_SOURCE_REGISTRY` を書き込みます。**Lisp クライアントの版としてこのリポジトリの git タグをピンしないでください** — OCI 成果物を凍結するときだけ `version` を渡します。クライアントが必要な **各 job** で action を呼んでください。詳細: [`.github/actions/setup-client`](.github/actions/setup-client/)。
+ソースのみ公開: `publish-source.yml`。ネイティブ: `publish-native-package.yml`。詳細: [`.github/actions/ci`](.github/actions/ci/)。
+
+`setup-client` は `ghcr.io/egao1980/cl-repository/cl-repository-client:latest`（system-name **anchor**）→ アノテーションの semver → `oras pull` し、`.cl-repository/` に展開して `CL_SOURCE_REGISTRY` を書き込みます。**Lisp クライアントの版としてこのリポジトリの git タグをピンしないでください** — OCI 成果物を凍結するときだけ `version` を渡します。クライアントが必要な **各 job** で `setup-client` を呼んでください。
 
 #### CI 例（GitHub Actions）
 
