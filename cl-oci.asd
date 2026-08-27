@@ -16,6 +16,7 @@
                (:file "descriptor-test")
                (:file "manifest-test")
                (:file "serialization-test")
+               (:file "system-names-test")
                (:file "all"))
   :perform (test-op (o c)
             (symbol-call :rove :run c)))

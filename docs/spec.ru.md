@@ -31,6 +31,10 @@
 
 `:properties (:cl-repo (:ci …))` в `.asd` — доп. поля для canned GH Action (`ci` / `test-system.yml`). `auto-package-spec` их игнорирует. Не копируйте `ci-install.lisp` по репозиториям.
 
+## Slash-имена (`foo/bar`)
+
+ASDF-вторичные системы (`ai-agent-protocol/mcp`) не могут быть отдельным GHCR-репозиторием. Они остаются в tar первичного пакета и в аннотации `provides`. Клиент мапит `foo/bar` → пакет `foo` (`oci-package-name`; `+` → `-plus-`, как `setup-client.sh`). Отдельные OCI-репозитории — только для имён без `/` (`cffi-toolchain`).
+
 ## Важно
 
 Полные нормативные требования (media types, anchors/referrers, layer roles, примеры JSON) см. в `docs/spec.md`.

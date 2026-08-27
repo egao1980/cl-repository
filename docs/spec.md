@@ -62,7 +62,9 @@ Overlay layers use the same `<name>-<version>/` root prefix with role-specific s
 
 ## Cross-Repo Blob Mounting for Multi-System Packages
 
-When a package provides multiple system names (e.g., `cffi` provides `cffi`, `cffi-toolchain`, `cffi-libffi`), each system name gets its own OCI repository containing the **full package**. This uses OCI cross-repo blob mounting for zero-copy sharing.
+When a package provides multiple system names (e.g., `cffi` provides `cffi`, `cffi-toolchain`, `cffi-libffi`), each **non-slash** system name gets its own OCI repository containing the **full package**. This uses OCI cross-repo blob mounting for zero-copy sharing.
+
+ASDF slash secondaries (`ai-agent-protocol/mcp`) cannot be GHCR path components. They stay in the primary tarball and in the `provides` annotation. The client maps `foo/bar` → package `foo` (`oci-package-name`; `+` → `-plus-`, same as `setup-client.sh`).
 
 ### Registry Layout
 

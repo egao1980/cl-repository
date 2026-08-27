@@ -55,3 +55,24 @@
            (plan (compute-install-plan '("missing-oci-pkg-xyz") :force t)))
        (ok (equal plan '(("missing-oci-pkg-xyz"))))
        (ok (null *missing-deps-accumulator*))))))
+
+(deftest test-compute-plan-slash-secondary-dedupes-to-primary
+  "ASDF foo/bar is not a GHCR repo. SAT/plan must install foo."
+  (call-with-policy-overrides
+   '(("not-in-oci-xyz/mcp" :oci) ("not-in-oci-xyz" :oci)) nil nil nil
+   (lambda ()
+     (let ((cl-repository-client/quickload::*registries* nil)
+           (plan (compute-install-plan '("not-in-oci-xyz/mcp" "not-in-oci-xyz")
+                                       :force t)))
+       (ok (equal plan '(("not-in-oci-xyz"))))
+       (ok (null *missing-deps-accumulator*))))))
+
+(deftest test-compute-plan-plus-keeps-asdf-name
+  "cl+ssl-style names stay the ASDF name in the plan; registry lookup encodes separately."
+  (call-with-policy-overrides
+   '(("not+plus-xyz" :oci)) nil nil nil
+   (lambda ()
+     (let ((cl-repository-client/quickload::*registries* nil)
+           (plan (compute-install-plan '("not+plus-xyz") :force t)))
+       (ok (equal plan '(("not+plus-xyz"))))
+       (ok (null *missing-deps-accumulator*))))))

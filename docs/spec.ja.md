@@ -31,6 +31,10 @@ config blob の `cffi-libraries` は各ネイティブライブラリに `define
 
 `.asd` の `:properties (:cl-repo (:ci …))` は canned GH Action（`ci` / `test-system.yml`）が読む CI 追加分です。`auto-package-spec` は無視します。リポジトリごとに `ci-install.lisp` をコピーしないでください。
 
+## スラッシュ名（`foo/bar`）
+
+ASDF の二次システム（`ai-agent-protocol/mcp`）は GHCR のパス成分にできない。一次パッケージの tarball と `provides` 注釈に残す。クライアントは `foo/bar` → パッケージ `foo`（`oci-package-name`。`+` → `-plus-`、`setup-client.sh` と同じ）。独自 OCI リポジトリは `/` を含まない名前だけ（`cffi-toolchain`）。
+
 ## 注意
 
 厳密な仕様（media types、anchors/referrers、layer roles、JSON 例）は `docs/spec.md` を参照してください。

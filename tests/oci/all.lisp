@@ -4,4 +4,5 @@
    :cl-oci/tests/digest-test
    :cl-oci/tests/descriptor-test
    :cl-oci/tests/manifest-test
-   :cl-oci/tests/serialization-test))
+   :cl-oci/tests/serialization-test
+   :cl-oci/tests/system-names-test))
