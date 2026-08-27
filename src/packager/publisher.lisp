@@ -49,10 +49,10 @@
   "Publish a build result to an OCI registry with multi-system support.
    Pushes full package to primary repo, mounts blobs to secondary repos for
    each non-slash provided system name, creates system-name anchors and referrers.
-   Slash secondaries stay in the primary tarball and the provides annotation."
+   Slash secondaries stay in the primary tarball and the provides annotation.
    SPEC is a package-spec for metadata. NAMESPACE is the registry namespace.
    When SKIP-CATALOG is true, skip writing catalog anchors and referrers
-   (useful when the publishing token lacks write access to the catalog repo)."
+   (useful when the publishing token lacks write access to the catalog repo).")
   (let* ((provides (or (package-spec-provides spec)
                        (list (package-spec-name spec))))
          (canonical (first provides))
