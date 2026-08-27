@@ -59,20 +59,20 @@
 (deftest test-compute-plan-slash-secondary-dedupes-to-primary
   "ASDF foo/bar is not a GHCR repo. SAT/plan must install foo."
   (call-with-policy-overrides
-   '(("ai-agent-protocol/mcp" :oci) ("ai-agent-protocol" :oci)) nil nil nil
+   '(("not-in-oci-xyz/mcp" :oci) ("not-in-oci-xyz" :oci)) nil nil nil
    (lambda ()
      (let ((cl-repository-client/quickload::*registries* nil)
-           (plan (compute-install-plan '("ai-agent-protocol/mcp" "ai-agent-protocol")
+           (plan (compute-install-plan '("not-in-oci-xyz/mcp" "not-in-oci-xyz")
                                        :force t)))
-       (ok (equal plan '(("ai-agent-protocol"))))
+       (ok (equal plan '(("not-in-oci-xyz"))))
        (ok (null *missing-deps-accumulator*))))))
 
 (deftest test-compute-plan-plus-keeps-asdf-name
-  "cl+ssl stays the ASDF name in the plan; registry lookup encodes separately."
+  "cl+ssl-style names stay the ASDF name in the plan; registry lookup encodes separately."
   (call-with-policy-overrides
-   '(("cl+ssl" :oci)) nil nil nil
+   '(("not+plus-xyz" :oci)) nil nil nil
    (lambda ()
      (let ((cl-repository-client/quickload::*registries* nil)
-           (plan (compute-install-plan '("cl+ssl") :force t)))
-       (ok (equal plan '(("cl+ssl"))))
+           (plan (compute-install-plan '("not+plus-xyz") :force t)))
+       (ok (equal plan '(("not+plus-xyz"))))
        (ok (null *missing-deps-accumulator*))))))
