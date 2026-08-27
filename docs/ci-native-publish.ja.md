@@ -18,3 +18,4 @@ CFFI grovel 済み成果物を載せるパッケージ（event backends）は Ne
 Caller skeleton / inputs / 契約の詳細は英文を参照。
 
 （2026-08-14）`packager-tag` デフォルトは **0.16.0**。
+（2026-08-27）`sbcl-dynamic-space-mb` デフォルトは **8192**（CUDA 級 overlay の gzip で apt SBCL 既定 ~1GB が OOM するため）。
