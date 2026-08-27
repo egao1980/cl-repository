@@ -105,4 +105,6 @@
                 (asdf:system-source-file "cl-repository-packager")))
          (text (uiop:read-file-string (merge-pathnames ".github/actions/ci/publish.lisp" root))))
     (ok (not (search "(list system)" text)))
-    (ok (search "filter-publish-provides" text))))
+    ;; Package-qualified call dies on packager 0.16.0 (symbol not interned).
+    (ok (not (search "asdf-plugin:filter-publish-provides" text)))
+    (ok (search "FILTER-PUBLISH-PROVIDES" text))))
