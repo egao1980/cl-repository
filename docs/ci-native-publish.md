@@ -83,6 +83,7 @@ Declare `:cffi-libraries` / `:overlays` / `:provides` under `:properties (:cl-re
 | `source-overlay-artifact` | no | unpack over workspace after checkout (e.g. version-synced `.asd`) |
 | `skip-catalog` | no | default `true` |
 | `ci-ref` | no | cl-repository ref for `scripts/ci` (default `main`) |
+| `sbcl-dynamic-space-mb` | no | SBCL heap for overlay gzip (default `8192`). CUDA-sized `.so`s OOM the apt SBCL default (~1GB). |
 
 ## Helpers
 

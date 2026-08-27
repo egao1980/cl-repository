@@ -99,6 +99,11 @@ on:
         required: false
         type: string
         default: main
+      sbcl-dynamic-space-mb:
+        description: SBCL --dynamic-space-size for gzip of native overlays (MB)
+        required: false
+        type: number
+        default: 8192
     secrets:
       # Optional override; prefer secrets: inherit (uses github.token)
       PUBLISH_TOKEN:
@@ -222,6 +227,7 @@ jobs:
           OCI_NAMESPACE="$NAMESPACE" \
           GITHUB_ACTOR="${{ github.actor }}" \
           sbcl --noinform --non-interactive \
+            --dynamic-space-size ${{ inputs.sbcl-dynamic-space-mb }} \
             --load .cl-repository-ci/scripts/ci/publish-native-package.lisp
 
           PROVIDES="${{ inputs.provides }}"
