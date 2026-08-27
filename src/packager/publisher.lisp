@@ -20,6 +20,7 @@
   (:import-from :cl-oci/digest #:parse-digest #:format-digest #:compute-digest)
   (:import-from :cl-oci/manifest #:manifest #:manifest-layers)
   (:import-from :cl-oci/config #:+role-source+)
+  (:import-from :cl-oci/system-names #:oci-package-name #:slash-system-name-p)
   (:import-from :cl-repository-packager/build-matrix
                 #:build-result #:build-result-index-json #:build-result-index-digest
                 #:build-result-blobs #:build-result-manifests
@@ -47,14 +48,15 @@
 (defun publish-package (registry namespace tag build-result spec &key skip-catalog)
   "Publish a build result to an OCI registry with multi-system support.
    Pushes full package to primary repo, mounts blobs to secondary repos for
-   each provided system name, creates system-name anchors and referrers.
+   each non-slash provided system name, creates system-name anchors and referrers.
+   Slash secondaries stay in the primary tarball and the provides annotation."
    SPEC is a package-spec for metadata. NAMESPACE is the registry namespace.
    When SKIP-CATALOG is true, skip writing catalog anchors and referrers
    (useful when the publishing token lacks write access to the catalog repo)."
   (let* ((provides (or (package-spec-provides spec)
                        (list (package-spec-name spec))))
          (canonical (first provides))
-         (primary-repo (format nil "~a/~a" namespace canonical))
+         (primary-repo (format nil "~a/~a" namespace (oci-package-name canonical)))
          (reg (etypecase registry
                 (registry registry)
                 (string (make-registry registry)))))
@@ -92,19 +94,22 @@
     (msg "~&  Published primary ~a:~a~%" primary-repo tag)
     ;; 4. Mount blobs + push manifests to secondary repos
     (dolist (secondary (rest provides))
-      (let ((sec-repo (format nil "~a/~a" namespace secondary)))
-        (msg "~&  Mounting to ~a..." sec-repo)
-        (dolist (blob-pair (build-result-blobs build-result))
-          (mount-blob reg sec-repo (car blob-pair) primary-repo))
-        (dolist (bm (build-result-manifests build-result))
-          (push-manifest reg sec-repo (built-manifest-digest bm) (built-manifest-json bm)
-                         :content-type +oci-image-manifest-v1+))
-        (push-manifest reg sec-repo tag (build-result-index-json build-result)
-                       :content-type +oci-image-index-v1+)
-        (push-manifest reg sec-repo (build-result-index-digest build-result)
-                       (build-result-index-json build-result)
-                       :content-type +oci-image-index-v1+)
-        (msg " done~%")))
+      (if (slash-system-name-p secondary)
+          (msg "~&  Skipping secondary repo for ~a (ASDF secondary; lives in ~a)~%"
+               secondary primary-repo)
+          (let ((sec-repo (format nil "~a/~a" namespace (oci-package-name secondary))))
+            (msg "~&  Mounting to ~a..." sec-repo)
+            (dolist (blob-pair (build-result-blobs build-result))
+              (mount-blob reg sec-repo (car blob-pair) primary-repo))
+            (dolist (bm (build-result-manifests build-result))
+              (push-manifest reg sec-repo (built-manifest-digest bm) (built-manifest-json bm)
+                             :content-type +oci-image-manifest-v1+))
+            (push-manifest reg sec-repo tag (build-result-index-json build-result)
+                           :content-type +oci-image-index-v1+)
+            (push-manifest reg sec-repo (build-result-index-digest build-result)
+                           (build-result-index-json build-result)
+                           :content-type +oci-image-index-v1+)
+            (msg " done~%"))))
     ;; 5. Create/update system-name anchors + referrers.
     ;; Non-fatal: the package itself is fully published at this point.  On
     ;; GHCR the shared <namespace>/catalog package is writable only by the
@@ -114,14 +119,15 @@
       (handler-case
           (let ((root-digest (ensure-root-anchor reg namespace)))
             (dolist (system-name provides)
-              (let* ((sys-repo (format nil "~a/~a" namespace system-name))
-                     (anchor-digest (ensure-system-name-anchor reg sys-repo system-name canonical
-                                                               (or (package-spec-version spec) tag))))
-                ;; Push provider referrer into system-name repo
-                (push-provider-referrer reg sys-repo anchor-digest spec tag)
-                ;; Push catalog referrer into per-project catalog repo
-                (push-catalog-referrer reg namespace root-digest system-name
-                                       (or (package-spec-version spec) tag)))))
+              (unless (slash-system-name-p system-name)
+                (let* ((sys-repo (format nil "~a/~a" namespace (oci-package-name system-name)))
+                       (anchor-digest (ensure-system-name-anchor reg sys-repo system-name canonical
+                                                                 (or (package-spec-version spec) tag))))
+                  ;; Push provider referrer into system-name repo
+                  (push-provider-referrer reg sys-repo anchor-digest spec tag)
+                  ;; Push catalog referrer into per-project catalog repo
+                  (push-catalog-referrer reg namespace root-digest system-name
+                                         (or (package-spec-version spec) tag))))))
         (registry-error (e)
           (msg "~&  Warning: catalog/anchor publishing failed (~a); package itself is published.~%"
                e))))
@@ -138,7 +144,7 @@
    Pulls the existing Image Index for SYSTEM-NAME:TAG, pushes the overlay blobs
    and manifest, appends the overlay descriptor to the index, and re-pushes.
    Returns the new index digest."
-  (let* ((repo (format nil "~a/~a" namespace system-name))
+  (let* ((repo (format nil "~a/~a" namespace (oci-package-name system-name)))
          (reg (etypecase registry
                  (registry registry)
                  (string (make-registry registry))))
@@ -187,7 +193,7 @@
    for passing to BUILD-OVERLAY :source-layer.
    This enables incremental overlays to include the source layer for standard
    OCI client compatibility (oras pull --platform ... gets all layers)."
-  (let* ((repo (format nil "~a/~a" namespace system-name))
+  (let* ((repo (format nil "~a/~a" namespace (oci-package-name system-name)))
          (reg (etypecase registry
                 (registry registry)
                 (string (make-registry registry))))

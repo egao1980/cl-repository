@@ -16,9 +16,11 @@
   (%hide-bootstrap (asdf:system-source-directory system))
   (let ((spec (cl-repository-packager/asdf-plugin:auto-package-spec system))
         (result nil))
-    ;; One GHCR package per owning repo — never auto-publish *-test secondaries.
+    ;; Keep auto-package-spec provides (slash secondaries included). Drop tests only.
+    ;; Slash names are recorded in the annotation; publisher does not mount extra GHCR repos for them.
     (setf (cl-repository-packager/build-matrix:package-spec-provides spec)
-          (list system))
+          (cl-repository-packager/asdf-plugin:filter-publish-provides
+           system (cl-repository-packager/build-matrix:package-spec-provides spec)))
     (setf (cl-repository-packager/build-matrix:package-spec-version spec) version)
     (setf result (cl-repository-packager/build-matrix:build-package spec))
     (format t "~&Publishing ~a/~a:~a~%" namespace system version)

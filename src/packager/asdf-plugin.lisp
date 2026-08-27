@@ -6,7 +6,9 @@
   (:export #:package-op
            #:auto-package-spec
            #:discover-provided-systems
-           #:normalize-dep))
+           #:normalize-dep
+           #:test-system-name-p
+           #:filter-publish-provides))
 (in-package :cl-repository-packager/asdf-plugin)
 
 (defclass package-op (asdf:operation) ()
@@ -54,6 +56,17 @@
           (search "/test" n)
           (suffixp "-test")
           (suffixp "-tests")))))
+
+(defun filter-publish-provides (system-name provides)
+  "Provides written into the published package. Drops test systems.
+   Slash secondaries stay in the list (they live in the primary tarball)."
+  (let* ((primary (string-downcase (string system-name)))
+         (raw (or provides (list primary)))
+         (cleaned (remove-if #'test-system-name-p
+                             (mapcar (lambda (s) (string-downcase (string s))) raw))))
+    (if (member primary cleaned :test #'string=)
+        cleaned
+        (cons primary cleaned))))
 
 (defun normalize-metadata-string (value)
   "Coerce ASDF metadata (author/description) to a single-line string or NIL.

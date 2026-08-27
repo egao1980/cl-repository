@@ -11,6 +11,7 @@
   (:import-from :cl-oci/digest #:format-digest)
   (:import-from :cl-oci/config #:cl-system-config #:config-system-name #:config-version
                 #:config-depends-on #:config-provides)
+  (:import-from :cl-oci/system-names #:oci-package-name #:asdf-primary-system-name)
   (:import-from :cl-oci/serialization #:from-json)
   (:import-from :babel #:octets-to-string)
   (:import-from :cl-repository-client/solver
@@ -72,29 +73,31 @@
 
 (defun fetch-available-versions (name registries)
   "Get available versions for NAME from registries. Cached.
-   Respects source policy: skips registries denied/not-allowed for NAME."
-  (or (gethash name *version-cache*)
-      (let ((versions nil))
-        (when (oci-allowed-p name)
-          (dolist (entry registries)
-            (let* ((url (first entry))
-                   (ns (getf (rest entry) :namespace "cl-systems"))
-                   (repo (format nil "~a/~a" ns name))
-                   (reg (make-registry url)))
-              (when (registry-allowed-p name url)
-                (handler-case
-                    (let ((tags (list-tags reg repo)))
-                      (when tags
-                        (dolist (tag tags)
-                          (unless (string= tag "latest")
-                            (pushnew tag versions :test #'string=)))))
-                  (error () nil))))))
-        (setf (gethash name *version-cache*) versions)
-        versions)))
+   Respects source policy: skips registries denied/not-allowed for NAME.
+   Registry path uses OCI-PACKAGE-NAME (slash → primary, + → -plus-)."
+  (let ((pkg (oci-package-name name)))
+    (or (gethash pkg *version-cache*)
+        (let ((versions nil))
+          (when (oci-allowed-p name)
+            (dolist (entry registries)
+              (let* ((url (first entry))
+                     (ns (getf (rest entry) :namespace "cl-systems"))
+                     (repo (format nil "~a/~a" ns pkg))
+                     (reg (make-registry url)))
+                (when (registry-allowed-p name url)
+                  (handler-case
+                      (let ((tags (list-tags reg repo)))
+                        (when tags
+                          (dolist (tag tags)
+                            (unless (string= tag "latest")
+                              (pushnew tag versions :test #'string=)))))
+                    (error () nil))))))
+          (setf (gethash pkg *version-cache*) versions)
+          versions))))
 
 (defun fetch-config (name version registries)
   "Fetch config blob for NAME at VERSION. Cached."
-  (let ((key (cons name version)))
+  (let ((key (cons (oci-package-name name) version)))
     (or (gethash key *config-cache*)
         (let ((config (fetch-config-from-registry name version registries)))
           (when config
@@ -106,7 +109,7 @@
   (dolist (entry registries nil)
     (let* ((url (first entry))
            (ns (getf (rest entry) :namespace "cl-systems"))
-           (repo (format nil "~a/~a" ns name))
+           (repo (format nil "~a/~a" ns (oci-package-name name)))
            (reg (make-registry url)))
       (handler-case
           (let ((obj (pull-manifest reg repo version)))
@@ -157,13 +160,14 @@
                     ;; Enqueue deps
                     (when config
                       (dolist (dep (config-depends-on config))
-                        (let ((dn (dep-name dep)))
+                        (let* ((dn (dep-name dep))
+                               (pkg (asdf-primary-system-name dn)))
                           (when (system-denied-p dn)
                             (error 'dependency-resolution-error
                                    :message (format nil "~a depends on ~a which is denied by source policy"
                                                     name dn)))
-                          (unless (gethash dn universe)
-                            (push (cons dn (dep-version dep)) queue)))))))
+                          (unless (gethash pkg universe)
+                            (push (cons pkg (dep-version dep)) queue)))))))
                 (setf (gethash name universe) (nreverse entries))))))))
     universe))
 
@@ -197,7 +201,7 @@
                   (entry-var (pkg-var name ver)))
              (when config
                (dolist (dep (config-depends-on config))
-                 (let* ((dn (dep-name dep))
+                 (let* ((dn (asdf-primary-system-name (dep-name dep)))
                         (dv (dep-version dep))
                         (dep-entries (gethash dn universe)))
                    (when dep-entries
@@ -237,9 +241,11 @@
                  (let ((config (cdr entry)))
                    (when config
                      (dolist (dep (config-depends-on config))
-                       (let ((dn (dep-name dep)))
-                         (unless (or (gethash dn universe)
-                                     (asdf:find-system dn nil))
+                       (let* ((dn (dep-name dep))
+                              (pkg (asdf-primary-system-name dn)))
+                         (unless (or (gethash pkg universe)
+                                     (asdf:find-system dn nil)
+                                     (asdf:find-system pkg nil))
                            (pushnew dn missing :test #'string=))))))))
              universe)
     missing))
@@ -254,6 +260,7 @@
    Signals dependency-resolution-error on failure."
   (let ((*version-cache* (make-hash-table :test 'equal))
         (*config-cache* (make-hash-table :test 'equal)))
+    (setf root-name (asdf-primary-system-name root-name))
     ;; Resolve :latest to actual version
     (when (or (eq root-version :latest) (null root-version))
       (let ((versions (fetch-available-versions root-name registries)))

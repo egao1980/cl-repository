@@ -37,6 +37,7 @@
                 #:*source-policy* #:*source-rules* #:*default-source*
                 #:apply-source-config #:call-with-policy-overrides
                 #:source-for #:ql-allowed-p #:oci-allowed-p #:system-denied-p)
+  (:import-from :cl-oci/system-names #:oci-package-name #:asdf-primary-system-name)
   (:import-from :babel #:octets-to-string)
   (:export #:*registries*
            #:add-registry
@@ -120,9 +121,8 @@
   "Find SYSTEM-NAME in a registry. Returns (values repo tag) or NIL.
    If VERSION given, uses it directly. Otherwise discovers via tags or anchor.
    For :ocicl registries, the repo is just the system name (no namespace nesting)."
-  (let* ((repo (if (eq type :ocicl)
-                   (format nil "~a/~a" namespace system-name)
-                   (format nil "~a/~a" namespace system-name)))
+  (let* ((pkg (oci-package-name system-name))
+         (repo (format nil "~a/~a" namespace pkg))
          (reg (make-registry reg-url)))
     (handler-case
         (if version
@@ -420,7 +420,8 @@
     (t plan)))
 
 (defun %resolve-one-into-plan (name version plan &key force with-p)
-  "Resolve NAME into PLAN / *missing-deps-accumulator*. Returns updated PLAN."
+  "Resolve NAME into PLAN / *missing-deps-accumulator*. Returns updated PLAN.
+   Slash secondaries (`foo/bar`) install the primary package `foo`."
   (cond
     ((system-denied-p name)
      (msg "~&; cl-repo: skipping denied system ~a~%" name)
@@ -429,31 +430,41 @@
                           (system-protected-p name)))
      (msg "~&; cl-repo: ~a already available via ASDF~%" name)
      plan)
-    ((find name plan :key #'car :test #'string=)
-     plan)
-    ;; :ql-only — do not call OCI SAT (it errors \"not found in any registry\"
-    ;; when OCI is policy-blocked, and the old handler dropped the system).
-    ((and (ql-allowed-p name) (not (oci-allowed-p name)))
-     (msg "~&; cl-repo: ~a source=:ql, queueing Quicklisp~%" name)
-     (pushnew name *missing-deps-accumulator* :test #'string=)
-     plan)
     (t
-     (handler-case
-         (multiple-value-bind (resolved missing)
-             (build-install-plan name (or version :latest) *registries* :force force)
-           (setf plan (%merge-plan-entries plan resolved))
-           (dolist (m missing)
-             (pushnew m *missing-deps-accumulator* :test #'string=))
-           plan)
-       (dependency-resolution-error (e)
-         (msg "~&; cl-repo: ~a~%" e)
-         (%plan-fallback-after-resolution-error name version plan :with-p with-p))
-       (error (e)
-         (msg "~&; cl-repo: SAT resolution unavailable for ~a (~a), trying direct~%"
-              name e)
-         (if (system-already-installed-p name)
-             plan
-             (progn (push (cons name version) plan) plan)))))))
+     (let ((pkg (asdf-primary-system-name name)))
+       (cond
+         ((find pkg plan :key #'car :test #'string=)
+          plan)
+         ((and (not force)
+               (not (string= pkg name))
+               (or (asdf:find-system pkg nil)
+                   (system-already-installed-p pkg)
+                   (system-protected-p pkg)))
+          (msg "~&; cl-repo: ~a provided by installed ~a~%" name pkg)
+          plan)
+         ;; :ql-only — do not call OCI SAT (it errors \"not found in any registry\"
+         ;; when OCI is policy-blocked, and the old handler dropped the system).
+         ((and (ql-allowed-p name) (not (oci-allowed-p name)))
+          (msg "~&; cl-repo: ~a source=:ql, queueing Quicklisp~%" name)
+          (pushnew name *missing-deps-accumulator* :test #'string=)
+          plan)
+         (t
+          (handler-case
+              (multiple-value-bind (resolved missing)
+                  (build-install-plan pkg (or version :latest) *registries* :force force)
+                (setf plan (%merge-plan-entries plan resolved))
+                (dolist (m missing)
+                  (pushnew m *missing-deps-accumulator* :test #'string=))
+                plan)
+            (dependency-resolution-error (e)
+              (msg "~&; cl-repo: ~a~%" e)
+              (%plan-fallback-after-resolution-error pkg version plan :with-p with-p))
+            (error (e)
+              (msg "~&; cl-repo: SAT resolution unavailable for ~a (~a), trying direct~%"
+                   pkg e)
+              (if (system-already-installed-p pkg)
+                  plan
+                  (progn (push (cons pkg version) plan) plan))))))))))
 
 (defun compute-install-plan (system-names &key version force with)
   "Use SAT solver to compute full transitive install plan.

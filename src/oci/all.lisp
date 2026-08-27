@@ -11,4 +11,5 @@
    :cl-oci/manifest
    :cl-oci/image-index
    :cl-oci/config
-   :cl-oci/serialization))
+   :cl-oci/serialization
+   :cl-oci/system-names))

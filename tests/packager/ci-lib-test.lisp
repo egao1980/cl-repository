@@ -98,3 +98,11 @@
                    "cl-oci-client/auth:"
                    "cl-oci-client/registry:"))
       (ok (not (search pkg text)) pkg))))
+
+(deftest publish.lisp-keeps-auto-package-spec-provides
+  "Do not wipe :provides to (list system) — slash secondaries must stay annotated."
+  (let* ((root (uiop:pathname-directory-pathname
+                (asdf:system-source-file "cl-repository-packager")))
+         (text (uiop:read-file-string (merge-pathnames ".github/actions/ci/publish.lisp" root))))
+    (ok (not (search "(list system)" text)))
+    (ok (search "filter-publish-provides" text))))

@@ -1,6 +1,9 @@
 (defpackage :cl-repository-packager/tests/asdf-plugin-test
   (:use :cl :rove)
-  (:import-from :cl-repository-packager/asdf-plugin #:auto-package-spec)
+  (:import-from :cl-repository-packager/asdf-plugin
+                #:auto-package-spec
+                #:filter-publish-provides
+                #:test-system-name-p)
   (:import-from :cl-repository-packager/build-matrix
                 #:package-spec #:package-spec-name #:package-spec-version
                 #:package-spec-overlays))
@@ -155,3 +158,14 @@
                           '("asd-ci")))))
         (asdf:clear-system "asd-ci")
         (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
+
+(deftest filter-publish-provides-keeps-slash-drops-tests
+  (ok (test-system-name-p "ai-agent-protocol/tests"))
+  (ok (not (test-system-name-p "ai-agent-protocol/mcp")))
+  (ok (equal (filter-publish-provides
+              "ai-agent-protocol"
+              '("ai-agent-protocol" "ai-agent-protocol/mcp"
+                "ai-agent-protocol/ag-ui" "ai-agent-protocol/tests"))
+             '("ai-agent-protocol" "ai-agent-protocol/mcp" "ai-agent-protocol/ag-ui")))
+  (ok (equal (filter-publish-provides "foo" '("foo-test" "foo/bar"))
+             '("foo" "foo/bar"))))
