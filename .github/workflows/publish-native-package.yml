@@ -219,14 +219,16 @@ jobs:
             REGISTRY_URL="http://${REGISTRY}"
           fi
 
-          PKG_SOURCE_DIR="$STAGING" \
-          LIB_ROOT="$LIB_ROOT" \
-          PLATFORMS_FILE=/tmp/platforms.txt \
-          OCI_REGISTRY="$REGISTRY" \
-          REGISTRY_URL="$REGISTRY_URL" \
-          OCI_NAMESPACE="$NAMESPACE" \
-          GITHUB_ACTOR="${{ github.actor }}" \
-          # Runtime flags must precede Lisp flags (--noinform / --load).
+          # Do not put comments inside VAR=val \ continuations — bash then
+          # applies the env to a no-op and sbcl never sees PKG_SOURCE_DIR.
+          export PKG_SOURCE_DIR="$STAGING"
+          export LIB_ROOT="$LIB_ROOT"
+          export PLATFORMS_FILE=/tmp/platforms.txt
+          export OCI_REGISTRY="$REGISTRY"
+          export REGISTRY_URL="$REGISTRY_URL"
+          export OCI_NAMESPACE="$NAMESPACE"
+          export GITHUB_ACTOR="${{ github.actor }}"
+          # --dynamic-space-size is a runtime option; must precede --noinform/--load.
           sbcl --dynamic-space-size ${{ inputs.sbcl-dynamic-space-mb }} \
             --noinform --non-interactive \
             --load .cl-repository-ci/scripts/ci/publish-native-package.lisp

@@ -109,14 +109,15 @@
       (setf (cl-repository-packager/build-matrix::package-spec-cffi-libraries spec) cffi-libs)))
   spec)
 
-(let* ((name (env "PKG_NAME"))
-       (source-dir (uiop:ensure-directory-pathname (env "PKG_SOURCE_DIR"))))
+(let ((name (env "PKG_NAME")))
   (unless (and name (plusp (length name)))
     (error "PKG_NAME required"))
   (unless (env "PKG_SOURCE_DIR")
-    (error "PKG_SOURCE_DIR required"))
-  (load-system-asd name source-dir)
-  (let* ((lib-root (uiop:ensure-directory-pathname (env "LIB_ROOT")))
+    (error "PKG_SOURCE_DIR required (env prefix dropped? do not comment inside VAR=val \\)"))
+  (unless (env "LIB_ROOT")
+    (error "LIB_ROOT required"))
+  (let* ((source-dir (uiop:ensure-directory-pathname (env "PKG_SOURCE_DIR")))
+         (lib-root (uiop:ensure-directory-pathname (env "LIB_ROOT")))
          (grovel-root (uiop:ensure-directory-pathname
                        (or (env "GROVEL_ROOT")
                            (namestring (default-grovel-root lib-root)))))
@@ -131,21 +132,22 @@
                   :password (env "GITHUB_TOKEN"))))
          (reg (if use-auth
                   (cl-oci-client/registry:make-registry registry-url :auth auth)
-                  (cl-oci-client/registry:make-registry registry-url)))
-         (overlays (build-artifact-overlays lib-root grovel-root platforms-file))
-         (spec (apply-env-overrides
-                (cl-repository-packager/asdf-plugin:auto-package-spec name))))
-    (unless overlays (error "No overlays built from ~a" platforms-file))
-    ;; Staging tree is the publish source; asd :cl-repo overlays are relative
-    ;; inventory — replace with absolute artifact layers for this build.
-    (setf (cl-repository-packager/build-matrix:package-spec-source-dir spec) source-dir)
-    (setf (cl-repository-packager/build-matrix:package-spec-overlays spec) overlays)
-    (unless (cl-repository-packager/build-matrix:package-spec-version spec)
-      (error "Package ~a has no :version in .asd and PKG_VERSION unset" name))
-    (let ((result (cl-repository-packager/build-matrix:build-package spec))
-          (version (cl-repository-packager/build-matrix:package-spec-version spec)))
-      (format t "~%Publishing ~a:~a (auto-package-spec + artifact overlays) overlays=~{~a~^,~}~%"
-              name version (uiop:read-file-lines platforms-file))
-      (cl-repository-packager/publisher:publish-package
-       reg namespace version result spec :skip-catalog skip-catalog)
-      (format t "Published ~a:~a to ~a/~a~%" name version registry-url namespace))))
+                  (cl-oci-client/registry:make-registry registry-url))))
+    (load-system-asd name source-dir)
+    (let* ((overlays (build-artifact-overlays lib-root grovel-root platforms-file))
+           (spec (apply-env-overrides
+                  (cl-repository-packager/asdf-plugin:auto-package-spec name))))
+      (unless overlays (error "No overlays built from ~a" platforms-file))
+      ;; Staging tree is the publish source; asd :cl-repo overlays are relative
+      ;; inventory — replace with absolute artifact layers for this build.
+      (setf (cl-repository-packager/build-matrix:package-spec-source-dir spec) source-dir)
+      (setf (cl-repository-packager/build-matrix:package-spec-overlays spec) overlays)
+      (unless (cl-repository-packager/build-matrix:package-spec-version spec)
+        (error "Package ~a has no :version in .asd and PKG_VERSION unset" name))
+      (let ((result (cl-repository-packager/build-matrix:build-package spec))
+            (version (cl-repository-packager/build-matrix:package-spec-version spec)))
+        (format t "~%Publishing ~a:~a (auto-package-spec + artifact overlays) overlays=~{~a~^,~}~%"
+                name version (uiop:read-file-lines platforms-file))
+        (cl-repository-packager/publisher:publish-package
+         reg namespace version result spec :skip-catalog skip-catalog)
+        (format t "Published ~a:~a to ~a/~a~%" name version registry-url namespace)))))
