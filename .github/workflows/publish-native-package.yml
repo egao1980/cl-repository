@@ -226,8 +226,9 @@ jobs:
           REGISTRY_URL="$REGISTRY_URL" \
           OCI_NAMESPACE="$NAMESPACE" \
           GITHUB_ACTOR="${{ github.actor }}" \
-          sbcl --noinform --non-interactive \
-            --dynamic-space-size ${{ inputs.sbcl-dynamic-space-mb }} \
+          # Runtime flags must precede Lisp flags (--noinform / --load).
+          sbcl --dynamic-space-size ${{ inputs.sbcl-dynamic-space-mb }} \
+            --noinform --non-interactive \
             --load .cl-repository-ci/scripts/ci/publish-native-package.lisp
 
           PROVIDES="${{ inputs.provides }}"
