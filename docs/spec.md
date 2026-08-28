@@ -93,6 +93,8 @@ oras pull registry/cl-systems/cffi:0.24.1             # identical content
 
 1. Push all blobs and manifests to primary repo `<ns>/<canonical-name>:<version>`
 2. For each secondary system name: mount all blobs via `POST /v2/<target>/blobs/uploads/?mount=<digest>&from=<source>`, then push manifests and image index
+3. Always write a system-name anchor at `<ns>/<system-name>:latest` (package repo; owning-repo token can write)
+4. Unless `skip-catalog`: write the shared `<ns>/catalog` root + catalog referrers (`skip-catalog` does **not** skip step 3)
 
 ## System-Name Anchors and Discovery
 

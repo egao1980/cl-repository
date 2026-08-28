@@ -69,3 +69,23 @@
                  (ok obj)
                  (ok (typep obj 'manifest)))))
         (uiop:delete-directory-tree source-dir :validate t :if-does-not-exist :ignore)))))
+
+(deftest skip-catalog-still-writes-latest
+  (testing "skip-catalog skips catalog only; package-repo :latest is still written"
+    (let* ((source-dir (make-multi-system-source-dir))
+           (reg (make-registry *registry-url*))
+           (tag "1.0.1")
+           (spec (make-instance 'package-spec
+                                :name "multi-main"
+                                :version tag
+                                :source-dir source-dir
+                                :license "MIT"
+                                :provides '("multi-main" "multi-util"))))
+      (unwind-protect
+           (let ((result (build-package spec)))
+             (publish-package reg *test-namespace* tag result spec :skip-catalog t)
+             (let ((obj (pull-manifest reg (format nil "~a/multi-main" *test-namespace*)
+                                       "latest")))
+               (ok obj)
+               (ok (typep obj 'manifest))))
+        (uiop:delete-directory-tree source-dir :validate t :if-does-not-exist :ignore)))))

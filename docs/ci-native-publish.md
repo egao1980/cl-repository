@@ -97,7 +97,7 @@ Declare `:cffi-libraries` / `:overlays` / `:provides` under `:properties (:cl-re
 
 - Artifact names **must** be `native-<os>-<arch>`
 - Overlay file lists use **absolute** paths from arranged `lib/` (via `uiop:directory-files`) so the source tarball stays Lisp-only
-- Publish uses `:skip-catalog t` by default (cross-repo catalog 403)
+- Publish uses `:skip-catalog t` by default (cross-repo catalog 403). That skips only the shared `<namespace>/catalog` repo. System-name `:latest` anchors on the package repo are still written.
 
 ### Artifact layouts
 
