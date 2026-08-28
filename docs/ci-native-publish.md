@@ -59,7 +59,7 @@ jobs:
     with:
       package-name: my-lib
       version: ${{ inputs.version || github.ref_name }}  # strip v* in a prior step if needed
-      packager-tag: "0.16.0"
+      packager-tag: "latest"
       source-paths: |
         my-lib.asd
         src
@@ -79,7 +79,7 @@ Declare `:cffi-libraries` / `:overlays` / `:provides` under `:properties (:cl-re
 | `source-paths` | yes | Lisp-only files/dirs (natives stay in artifacts) |
 | `depends-on` / `cffi-libraries` / `provides` / `description` / `license` | no | optional overrides; prefer `.asd` |
 | `namespace` | no | default `<owner>/cl-systems` |
-| `packager-tag` | no | default `0.16.0` |
+| `packager-tag` | no | default `latest` (system-name anchor → current packager) |
 | `source-overlay-artifact` | no | unpack over workspace after checkout (e.g. version-synced `.asd`) |
 | `skip-catalog` | no | default `true` |
 | `ci-ref` | no | cl-repository ref for `scripts/ci` (default `main`) |
