@@ -7,6 +7,7 @@ on:
 
 env:
   SBCL_VERSION: 2.6.7
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   docs-localization:
