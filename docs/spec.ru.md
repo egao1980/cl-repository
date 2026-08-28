@@ -35,6 +35,10 @@
 
 ASDF-вторичные системы (`ai-agent-protocol/mcp`) не могут быть отдельным GHCR-репозиторием. Они остаются в tar первичного пакета и в аннотации `provides`. Клиент мапит `foo/bar` → пакет `foo` (`oci-package-name`; `+` → `-plus-`, как `setup-client.sh`). Отдельные OCI-репозитории — только для имён без `/` (`cffi-toolchain`).
 
+## `skip-catalog` и `:latest`
+
+`skip-catalog` пропускает только общий `<ns>/catalog` (чужой `GITHUB_TOKEN` получает 403). Якорь `<ns>/<system>:latest` на репозитории пакета пишется всегда (токен owning-repo может писать).
+
 ## Важно
 
 Полные нормативные требования (media types, anchors/referrers, layer roles, примеры JSON) см. в `docs/spec.md`.
