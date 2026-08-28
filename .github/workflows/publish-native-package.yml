@@ -16,7 +16,7 @@
 #         LICENSE
 #         README.md
 #         NOTICE
-#       packager-tag: "0.16.0"
+#       packager-tag: "latest"
 #     secrets: inherit
 #     permissions:
 #       packages: write
@@ -78,7 +78,7 @@ on:
         description: cl-repository-packager OCI tag
         required: false
         type: string
-        default: "0.16.0"
+        default: "latest"
       skip-catalog:
         description: Skip shared namespace catalog write
         required: false

@@ -18,5 +18,6 @@ Nested нужен пакетам с pre-groveled CFFI (event backends). Flat —
 Полный caller skeleton, inputs и контракт — в английской версии.
 
 (2026-08-14) Дефолт `packager-tag` — **0.16.0**.
+(2026-08-28) Дефолт `packager-tag` — **latest** (`v0.18.0` — PIS-зависимости + якорь `:latest` при skip-catalog).
 (2026-08-27) Дефолт `sbcl-dynamic-space-mb` — **8192** (gzip CUDA-размера overlay убивает apt SBCL с ~1GB heap).
 (2026-08-28) `:skip-catalog t` пропускает только общий `<namespace>/catalog`. Якорь `:latest` на репозитории пакета всё равно пишется.

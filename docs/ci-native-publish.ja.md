@@ -18,5 +18,6 @@ CFFI grovel 済み成果物を載せるパッケージ（event backends）は Ne
 Caller skeleton / inputs / 契約の詳細は英文を参照。
 
 （2026-08-14）`packager-tag` デフォルトは **0.16.0**。
+（2026-08-28）`packager-tag` デフォルトは **latest**（`v0.18.0` — PIS 依存 + skip-catalog でも `:latest` アンカー）。
 （2026-08-27）`sbcl-dynamic-space-mb` デフォルトは **8192**（CUDA 級 overlay の gzip で apt SBCL 既定 ~1GB が OOM するため）。
 （2026-08-28）`:skip-catalog t` は共有 `<namespace>/catalog` だけ省略。パッケージリポの `:latest` アンカーは書く。
