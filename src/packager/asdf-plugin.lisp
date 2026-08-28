@@ -7,6 +7,7 @@
            #:auto-package-spec
            #:discover-provided-systems
            #:normalize-dep
+           #:collect-external-depends-on
            #:test-system-name-p
            #:filter-publish-provides))
 (in-package :cl-repository-packager/asdf-plugin)
@@ -109,6 +110,33 @@
         (error () nil)))
     (nreverse names)))
 
+(defun same-source-tree-p (system root-dir)
+  (let ((d (ignore-errors (asdf:system-source-directory system))))
+    (and d root-dir
+         (or (uiop:pathname-equal d root-dir)
+             (uiop:subpathp d root-dir)))))
+
+(defun collect-external-depends-on (system)
+  "Walk SYSTEM and same-tree children (package-inferred). Return external deps.
+   Drops in-tree names (rove/main) so OCI annotations list real packages (dissect)."
+  (let* ((root (asdf:system-source-directory system))
+         (seen (make-hash-table :test #'equal))
+         (external '()))
+    (labels ((walk (sys)
+               (let ((n (string-downcase (asdf:component-name sys))))
+                 (unless (gethash n seen)
+                   (setf (gethash n seen) t)
+                   (dolist (raw (asdf:system-depends-on sys))
+                     (let* ((dep (normalize-dep raw))
+                            (name (if (consp dep) (car dep) dep)))
+                       (when name
+                         (let ((child (asdf:find-system name nil)))
+                           (if (and child (same-source-tree-p child root))
+                               (walk child)
+                               (pushnew dep external :test #'equal))))))))))
+      (walk system)
+      (nreverse external))))
+
 (defun auto-package-spec (system-name)
   "Auto-generate a package-spec by introspecting a loaded ASDF system.
    Reads OCI packaging metadata from the system's :properties under :cl-repo.
@@ -131,7 +159,7 @@
                    :description (normalize-metadata-string (asdf:system-description system))
                    ;; ASDF :author may be a list (esrap) — OCI annotations require strings.
                    :author (normalize-metadata-string (asdf:system-author system))
-                   :depends-on (remove nil (mapcar #'normalize-dep (asdf:system-depends-on system)))
+                   :depends-on (collect-external-depends-on system)
                    :provides provides
                    :cffi-libraries (getf cl-repo :cffi-libraries)
                    :overlays (mapcar #'parse-overlay-spec

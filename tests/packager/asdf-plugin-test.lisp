@@ -2,6 +2,7 @@
   (:use :cl :rove)
   (:import-from :cl-repository-packager/asdf-plugin
                 #:auto-package-spec
+                #:collect-external-depends-on
                 #:filter-publish-provides
                 #:test-system-name-p)
   (:import-from :cl-repository-packager/build-matrix
@@ -158,6 +159,39 @@
                           '("asd-ci")))))
         (asdf:clear-system "asd-ci")
         (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
+
+(deftest collect-external-depends-on-package-inferred
+  "PIS children stay in-tree; only foreign systems go in the package-spec."
+  (let ((dir (uiop:ensure-directory-pathname
+              (merge-pathnames (format nil "cl-repo-pis-~a/" (get-universal-time))
+                               (uiop:temporary-directory)))))
+    (ensure-directories-exist dir)
+    (with-open-file (s (merge-pathnames "pis-demo.asd" dir)
+                       :direction :output :if-exists :supersede)
+      (format s "(defsystem \"pis-demo\"~%")
+      (format s "  :class :package-inferred-system~%")
+      (format s "  :version \"1.0.0\"~%")
+      (format s "  :depends-on (\"pis-demo/main\"))~%"))
+    (with-open-file (s (merge-pathnames "main.lisp" dir)
+                       :direction :output :if-exists :supersede)
+      (format s "(defpackage #:pis-demo/main (:use #:cl #:pis-demo/core))~%"))
+    (with-open-file (s (merge-pathnames "core.lisp" dir)
+                       :direction :output :if-exists :supersede)
+      (format s "(defpackage #:pis-demo/core (:use #:cl) (:import-from #:alexandria #:ensure-list))~%"))
+    (unwind-protect
+         (progn
+           (asdf:initialize-source-registry
+            `(:source-registry (:tree ,(namestring dir)) :inherit-configuration))
+           (asdf:clear-system "pis-demo")
+           (let* ((sys (asdf:find-system "pis-demo"))
+                  (deps (collect-external-depends-on sys)))
+             (ok (not (member "pis-demo/main" deps :test #'string=)))
+             (ok (not (member "pis-demo/core" deps :test #'string=)))
+             (ok (member "alexandria" deps :test #'string=))))
+      (asdf:clear-system "pis-demo")
+      (ignore-errors (asdf:clear-system "pis-demo/main"))
+      (ignore-errors (asdf:clear-system "pis-demo/core"))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
 (deftest filter-publish-provides-keeps-slash-drops-tests
   (ok (test-system-name-p "ai-agent-protocol/tests"))

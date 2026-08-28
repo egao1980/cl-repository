@@ -19,3 +19,4 @@ Caller skeleton / inputs / 契約の詳細は英文を参照。
 
 （2026-08-14）`packager-tag` デフォルトは **0.16.0**。
 （2026-08-27）`sbcl-dynamic-space-mb` デフォルトは **8192**（CUDA 級 overlay の gzip で apt SBCL 既定 ~1GB が OOM するため）。
+（2026-08-28）`:skip-catalog t` は共有 `<namespace>/catalog` だけ省略。パッケージリポの `:latest` アンカーは書く。

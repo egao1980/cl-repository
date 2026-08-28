@@ -19,6 +19,7 @@
                (:file "source-adapter-test")
                (:file "anchor-manifest-test")
                (:file "layer-builder-test")
+               (:file "publisher-test")
                (:file "ci-lib-test")
                (:file "all"))
   :perform (test-op (o c)

@@ -72,7 +72,7 @@ exec ros -Q -- $0 "$@"
   (format t "  --tag <tag>           Version tag for add-overlay (default: from .asd or latest)~%")
   (format t "  --version <ver>       Force package version before build (publish / publish-github);~%")
   (format t "                        overrides .asd :version for tarball prefix + annotations~%")
-  (format t "  --skip-catalog        Skip writing catalog anchors/referrers~%")
+  (format t "  --skip-catalog        Skip shared catalog repo (system-name :latest is still written)~%")
   (format t "  --ref <ref>           Git ref (tag/branch/commit) for publish-github/sync-qlot~%")
   (format t "  --system <name>       ASDF system to package when source has multiple .asd files~%")
   (format t "  --qlfile <path>       qlfile path for sync-qlot (optional; auto-detected)~%")

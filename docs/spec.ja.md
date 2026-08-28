@@ -35,6 +35,10 @@ config blob の `cffi-libraries` は各ネイティブライブラリに `define
 
 ASDF の二次システム（`ai-agent-protocol/mcp`）は GHCR のパス成分にできない。一次パッケージの tarball と `provides` 注釈に残す。クライアントは `foo/bar` → パッケージ `foo`（`oci-package-name`。`+` → `-plus-`、`setup-client.sh` と同じ）。独自 OCI リポジトリは `/` を含まない名前だけ（`cffi-toolchain`）。
 
+## `skip-catalog` と `:latest`
+
+`skip-catalog` は共有 `<ns>/catalog` だけを省略する（他リポの `GITHUB_TOKEN` は 403）。パッケージリポの `<ns>/<system>:latest` アンカーは常に書く（owning-repo トークンは書ける）。
+
 ## 注意
 
 厳密な仕様（media types、anchors/referrers、layer roles、JSON 例）は `docs/spec.md` を参照してください。

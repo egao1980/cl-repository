@@ -8,4 +8,5 @@
    :cl-repository-packager/tests/source-adapter-test
    :cl-repository-packager/tests/anchor-manifest-test
    :cl-repository-packager/tests/layer-builder-test
+   :cl-repository-packager/tests/publisher-test
    :cl-repository-packager/tests/ci-lib-test))

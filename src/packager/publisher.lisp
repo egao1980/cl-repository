@@ -42,6 +42,8 @@
   (:export #:publish-package
            #:publish-full-package
            #:publish-overlay
+           #:publish-system-name-anchors
+           #:system-name-anchor-targets
            #:fetch-source-layer-info))
 (in-package :cl-repository-packager/publisher)
 
@@ -51,8 +53,9 @@
    each non-slash provided system name, creates system-name anchors and referrers.
    Slash secondaries stay in the primary tarball and the provides annotation.
    SPEC is a package-spec for metadata. NAMESPACE is the registry namespace.
-   When SKIP-CATALOG is true, skip writing catalog anchors and referrers
-   (useful when the publishing token lacks write access to the catalog repo)."
+   System-name :latest anchors always go to the package repo (owning-repo token
+   can write). SKIP-CATALOG skips only the shared <namespace>/catalog repo
+   (cross-repo GITHUB_TOKENs get 403 there)."
   (let* ((provides (or (package-spec-provides spec)
                        (list (package-spec-name spec))))
          (canonical (first provides))
@@ -110,26 +113,20 @@
                            (build-result-index-json build-result)
                            :content-type +oci-image-index-v1+)
             (msg " done~%"))))
-    ;; 5. Create/update system-name anchors + referrers.
-    ;; Non-fatal: the package itself is fully published at this point.  On
-    ;; GHCR the shared <namespace>/catalog package is writable only by the
-    ;; repo whose workflow first created it; other repos' GITHUB_TOKENs get
-    ;; 403 here unless granted access in the package's Actions settings.
+    ;; 5. System-name :latest lives on the package repo. Always write it.
+    ;;    Non-fatal: the versioned tag is already published.
+    (handler-case
+        (publish-system-name-anchors reg namespace spec tag)
+      (registry-error (e)
+        (msg "~&  Warning: system-name anchor publishing failed (~a); package itself is published.~%"
+             e)))
+    ;; 6. Shared <namespace>/catalog is a different GHCR package. Most
+    ;;    repos' GITHUB_TOKENs get 403. skip-catalog skips only this.
     (unless skip-catalog
       (handler-case
-          (let ((root-digest (ensure-root-anchor reg namespace)))
-            (dolist (system-name provides)
-              (unless (slash-system-name-p system-name)
-                (let* ((sys-repo (format nil "~a/~a" namespace (oci-package-name system-name)))
-                       (anchor-digest (ensure-system-name-anchor reg sys-repo system-name canonical
-                                                                 (or (package-spec-version spec) tag))))
-                  ;; Push provider referrer into system-name repo
-                  (push-provider-referrer reg sys-repo anchor-digest spec tag)
-                  ;; Push catalog referrer into per-project catalog repo
-                  (push-catalog-referrer reg namespace root-digest system-name
-                                         (or (package-spec-version spec) tag))))))
+          (publish-catalog-entries reg namespace spec tag)
         (registry-error (e)
-          (msg "~&  Warning: catalog/anchor publishing failed (~a); package itself is published.~%"
+          (msg "~&  Warning: catalog publishing failed (~a); package itself is published.~%"
                e))))
     (msg "~&Published ~a:~a (digest: ~a, provides: ~{~a~^, ~})~%"
          primary-repo tag (build-result-index-digest build-result) provides)
@@ -138,6 +135,41 @@
 (defun publish-full-package (registry-url namespace tag build-result spec &key skip-catalog)
   "High-level publish entry point. REGISTRY-URL is a string like \"http://localhost:5050\"."
   (publish-package registry-url namespace tag build-result spec :skip-catalog skip-catalog))
+
+(defun system-name-anchor-targets (namespace spec)
+  "Package repos that receive a <repo>:latest system-name anchor.
+   Slash secondaries stay in the primary tarball — no extra GHCR repo."
+  (let ((provides (or (package-spec-provides spec)
+                      (list (package-spec-name spec)))))
+    (loop for name in provides
+          unless (slash-system-name-p name)
+            collect (format nil "~a/~a" namespace (oci-package-name name)))))
+
+(defun publish-system-name-anchors (registry namespace spec tag)
+  "Write <ns>/<system>:latest anchors and provider referrers for SPEC.
+   These go to the package repo (writable by the owning-repo token).
+   Does not touch the shared catalog repo."
+  (let* ((provides (or (package-spec-provides spec)
+                       (list (package-spec-name spec))))
+         (canonical (first provides))
+         (version (or (package-spec-version spec) tag)))
+    (dolist (system-name provides)
+      (unless (slash-system-name-p system-name)
+        (let* ((sys-repo (format nil "~a/~a" namespace (oci-package-name system-name)))
+               (anchor-digest (ensure-system-name-anchor registry sys-repo system-name
+                                                         canonical version)))
+          (push-provider-referrer registry sys-repo anchor-digest spec tag)
+          (msg "~&  Wrote ~a:latest~%" sys-repo))))))
+
+(defun publish-catalog-entries (registry namespace spec tag)
+  "Write shared <namespace>/catalog root + per-system catalog referrers."
+  (let ((provides (or (package-spec-provides spec)
+                      (list (package-spec-name spec))))
+        (version (or (package-spec-version spec) tag))
+        (root-digest (ensure-root-anchor registry namespace)))
+    (dolist (system-name provides)
+      (unless (slash-system-name-p system-name)
+        (push-catalog-referrer registry namespace root-digest system-name version)))))
 
 (defun publish-overlay (registry namespace system-name tag overlay-result)
   "Add a platform overlay to an already-published package.
