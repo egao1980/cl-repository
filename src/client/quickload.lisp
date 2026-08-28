@@ -327,8 +327,9 @@
   "Install dependency closure for a **local** SYSTEM-NAME (checkout on CL_SOURCE_REGISTRY).
 
    Walks ASDF :depends-on (transitively while systems are findable). Missing names
-   go through ENSURE-SYSTEMS (OCI registries → QL fallback). Does not install or
-   ASDF-load SYSTEM-NAME itself.
+   go through ENSURE-SYSTEMS (OCI registries → QL fallback). Re-walks after each
+   install so package-inferred children (rove/core/assertion → dissect) are seen.
+   Does not install or ASDF-load SYSTEM-NAME itself.
 
    ALSO-TESTS (default T): also walk SYSTEM-NAME/tests when that system exists.
    WITH: extra CI-only systems not in the .asd (e.g. event-backend-libuv, cl-stack-ssl)."
@@ -347,14 +348,24 @@
                     test-name)))
         (when (asdf:find-system ts nil)
           (push ts local-roots))))
-    (let ((targets (collect-missing-asdf-deps local-roots extras)))
-      (msg "~&; cl-repo: ensure deps for local ~a → ~{~a~^, ~}~%" name targets)
-      (when targets
-        (ensure-systems targets
-                        :silent silent :version version :force force
-                        :sources sources :deny deny :allow allow
-                        :default-source default-source
-                        :config-path config-path)))
+    ;; One pass only sees the SUT asd. After installing a package-inferred
+    ;; system (rove → rove/core/assertion → dissect), re-walk until fixpoint.
+    (let ((prev nil))
+      (loop
+        (let ((targets (collect-missing-asdf-deps local-roots extras)))
+          (when (or (null targets)
+                    (equal (sort (copy-list targets) #'string<)
+                           (sort (copy-list prev) #'string<)))
+            (when (and targets prev)
+              (msg "~&; cl-repo: still missing after install: ~{~a~^, ~}~%" targets))
+            (return))
+          (msg "~&; cl-repo: ensure deps for local ~a → ~{~a~^, ~}~%" name targets)
+          (ensure-systems targets
+                          :silent silent :version version :force force
+                          :sources sources :deny deny :allow allow
+                          :default-source default-source
+                          :config-path config-path)
+          (setf prev targets))))
     (values)))
 
 (defun load-system (systems &key silent version force

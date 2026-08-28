@@ -416,7 +416,7 @@ resolves the bundled library (Post-Install, [native deps](requirements/native-de
 |-------|--------|
 | `name` | `asdf:component-name` |
 | `version` | `asdf:component-version` |
-| `depends-on` | `asdf:system-depends-on` (preserves version constraints) |
+| `depends-on` | External deps only: walk `asdf:system-depends-on` plus same-tree package-inferred children (`rove/core/assertion` → `dissect`). In-tree names (`rove/main`) are omitted. |
 | `provides` | `:cl-repo :provides` or auto-detected or fallback |
 | `cffi-libraries` | `:cl-repo :cffi-libraries` |
 | `overlays` | `:cl-repo :overlays` |
