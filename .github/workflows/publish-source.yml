@@ -54,7 +54,11 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    container: ${{ inputs.ci-image != '' && fromJSON(format('{{"image":"{0}","credentials":{{"username":"{1}","password":"{2}"}}}}', inputs.ci-image, github.actor, secrets.GITHUB_TOKEN)) || fromJSON('null') }}
+    container:
+      image: ${{ inputs.ci-image != '' && inputs.ci-image || 'ghcr.io/egao1980/cl-repository/ci-base:latest' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         shell: bash
