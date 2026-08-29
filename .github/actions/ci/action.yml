@@ -2,7 +2,7 @@ name: cl-repo CI
 description: >-
   Install, test, or publish a checkout from .asd metadata
   (:depends-on + :properties :cl-repo :ci). Optional hooks in scripts/ci/.
-  Requires setup-client + setup-roswell in this job first.
+  Requires setup-lisp (or setup-client + setup-roswell) in this job first.
 
 inputs:
   phase:

@@ -206,16 +206,24 @@ jobs:
     uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
 ```
 
+Ubuntu jobs in `test-system.yml` / `publish-source.yml` run in
+`ghcr.io/egao1980/cl-repository/ci-base` (Roswell + SBCL + client already
+installed). That is `jobs.<id>.container` — not a Docker container action.
+macOS / Windows cannot use a job container; they install on the VM (cached).
+
 Or compose:
 
 ```yaml
 permissions:
   contents: read
   packages: read
+# Ubuntu only — omit container: on macos/windows.
+container: ghcr.io/egao1980/cl-repository/ci-base:latest
+defaults:
+  run: { shell: bash }
 steps:
   - uses: actions/checkout@v5
-  - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+  - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
   - uses: egao1980/cl-repository/.github/actions/ci@main
     with: { phase: install }
   - uses: egao1980/cl-repository/.github/actions/ci@main
@@ -224,7 +232,7 @@ steps:
 
 Source-only publish: `egao1980/cl-repository/.github/workflows/publish-source.yml@main`. Natives: `publish-native-package.yml`. Details: [`.github/actions/ci`](.github/actions/ci/).
 
-`setup-client` resolves `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → annotated semver → `oras pull`, extracts under `.cl-repository/`, and writes `CL_SOURCE_REGISTRY`. **Do not pin a git tag of this repo for the Lisp client** — pass `version` only to freeze the OCI artifact. Call `setup-client` in **every job** that needs the client (runner disks are not shared).
+`setup-lisp` on `ci-base` only exports `CL_SOURCE_REGISTRY`. On a bare VM it runs `setup-client` + `setup-roswell`. `setup-client` resolves `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → annotated semver → `oras pull`. **Do not pin a git tag of this repo for the Lisp client** — pass `version` only to freeze the OCI artifact. Call `setup-lisp` in **every job** that needs the client (runner disks are not shared).
 
 #### CI Example (GitHub Actions)
 

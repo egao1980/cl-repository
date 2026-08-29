@@ -198,16 +198,23 @@ jobs:
     uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
 ```
 
+Ubuntu-джобы в `test-system.yml` / `publish-source.yml` идут в
+`ghcr.io/egao1980/cl-repository/ci-base` (Roswell + SBCL + клиент уже стоят).
+Это `jobs.<id>.container`, не Docker container action.
+macOS / Windows job container не поддерживают — ставят тулчейн на VM (с кэшем).
+
 Или по шагам:
 
 ```yaml
 permissions:
   contents: read
   packages: read
+container: ghcr.io/egao1980/cl-repository/ci-base:latest
+defaults:
+  run: { shell: bash }
 steps:
   - uses: actions/checkout@v5
-  - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+  - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
   - uses: egao1980/cl-repository/.github/actions/ci@main
     with: { phase: install }
   - uses: egao1980/cl-repository/.github/actions/ci@main
@@ -216,7 +223,7 @@ steps:
 
 Source-only publish: `publish-source.yml`. Native: `publish-native-package.yml`. Подробности: [`.github/actions/ci`](.github/actions/ci/).
 
-`setup-client` резолвит `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → semver из аннотации → `oras pull`, распаковывает в `.cl-repository/` и пишет `CL_SOURCE_REGISTRY`. **Не пиньте git-тег этого репозитория как версию Lisp-клиента** — `version` только чтобы заморозить OCI-артефакт. Вызывайте `setup-client` в **каждом job**, которому нужен клиент.
+`setup-lisp` на `ci-base` только выставляет `CL_SOURCE_REGISTRY`. На голой VM вызывает `setup-client` + `setup-roswell`. `setup-client` резолвит `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → semver из аннотации → `oras pull`. **Не пиньте git-тег этого репозитория как версию Lisp-клиента** — `version` только чтобы заморозить OCI-артефакт. Вызывайте `setup-lisp` в **каждом job**, которому нужен клиент.
 
 #### Пример CI (GitHub Actions)
 

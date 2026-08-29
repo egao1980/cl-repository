@@ -1,10 +1,12 @@
-# Reusable consumer test: checkout + setup-client + setup-roswell + ci install/test.
+# Reusable consumer test: checkout + setup-lisp + ci install/test.
+# Ubuntu jobs run in ci-base (ros/SBCL/client already installed).
+# macOS/Windows stay on the VM (job containers are Linux-only).
 #
 #   jobs:
 #     test:
 #       uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
 #
-# Optional inputs: system, os-json, extra-with, sbcl-version, client-version.
+# Optional inputs: system, os-json, extra-with, sbcl-version, client-version, ci-image.
 # Caller does not copy ci-install.lisp / ci-test.lisp.
 name: Test CL system
 
@@ -39,6 +41,13 @@ on:
         required: false
         type: string
         default: "latest"
+      ci-image:
+        description: >-
+          Ubuntu job container with ros/SBCL/client. Empty disables the
+          container (install on the VM). Ignored on macOS/Windows.
+        required: false
+        type: string
+        default: "ghcr.io/egao1980/cl-repository/ci-base:latest"
 
 jobs:
   test:
@@ -47,6 +56,12 @@ jobs:
       matrix:
         os: ${{ fromJSON(inputs.os-json) }}
     runs-on: ${{ matrix.os }}
+    # Job containers require a Linux runner. fromJSON('null') omits container.
+    # credentials: GHCR (same map as docs.github.com container.credentials).
+    container: ${{ (startsWith(matrix.os, 'ubuntu') && inputs.ci-image != '') && fromJSON(format('{{"image":"{0}","credentials":{{"username":"{1}","password":"{2}"}}}}', inputs.ci-image, github.actor, secrets.GITHUB_TOKEN)) || fromJSON('null') }}
+    defaults:
+      run:
+        shell: bash
     permissions:
       contents: read
       packages: read
@@ -58,12 +73,9 @@ jobs:
       - uses: actions/checkout@v5
 
       # uses: cannot interpolate inputs/github — GH parse-time restriction.
-      - uses: egao1980/cl-repository/.github/actions/setup-client@main
+      - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
         with:
           version: ${{ inputs.client-version }}
-
-      - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
-        with:
           sbcl-version: ${{ env.SBCL_VERSION }}
           roswell-version: ${{ env.ROSWELL_VERSION }}
 

@@ -1,0 +1,95 @@
+name: Setup Lisp toolchain
+description: >-
+  If this job is running in the ci-base container, wire HOME/PATH/CL_SOURCE_REGISTRY
+  (no install). Otherwise install Roswell + SBCL + cl-repository-client.
+  Job containers are Linux-only; macOS/Windows always take the install path.
+
+inputs:
+  sbcl-version:
+    required: false
+    default: "2.6.7"
+  roswell-version:
+    required: false
+    default: "26.02.116"
+  install-sbcl:
+    required: false
+    default: "true"
+  version:
+    description: Client OCI tag (install path only)
+    required: false
+    default: latest
+  image:
+    required: false
+    default: ghcr.io/egao1980/cl-repository/cl-repository-client
+  systems:
+    required: false
+    default: ghcr.io/egao1980/cl-systems
+  dest:
+    required: false
+    default: .cl-repository
+  pull-deps:
+    required: false
+    default: "true"
+  oras-version:
+    required: false
+    default: "1.2.3"
+  token:
+    required: false
+    default: ${{ github.token }}
+  username:
+    required: false
+    default: ${{ github.actor }}
+
+outputs:
+  client-dir:
+    description: Client source directory
+    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.client-dir || steps.client.outputs.client-dir }}
+  client-version:
+    description: Resolved client semver
+    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.client-version || steps.client.outputs.client-version }}
+  dest:
+    description: Client extract root
+    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.dest || steps.client.outputs.dest }}
+  source-registry:
+    description: CL_SOURCE_REGISTRY
+    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.source-registry || steps.client.outputs.source-registry }}
+
+runs:
+  using: composite
+  steps:
+    - name: Activate ci-base image
+      id: image
+      shell: bash
+      run: bash "${GITHUB_ACTION_PATH}/activate.sh"
+
+    - name: Cache Roswell + SBCL
+      if: steps.image.outputs.image != 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.roswell
+          C:\roswell
+        key: ${{ runner.os }}-${{ runner.arch }}-roswell-${{ inputs.roswell-version }}-sbcl-${{ inputs.install-sbcl }}-${{ inputs.sbcl-version }}
+
+    # uses: cannot interpolate — pin @main (same as test-system.yml).
+    - name: Setup Roswell
+      if: steps.image.outputs.image != 'true'
+      uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+      with:
+        sbcl-version: ${{ inputs.sbcl-version }}
+        roswell-version: ${{ inputs.roswell-version }}
+        install-sbcl: ${{ inputs.install-sbcl }}
+
+    - name: Setup cl-repository-client
+      if: steps.image.outputs.image != 'true'
+      id: client
+      uses: egao1980/cl-repository/.github/actions/setup-client@main
+      with:
+        version: ${{ inputs.version }}
+        image: ${{ inputs.image }}
+        systems: ${{ inputs.systems }}
+        dest: ${{ inputs.dest }}
+        pull-deps: ${{ inputs.pull-deps }}
+        oras-version: ${{ inputs.oras-version }}
+        token: ${{ inputs.token }}
+        username: ${{ inputs.username }}
