@@ -50,15 +50,20 @@ on:
         default: "ghcr.io/egao1980/cl-repository/ci-base:latest"
 
 jobs:
-  test:
+  # credentials must be a mapping (docs), not inside a format() expression —
+  # reusable-workflow parse rejects `secrets` there (Unrecognized named-value).
+  test-ubuntu:
+    if: ${{ inputs.ci-image != '' && startsWith(matrix.os, 'ubuntu') }}
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(inputs.os-json) }}
     runs-on: ${{ matrix.os }}
-    # Job containers require a Linux runner. fromJSON('null') omits container.
-    # credentials: GHCR (same map as docs.github.com container.credentials).
-    container: ${{ (startsWith(matrix.os, 'ubuntu') && inputs.ci-image != '') && fromJSON(format('{{"image":"{0}","credentials":{{"username":"{1}","password":"{2}"}}}}', inputs.ci-image, github.actor, secrets.GITHUB_TOKEN)) || fromJSON('null') }}
+    container:
+      image: ${{ inputs.ci-image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         shell: bash
@@ -72,7 +77,43 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # uses: cannot interpolate inputs/github — GH parse-time restriction.
+      - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
+        with:
+          version: ${{ inputs.client-version }}
+          sbcl-version: ${{ env.SBCL_VERSION }}
+          roswell-version: ${{ env.ROSWELL_VERSION }}
+
+      - uses: egao1980/cl-repository/.github/actions/ci@main
+        with:
+          phase: install
+          system: ${{ inputs.system }}
+          with: ${{ inputs.extra-with }}
+
+      - uses: egao1980/cl-repository/.github/actions/ci@main
+        with:
+          phase: test
+          system: ${{ inputs.system }}
+
+  test:
+    if: ${{ inputs.ci-image == '' || !startsWith(matrix.os, 'ubuntu') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os-json) }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+      packages: read
+    env:
+      SBCL_VERSION: ${{ inputs.sbcl-version }}
+      ROSWELL_VERSION: ${{ inputs.roswell-version }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+
       - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
         with:
           version: ${{ inputs.client-version }}
