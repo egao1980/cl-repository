@@ -232,7 +232,7 @@ steps:
 
 Source-only publish: `egao1980/cl-repository/.github/workflows/publish-source.yml@main`. Natives: `publish-native-package.yml`. Details: [`.github/actions/ci`](.github/actions/ci/).
 
-`setup-lisp` on `ci-base` only exports `CL_SOURCE_REGISTRY`. On a bare VM it runs `setup-client` + `setup-roswell`. `setup-client` resolves `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → annotated semver → `oras pull`. **Do not pin a git tag of this repo for the Lisp client** — pass `version` only to freeze the OCI artifact. Call `setup-lisp` in **every job** that needs the client (runner disks are not shared).
+`setup-lisp` on `ci-base` only exports `CL_SOURCE_REGISTRY`. On a bare VM it runs `setup-client` + `setup-roswell`, caching `~/.roswell` and `.cl-repository` (client key = resolved semver, never the `:latest` alias). `setup-client` resolves `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → annotated semver → `oras pull`. **Do not pin a git tag of this repo for the Lisp client** — pass `version` only to freeze the OCI artifact. Call `setup-lisp` in **every job** that needs the client (runner disks are not shared).
 
 #### CI Example (GitHub Actions)
 

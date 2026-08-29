@@ -223,7 +223,7 @@ steps:
 
 Source-only publish: `publish-source.yml`. Native: `publish-native-package.yml`. Подробности: [`.github/actions/ci`](.github/actions/ci/).
 
-`setup-lisp` на `ci-base` только выставляет `CL_SOURCE_REGISTRY`. На голой VM вызывает `setup-client` + `setup-roswell`. `setup-client` резолвит `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → semver из аннотации → `oras pull`. **Не пиньте git-тег этого репозитория как версию Lisp-клиента** — `version` только чтобы заморозить OCI-артефакт. Вызывайте `setup-lisp` в **каждом job**, которому нужен клиент.
+`setup-lisp` на `ci-base` только выставляет `CL_SOURCE_REGISTRY`. На голой VM вызывает `setup-client` + `setup-roswell` и кэширует `~/.roswell` и `.cl-repository` (ключ клиента — резолвленный semver, не алиас `:latest`). `setup-client` резолвит `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → semver из аннотации → `oras pull`. **Не пиньте git-тег этого репозитория как версию Lisp-клиента** — `version` только чтобы заморозить OCI-артефакт. Вызывайте `setup-lisp` в **каждом job**, которому нужен клиент.
 
 #### Пример CI (GitHub Actions)
 
