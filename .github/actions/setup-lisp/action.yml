@@ -3,6 +3,7 @@ description: >-
   If this job is running in the ci-base container, wire HOME/PATH/CL_SOURCE_REGISTRY
   (no install). Otherwise install Roswell + SBCL + cl-repository-client.
   Job containers are Linux-only; macOS/Windows always take the install path.
+  Client tree is cached on the resolved semver (never on the :latest alias).
 
 inputs:
   sbcl-version:
@@ -15,7 +16,7 @@ inputs:
     required: false
     default: "true"
   version:
-    description: Client OCI tag (install path only)
+    description: Client OCI tag (install path only). :latest is resolved before cache.
     required: false
     default: latest
   image:
@@ -43,16 +44,16 @@ inputs:
 outputs:
   client-dir:
     description: Client source directory
-    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.client-dir || steps.client.outputs.client-dir }}
+    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.client-dir || (steps.restore.outputs.valid == 'true' && steps.restore.outputs.client-dir || steps.client.outputs.client-dir) }}
   client-version:
     description: Resolved client semver
-    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.client-version || steps.client.outputs.client-version }}
+    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.client-version || (steps.restore.outputs.valid == 'true' && steps.restore.outputs.client-version || steps.client.outputs.client-version) }}
   dest:
     description: Client extract root
-    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.dest || steps.client.outputs.dest }}
+    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.dest || (steps.restore.outputs.valid == 'true' && steps.restore.outputs.dest || steps.client.outputs.dest) }}
   source-registry:
     description: CL_SOURCE_REGISTRY
-    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.source-registry || steps.client.outputs.source-registry }}
+    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.source-registry || (steps.restore.outputs.valid == 'true' && steps.restore.outputs.source-registry || steps.client.outputs.source-registry) }}
 
 runs:
   using: composite
@@ -71,7 +72,32 @@ runs:
           C:\roswell
         key: ${{ runner.os }}-${{ runner.arch }}-roswell-${{ inputs.roswell-version }}-sbcl-${{ inputs.install-sbcl }}-${{ inputs.sbcl-version }}
 
-    # uses: cannot interpolate — pin @main (same as test-system.yml).
+    # uses: cannot interpolate — pin @v2 / @main (same as test-system.yml).
+    - name: Install oras
+      if: steps.image.outputs.image != 'true'
+      uses: oras-project/setup-oras@v2
+      with:
+        version: ${{ inputs.oras-version }}
+
+    - name: Resolve client semver
+      if: steps.image.outputs.image != 'true'
+      id: resolve
+      shell: bash
+      env:
+        CL_REPOSITORY_CLIENT_IMAGE: ${{ inputs.image }}
+        CL_REPOSITORY_CLIENT_VERSION: ${{ inputs.version }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        GITHUB_ACTOR: ${{ inputs.username }}
+      run: bash "${GITHUB_ACTION_PATH}/resolve-client.sh"
+
+    - name: Cache cl-repository-client
+      if: steps.image.outputs.image != 'true'
+      id: client-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.dest }}
+        key: ${{ runner.os }}-${{ runner.arch }}-cl-repo-client-${{ steps.resolve.outputs.client-version }}-deps-${{ inputs.pull-deps }}-oras-${{ inputs.oras-version }}-${{ inputs.image }}-${{ inputs.systems }}-${{ inputs.dest }}
+
     - name: Setup Roswell
       if: steps.image.outputs.image != 'true'
       uses: egao1980/cl-repository/.github/actions/setup-roswell@main
@@ -80,12 +106,21 @@ runs:
         roswell-version: ${{ inputs.roswell-version }}
         install-sbcl: ${{ inputs.install-sbcl }}
 
+    - name: Restore cached client
+      if: steps.image.outputs.image != 'true' && steps.client-cache.outputs.cache-hit == 'true'
+      id: restore
+      shell: bash
+      env:
+        CL_REPOSITORY_DEST: ${{ inputs.dest }}
+        CL_REPOSITORY_CLIENT_VERSION: ${{ steps.resolve.outputs.client-version }}
+      run: bash "${GITHUB_ACTION_PATH}/restore-client.sh"
+
     - name: Setup cl-repository-client
-      if: steps.image.outputs.image != 'true'
+      if: steps.image.outputs.image != 'true' && (steps.client-cache.outputs.cache-hit != 'true' || steps.restore.outputs.valid != 'true')
       id: client
       uses: egao1980/cl-repository/.github/actions/setup-client@main
       with:
-        version: ${{ inputs.version }}
+        version: ${{ steps.resolve.outputs.client-version }}
         image: ${{ inputs.image }}
         systems: ${{ inputs.systems }}
         dest: ${{ inputs.dest }}

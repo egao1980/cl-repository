@@ -148,3 +148,32 @@ jobs:
             *) export CL_SOURCE_REGISTRY="${CL_REPOSITORY_DEST}//:" ;;
           esac
           ros -e '(asdf:load-system "cl-repository-client")' -e '(format t "~&loaded cl-repository-client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' -q
+
+  setup-lisp-action:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Lisp (VM path — cache Roswell + client tree)
+        uses: ./.github/actions/setup-lisp
+
+      - name: Load client via CL_SOURCE_REGISTRY
+        shell: bash
+        run: |
+          : "${CL_REPOSITORY_CLIENT_VERSION:?}"
+          : "${CL_SOURCE_REGISTRY:?}"
+          : "${CL_REPOSITORY_DEST:?}"
+          echo "Resolved client ${CL_REPOSITORY_CLIENT_VERSION}"
+          echo "registry ${CL_SOURCE_REGISTRY}"
+          case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*) export CL_SOURCE_REGISTRY="${CL_REPOSITORY_DEST}//;" ;;
+            *) export CL_SOURCE_REGISTRY="${CL_REPOSITORY_DEST}//:" ;;
+          esac
+          ros -e '(asdf:load-system "cl-repository-client")' -e '(format t "~&loaded cl-repository-client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' -q

@@ -223,7 +223,7 @@ steps:
 
 ソースのみ公開: `publish-source.yml`。ネイティブ: `publish-native-package.yml`。詳細: [`.github/actions/ci`](.github/actions/ci/)。
 
-`setup-lisp` は `ci-base` 上では `CL_SOURCE_REGISTRY` を書くだけです。素の VM では `setup-client` + `setup-roswell` を呼びます。`setup-client` は `ghcr.io/egao1980/cl-repository/cl-repository-client:latest`（system-name **anchor**）→ アノテーションの semver → `oras pull` します。**Lisp クライアントの版としてこのリポジトリの git タグをピンしないでください** — OCI 成果物を凍結するときだけ `version` を渡します。クライアントが必要な **各 job** で `setup-lisp` を呼んでください。
+`setup-lisp` は `ci-base` 上では `CL_SOURCE_REGISTRY` を書くだけです。素の VM では `setup-client` + `setup-roswell` を呼び、`~/.roswell` と `.cl-repository` をキャッシュします（クライアントのキーは解決済み semver。`:latest` エイリアスは使わない）。`setup-client` は `ghcr.io/egao1980/cl-repository/cl-repository-client:latest`（system-name **anchor**）→ アノテーションの semver → `oras pull` します。**Lisp クライアントの版としてこのリポジトリの git タグをピンしないでください** — OCI 成果物を凍結するときだけ `version` を渡します。クライアントが必要な **各 job** で `setup-lisp` を呼んでください。
 
 #### CI 例（GitHub Actions）
 
