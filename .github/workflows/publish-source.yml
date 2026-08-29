@@ -54,11 +54,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    container:
-      image: ${{ inputs.ci-image != '' && inputs.ci-image || 'ghcr.io/egao1980/cl-repository/ci-base:latest' }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    # Image string or null. No `secrets` in this expression (reusable-workflow parse).
+    container: ${{ inputs.ci-image != '' && inputs.ci-image || fromJSON('null') }}
     defaults:
       run:
         shell: bash
