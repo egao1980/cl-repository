@@ -198,16 +198,23 @@ jobs:
     uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
 ```
 
+`test-system.yml` / `publish-source.yml` の Ubuntu job は
+`ghcr.io/egao1980/cl-repository/ci-base`（Roswell + SBCL + クライアント済み）で走ります。
+これは `jobs.<id>.container` であり Docker コンテナアクションではありません。
+macOS / Windows は job container 非対応なので VM 上でインストールします（キャッシュあり）。
+
 または:
 
 ```yaml
 permissions:
   contents: read
   packages: read
+container: ghcr.io/egao1980/cl-repository/ci-base:latest
+defaults:
+  run: { shell: bash }
 steps:
   - uses: actions/checkout@v5
-  - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+  - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
   - uses: egao1980/cl-repository/.github/actions/ci@main
     with: { phase: install }
   - uses: egao1980/cl-repository/.github/actions/ci@main
@@ -216,7 +223,7 @@ steps:
 
 ソースのみ公開: `publish-source.yml`。ネイティブ: `publish-native-package.yml`。詳細: [`.github/actions/ci`](.github/actions/ci/)。
 
-`setup-client` は `ghcr.io/egao1980/cl-repository/cl-repository-client:latest`（system-name **anchor**）→ アノテーションの semver → `oras pull` し、`.cl-repository/` に展開して `CL_SOURCE_REGISTRY` を書き込みます。**Lisp クライアントの版としてこのリポジトリの git タグをピンしないでください** — OCI 成果物を凍結するときだけ `version` を渡します。クライアントが必要な **各 job** で `setup-client` を呼んでください。
+`setup-lisp` は `ci-base` 上では `CL_SOURCE_REGISTRY` を書くだけです。素の VM では `setup-client` + `setup-roswell` を呼びます。`setup-client` は `ghcr.io/egao1980/cl-repository/cl-repository-client:latest`（system-name **anchor**）→ アノテーションの semver → `oras pull` します。**Lisp クライアントの版としてこのリポジトリの git タグをピンしないでください** — OCI 成果物を凍結するときだけ `version` を渡します。クライアントが必要な **各 job** で `setup-lisp` を呼んでください。
 
 #### CI 例（GitHub Actions）
 

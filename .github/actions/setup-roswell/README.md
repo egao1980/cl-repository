@@ -1,6 +1,6 @@
 # setup-roswell
 
-Roswell (Unix `install-for-ci.sh` / Windows zip) + optional `sbcl-bin`. Pair with `setup-client`.
+Roswell (Unix `install-for-ci.sh` / Windows zip) + optional `sbcl-bin`. Prefer `setup-lisp` (uses the `ci-base` job container on Ubuntu; falls back to this action on a VM). Pair with `setup-client` if you compose the install path yourself.
 
 ```yaml
 - uses: actions/checkout@v5

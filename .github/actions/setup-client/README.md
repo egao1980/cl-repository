@@ -11,8 +11,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v5
-  - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+  - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
     with:
       sbcl-version: ${{ env.SBCL_VERSION }}
       roswell-version: ${{ env.ROSWELL_VERSION }}

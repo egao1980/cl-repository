@@ -8,8 +8,7 @@ permissions:
   packages: read
 steps:
   - uses: actions/checkout@v5
-  - uses: egao1980/cl-repository/.github/actions/setup-client@main
-  - uses: egao1980/cl-repository/.github/actions/setup-roswell@main
+  - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
   - uses: egao1980/cl-repository/.github/actions/ci@main
     with:
       phase: install
@@ -88,7 +87,8 @@ scripts/ci/post-publish.lisp
 | `version` | `.asd :version` | Publish tag |
 | `packager-version` | `latest` | Packager OCI tag |
 
-`shell: bash` (Windows). Call `setup-client` + `setup-roswell` in **this** job first.
+`shell: bash` (Windows; also required inside a job container — default there is `sh`).
+Call `setup-lisp` in **this** job first (Ubuntu `ci-base` image, or install on the VM).
 
 `run.lisp` is loaded in one `ros -l` before the packager exists. Keep
 `cl-repository-packager/*` and `cl-oci-client/*` symbols in `publish.lisp`
