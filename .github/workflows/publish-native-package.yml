@@ -164,9 +164,10 @@ jobs:
       - name: Checkout cl-repository CI scripts
         uses: actions/checkout@v5
         with:
-          repository: egao1980/cl-repository
-          # Match the reusable workflow commit unless the caller overrides.
-          ref: ${{ inputs.ci-ref != '' && inputs.ci-ref || github.workflow_sha }}
+          # job.workflow_* is this reusable workflow, not the caller
+          # (github.workflow_sha is the caller's commit — wrong repo).
+          repository: ${{ inputs.ci-ref != '' && 'egao1980/cl-repository' || job.workflow_repository }}
+          ref: ${{ inputs.ci-ref != '' && inputs.ci-ref || job.workflow_sha }}
           path: .cl-repository-ci
           sparse-checkout: |
             scripts/ci
