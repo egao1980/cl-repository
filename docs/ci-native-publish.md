@@ -84,7 +84,7 @@ Declare `:cffi-libraries` / `:overlays` / `:provides` under `:properties (:cl-re
 | `packager-tag` | no | default `latest` — `cl-repo:ensure-systems` (not raw oras) |
 | `source-overlay-artifact` | no | unpack over workspace after checkout (e.g. version-synced `.asd`) |
 | `skip-catalog` | no | default `true` |
-| `ci-ref` | no | override `scripts/ci` git ref (empty → this workflow's SHA) |
+| `ci-ref` | no | override `scripts/ci` git ref (empty → `job.workflow_sha`, this reusable workflow) |
 | `client-version` / `sbcl-version` / `roswell-version` / `ci-image` | no | same defaults as `publish-source.yml` |
 | `sbcl-dynamic-space-mb` | no | `ros dynamic-space-size=` for overlay gzip (default `8192`). CUDA-sized `.so`s OOM the default ~1GB heap. |
 

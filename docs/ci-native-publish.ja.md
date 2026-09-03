@@ -21,4 +21,5 @@ Caller skeleton / inputs / 契約の詳細は英文を参照。
 （2026-08-28）`packager-tag` デフォルトは **latest**（`v0.18.0` — PIS 依存 + skip-catalog でも `:latest` アンカー）。
 （2026-08-27）`sbcl-dynamic-space-mb` デフォルトは **8192**（CUDA 級 overlay の gzip で既定 ~1GB heap が OOM するため）。`ros dynamic-space-size=`。
 （2026-09-01）packager は `setup-lisp` + `ensure-systems`。`0.10.0` ピンは旧 QL 回避策。
+（2026-09-03）`scripts/ci` の checkout は `job.workflow_sha`（reusable 自身）。`github.workflow_sha` は caller なので不可。
 （2026-08-28）`:skip-catalog t` は共有 `<namespace>/catalog` だけ省略。パッケージリポの `:latest` アンカーは書く。
