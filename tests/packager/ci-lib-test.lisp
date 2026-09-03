@@ -106,3 +106,29 @@
          (text (uiop:read-file-string (merge-pathnames ".github/actions/ci/publish.lisp" root))))
     (ok (not (search "(list system)" text)))
     (ok (search "filter-publish-provides" text))))
+
+(deftest native-publish-loads-packager-via-client
+  "Native publish bootstraps like canned ci phase:publish. No QL, no packager
+   symbols in the files LOADed before ensure-systems."
+  (let* ((root (uiop:pathname-directory-pathname
+                (asdf:system-source-file "cl-repository-packager")))
+         (entry (uiop:read-file-string
+                 (merge-pathnames "scripts/ci/publish-native-package.lisp" root)))
+         (ensure (uiop:read-file-string
+                  (merge-pathnames "scripts/ci/ensure-packager.lisp" root)))
+         (workflow (uiop:read-file-string
+                    (merge-pathnames ".github/workflows/publish-native-package.yml" root))))
+    (dolist (text (list entry ensure))
+      (ok (not (search "ql:quickload" text)))
+      (ok (not (search "quicklisp/setup.lisp" text)))
+      (dolist (pkg '("cl-repository-packager/asdf-plugin:"
+                     "cl-repository-packager/build-matrix:"
+                     "cl-repository-packager/publisher:"
+                     "cl-oci-client/auth:"
+                     "cl-oci-client/registry:"))
+        (ok (not (search pkg text)) pkg)))
+    (ok (search "ensure-packager.lisp" entry))
+    (ok (search "cl-repo:ensure-systems" ensure))
+    (ok (search "setup-lisp@main" workflow))
+    (ok (not (search "apt-get install -y sbcl" workflow)))
+    (ok (not (search "quicklisp.lisp" workflow)))))

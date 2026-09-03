@@ -22,6 +22,10 @@
 #       packages: write
 #       contents: read
 #
+# Lisp (packager / oci-client) loads via setup-lisp + cl-repo:ensure-systems —
+# same as publish-source.yml. Native binaries stay in artifact overlays.
+# Do not apt-install SBCL, bootstrap Quicklisp, or raw-oras the packager tarball.
+#
 name: Publish native OCI package
 
 on:
@@ -75,7 +79,7 @@ on:
         required: true
         type: string
       packager-tag:
-        description: cl-repository-packager OCI tag
+        description: cl-repository-packager OCI tag (client ensure-systems)
         required: false
         type: string
         default: "latest"
@@ -95,12 +99,30 @@ on:
         type: string
         default: ""
       ci-ref:
-        description: cl-repository git ref for scripts/ci helpers
+        description: Override cl-repository ref for scripts/ci (empty → this workflow's SHA)
         required: false
         type: string
-        default: main
+        default: ""
+      client-version:
+        description: cl-repository-client OCI tag
+        required: false
+        type: string
+        default: "latest"
+      sbcl-version:
+        required: false
+        type: string
+        default: "2.6.7"
+      roswell-version:
+        required: false
+        type: string
+        default: "26.02.116"
+      ci-image:
+        description: Job container with ros/SBCL/client. Empty = install on the VM.
+        required: false
+        type: string
+        default: "ghcr.io/egao1980/cl-repository/ci-base:latest"
       sbcl-dynamic-space-mb:
-        description: SBCL --dynamic-space-size for gzip of native overlays (MB)
+        description: SBCL dynamic-space-size for gzip of native overlays (MB)
         required: false
         type: number
         default: 8192
@@ -116,6 +138,18 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Image string or null. No `secrets` in this expression (reusable-workflow parse).
+    container: ${{ inputs.ci-image != '' && inputs.ci-image || fromJSON('null') }}
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SBCL_VERSION: ${{ inputs.sbcl-version }}
+      ROSWELL_VERSION: ${{ inputs.roswell-version }}
+      GITHUB_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
     steps:
       - name: Checkout caller repository
         uses: actions/checkout@v5
@@ -131,7 +165,8 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: egao1980/cl-repository
-          ref: ${{ inputs.ci-ref }}
+          # Match the reusable workflow commit unless the caller overrides.
+          ref: ${{ inputs.ci-ref != '' && inputs.ci-ref || github.workflow_sha }}
           path: .cl-repository-ci
           sparse-checkout: |
             scripts/ci
@@ -165,35 +200,17 @@ jobs:
             echo "GROVEL_ROOT=${GITHUB_WORKSPACE}/grovel" >> "$GITHUB_ENV"
           fi
 
-      - name: Install SBCL
-        run: sudo apt-get update && sudo apt-get install -y sbcl
-
-      - name: Install Quicklisp
-        run: |
-          curl -fsSL -o /tmp/quicklisp.lisp https://beta.quicklisp.org/quicklisp.lisp
-          sbcl --noinform --non-interactive \
-            --load /tmp/quicklisp.lisp \
-            --eval '(quicklisp-quickstart:install :path #p"~/quicklisp/")'
-          sbcl --noinform --non-interactive \
-            --load ~/quicklisp/setup.lisp \
-            --eval '(ql-util:without-prompting (ql:add-to-init-file))'
+      # uses: cannot interpolate inputs/github — GH parse-time restriction.
+      - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
+        with:
+          version: ${{ inputs.client-version }}
+          sbcl-version: ${{ env.SBCL_VERSION }}
+          roswell-version: ${{ env.ROSWELL_VERSION }}
 
       - name: Install oras
         uses: oras-project/setup-oras@v2
         with:
           version: 1.2.3
-
-      - name: Pull cl-repository-packager
-        run: |
-          CL_REPO_TAG="${{ inputs.packager-tag }}"
-          CL_REPO_IMAGE="ghcr.io/egao1980/cl-repository/cl-repository-packager"
-          rm -rf /tmp/cl-repo-pull
-          mkdir -p /tmp/cl-repo-pull ~/.local/share/cl-systems
-          rm -rf ~/.local/share/cl-systems/cl-oci-*
-          oras pull "${CL_REPO_IMAGE}:${CL_REPO_TAG}" -o /tmp/cl-repo-pull/
-          for f in /tmp/cl-repo-pull/*.tar.gz; do
-            tar -xzf "$f" -C ~/.local/share/cl-systems/
-          done
 
       - name: Publish package + overlays
         env:
@@ -206,6 +223,7 @@ jobs:
           PKG_PROVIDES: ${{ inputs.provides }}
           PKG_CFFI_LIBS: ${{ inputs.cffi-libraries }}
           SKIP_CATALOG: ${{ inputs.skip-catalog }}
+          PACKAGER_VERSION: ${{ inputs.packager-tag }}
         run: |
           REGISTRY="${{ inputs.registry }}"
           NAMESPACE="${{ inputs.namespace }}"
@@ -220,7 +238,7 @@ jobs:
           fi
 
           # Do not put comments inside VAR=val \ continuations — bash then
-          # applies the env to a no-op and sbcl never sees PKG_SOURCE_DIR.
+          # applies the env to a no-op and ros never sees PKG_SOURCE_DIR.
           export PKG_SOURCE_DIR="$STAGING"
           export LIB_ROOT="$LIB_ROOT"
           export PLATFORMS_FILE=/tmp/platforms.txt
@@ -228,10 +246,8 @@ jobs:
           export REGISTRY_URL="$REGISTRY_URL"
           export OCI_NAMESPACE="$NAMESPACE"
           export GITHUB_ACTOR="${{ github.actor }}"
-          # --dynamic-space-size is a runtime option; must precede --noinform/--load.
-          sbcl --dynamic-space-size ${{ inputs.sbcl-dynamic-space-mb }} \
-            --noinform --non-interactive \
-            --load .cl-repository-ci/scripts/ci/publish-native-package.lisp
+          ros dynamic-space-size=${{ inputs.sbcl-dynamic-space-mb }} \
+            -l .cl-repository-ci/scripts/ci/publish-native-package.lisp -q
 
           PROVIDES="${{ inputs.provides }}"
           if [ -n "$PROVIDES" ]; then

@@ -5,7 +5,9 @@ Workflow: [`.github/workflows/publish-native-package.yml`](../.github/workflows/
 Formalizes the pattern used by `cl-stack-brotli` / `cl-stack-zstd` / `event-backend-*` / `cl-stack-ssl`:
 
 1. **Caller** builds natives on a matrix and uploads artifacts `native-<os>-<arch>`
-2. **This workflow** arranges `lib/<os>-<arch>/`, stages a Lisp-only source tree, runs `auto-package-spec` from the `.asd` + artifact overlays, publishes to `ghcr.io/<owner>/cl-systems/<package>:<version>`, verifies with `oras`
+2. **This workflow** arranges `lib/<os>-<arch>/`, stages a Lisp-only source tree, loads packager/oci-client via `setup-lisp` + `cl-repo:ensure-systems` (same as `publish-source.yml`), runs `auto-package-spec` from the `.asd` + artifact overlays, publishes to `ghcr.io/<owner>/cl-systems/<package>:<version>`, verifies with `oras`
+
+Native binaries stay in artifact overlays. Lisp (packager, client, publish script) is ordinary `ros -l` after `setup-lisp`. Do **not** apt-install SBCL, bootstrap Quicklisp, or `oras pull` the packager tarball.
 
 Packaging truth is the **`.asd`** (`:version` / `:depends-on` / `:properties (:cl-repo …)`). YAML `depends-on` / `cffi-libraries` / `provides` are optional overrides only.
 
@@ -79,11 +81,12 @@ Declare `:cffi-libraries` / `:overlays` / `:provides` under `:properties (:cl-re
 | `source-paths` | yes | Lisp-only files/dirs (natives stay in artifacts) |
 | `depends-on` / `cffi-libraries` / `provides` / `description` / `license` | no | optional overrides; prefer `.asd` |
 | `namespace` | no | default `<owner>/cl-systems` |
-| `packager-tag` | no | default `latest` (system-name anchor → current packager) |
+| `packager-tag` | no | default `latest` — `cl-repo:ensure-systems` (not raw oras) |
 | `source-overlay-artifact` | no | unpack over workspace after checkout (e.g. version-synced `.asd`) |
 | `skip-catalog` | no | default `true` |
-| `ci-ref` | no | cl-repository ref for `scripts/ci` (default `main`) |
-| `sbcl-dynamic-space-mb` | no | SBCL heap for overlay gzip (default `8192`). CUDA-sized `.so`s OOM the apt SBCL default (~1GB). |
+| `ci-ref` | no | override `scripts/ci` git ref (empty → this workflow's SHA) |
+| `client-version` / `sbcl-version` / `roswell-version` / `ci-image` | no | same defaults as `publish-source.yml` |
+| `sbcl-dynamic-space-mb` | no | `ros dynamic-space-size=` for overlay gzip (default `8192`). CUDA-sized `.so`s OOM the default ~1GB heap. |
 
 ## Helpers
 
@@ -91,7 +94,9 @@ Declare `:cffi-libraries` / `:overlays` / `:provides` under `:properties (:cl-re
 |--------|------|
 | `scripts/ci/arrange-native-artifacts.sh` | `native-*` → `lib/<os>-<arch>/` (+ `grovel/` if nested) + platforms.txt |
 | `scripts/ci/stage-lisp-source.sh` | copy `source-paths` into staging |
-| `scripts/ci/publish-native-package.lisp` | `auto-package-spec` + artifact overlays → publish (`cffi-grovel-output` when `grovel/` present) |
+| `scripts/ci/ensure-packager.lisp` | `cl-repo:ensure-systems` of packager + oci-client (no QL) |
+| `scripts/ci/publish-native-package.lisp` | entry: load ensure + impl |
+| `scripts/ci/publish-native-package-impl.lisp` | `auto-package-spec` + artifact overlays → publish (`cffi-grovel-output` when `grovel/` present) |
 
 ## Contract
 
