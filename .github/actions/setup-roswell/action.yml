@@ -20,16 +20,17 @@ inputs:
 runs:
   using: composite
   steps:
-    # macOS: do not use install-for-ci.sh. It runs `ros use sbcl-bin` (no
-    # version) which fetches "latest" from sbcl_bin_uri.tsv and dies
-    # `unable to use 'sbcl-bin'` on GHA macos-latest (darwin/arm64) flakes.
-    # brew + pinned sbcl-bin below. Linux keeps the upstream CI script.
+    # macOS: Homebrew ros + PATH sbcl. Never ros install sbcl-bin here —
+    # cached ~/.roswell marks a pin "already installed" then ros use dies.
     - name: Install Roswell (macOS)
       if: runner.os == 'macOS'
       shell: bash
       run: |
-        brew upgrade roswell 2>/dev/null || brew install roswell
+        eval "$(brew shellenv)"
+        brew install roswell sbcl
+        # GITHUB_PATH prepends; echo brew last so it beats cached ~/.roswell/bin.
         echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+        echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
     - name: Install Roswell (Linux)
       if: runner.os == 'Linux'
@@ -52,33 +53,46 @@ runs:
         echo "/c/roswell/roswell" >> "$GITHUB_PATH"
         echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
 
+    - name: Use system SBCL (macOS)
+      if: runner.os == 'macOS' && inputs.install-sbcl == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        eval "$(brew shellenv)"
+        command -v sbcl
+        sbcl --version
+        ros lisp=sbcl/system setup
+        ros use sbcl/system
+        ros -e '(format t "~&ok ~A ~A~%" (lisp-implementation-type) (lisp-implementation-version))' -q
+
     - name: Install SBCL
-      if: inputs.install-sbcl == 'true'
+      if: runner.os != 'macOS' && inputs.install-sbcl == 'true'
       shell: bash
       env:
         SBCL_VERSION: ${{ inputs.sbcl-version }}
       run: |
         set -euo pipefail
         VER="${SBCL_VERSION:-2.6.7}"
-        install_pin() {
-          ros install "sbcl-bin/${VER}" && ros use "sbcl-bin/${VER}"
+        probe() {
+          ros -e '(quit)' -q
+        }
+        use_pin() {
+          ros install "sbcl-bin/${VER}" && ros use "sbcl-bin/${VER}" && probe
+        }
+        wipe_pin() {
+          rm -rf "${HOME}/.roswell/impls/"*/*/sbcl-bin/"${VER}"
         }
         ok=0
         for attempt in 1 2 3 4; do
-          if install_pin; then
+          if use_pin; then
             ok=1
             break
           fi
-          echo "sbcl-bin/${VER} failed (attempt ${attempt}); retrying..."
+          echo "sbcl-bin/${VER} failed (attempt ${attempt}); wiping impl dir and retrying..."
+          wipe_pin
           sleep $((2 ** attempt))
         done
         if [[ "$ok" -ne 1 ]]; then
-          if [[ "${RUNNER_OS}" == "macOS" ]]; then
-            echo "sbcl-bin/${VER} exhausted; falling back to Homebrew sbcl + ros use sbcl/system"
-            brew install sbcl
-            ros use sbcl/system
-          else
-            echo "ros install sbcl-bin/${VER} failed after retries" >&2
-            exit 1
-          fi
+          echo "ros install sbcl-bin/${VER} failed after retries" >&2
+          exit 1
         fi
