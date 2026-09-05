@@ -20,8 +20,19 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install Roswell (Unix)
-      if: runner.os != 'Windows'
+    # macOS: do not use install-for-ci.sh. It runs `ros use sbcl-bin` (no
+    # version) which fetches "latest" from sbcl_bin_uri.tsv and dies
+    # `unable to use 'sbcl-bin'` on GHA macos-latest (darwin/arm64) flakes.
+    # brew + pinned sbcl-bin below. Linux keeps the upstream CI script.
+    - name: Install Roswell (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        brew upgrade roswell 2>/dev/null || brew install roswell
+        echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+
+    - name: Install Roswell (Linux)
+      if: runner.os == 'Linux'
       shell: bash
       run: |
         curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
@@ -47,6 +58,27 @@ runs:
       env:
         SBCL_VERSION: ${{ inputs.sbcl-version }}
       run: |
+        set -euo pipefail
         VER="${SBCL_VERSION:-2.6.7}"
-        ros install "sbcl-bin/${VER}"
-        ros use "sbcl-bin/${VER}"
+        install_pin() {
+          ros install "sbcl-bin/${VER}" && ros use "sbcl-bin/${VER}"
+        }
+        ok=0
+        for attempt in 1 2 3 4; do
+          if install_pin; then
+            ok=1
+            break
+          fi
+          echo "sbcl-bin/${VER} failed (attempt ${attempt}); retrying..."
+          sleep $((2 ** attempt))
+        done
+        if [[ "$ok" -ne 1 ]]; then
+          if [[ "${RUNNER_OS}" == "macOS" ]]; then
+            echo "sbcl-bin/${VER} exhausted; falling back to Homebrew sbcl + ros use sbcl/system"
+            brew install sbcl
+            ros use sbcl/system
+          else
+            echo "ros install sbcl-bin/${VER} failed after retries" >&2
+            exit 1
+          fi
+        fi
