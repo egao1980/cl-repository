@@ -66,9 +66,14 @@ runs:
         eval "$(brew shellenv)"
         brew install sbcl
         command -v sbcl
-        sbcl --non-interactive --noinform --eval '(quit)'
-        ros lisp=sbcl-bin/system setup
-        ros use sbcl-bin/system
+        sbcl --version
+        # PATH sbcl = sbcl-bin/system. sbcl/system is source-built.
+        if ! ros lisp=sbcl-bin/system setup; then
+          echo "ros setup failed; setting config by hand"
+          ros config set default.lisp sbcl-bin
+          ros config set sbcl-bin.version system
+        fi
+        ros use sbcl-bin/system || true
         ros -e '(format t "~&ok ~A ~A~%" (lisp-implementation-type) (lisp-implementation-version))' -q
 
     - name: Install SBCL
