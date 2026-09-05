@@ -2,7 +2,7 @@
 
 Roswell (Linux `install-for-ci.sh` / macOS Homebrew / Windows zip) + optional pinned `sbcl-bin`. Prefer `setup-lisp` (uses the `ci-base` job container on Ubuntu; falls back to this action on a VM). Pair with `setup-client` if you compose the install path yourself.
 
-macOS does **not** run `install-for-ci.sh`: that script's `ros use sbcl-bin` (unversioned) flakes with `unable to use 'sbcl-bin'` on GHA `macos-latest`. We `brew install roswell`, then `ros install sbcl-bin/<pin>` with retries, and fall back to Homebrew `sbcl` + `ros use sbcl/system`.
+macOS does **not** run `install-for-ci.sh` (unversioned `ros use sbcl-bin`) and does **not** use a cached `sbcl-bin/<pin>` (`already installed` + `unable to use`). Homebrew `roswell` + `sbcl`, then `ros lisp=sbcl-bin/system setup` (PATH sbcl — not `sbcl/system`, which is source-built).
 
 ```yaml
 - uses: actions/checkout@v5

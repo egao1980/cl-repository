@@ -70,7 +70,7 @@ runs:
         path: |
           ~/.roswell
           C:\roswell
-        key: ${{ runner.os }}-${{ runner.arch }}-roswell-${{ inputs.roswell-version }}-sbcl-${{ inputs.install-sbcl }}-${{ inputs.sbcl-version }}
+        key: ${{ runner.os }}-${{ runner.arch }}-roswell-${{ inputs.roswell-version }}-sbcl-${{ inputs.install-sbcl }}-${{ inputs.sbcl-version }}-macsys1
 
     # uses: cannot interpolate — pin @v2 / @main (same as test-system.yml).
     - name: Install oras
