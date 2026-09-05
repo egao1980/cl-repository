@@ -20,18 +20,15 @@ inputs:
 runs:
   using: composite
   steps:
-    # macOS: do not use install-for-ci.sh (`ros use sbcl-bin` unversioned).
-    # Do not trust a cached ~/.roswell sbcl-bin pin either — consumers restore
-    # a dir that `ros install` calls "already installed" then `ros use` dies
-    # `unable to use 'sbcl-bin/<ver>'`. Homebrew sbcl + sbcl-bin/system.
+    # macOS: Homebrew ros + PATH sbcl. Never ros install sbcl-bin here —
+    # cached ~/.roswell marks a pin "already installed" then ros use dies.
     - name: Install Roswell (macOS)
       if: runner.os == 'macOS'
       shell: bash
       run: |
         eval "$(brew shellenv)"
-        brew install roswell
-        # GITHUB_PATH prepends each entry; echo brew last so it beats a
-        # cached ~/.roswell/bin/ros from setup-lisp's cache restore.
+        brew install roswell sbcl
+        # GITHUB_PATH prepends; echo brew last so it beats cached ~/.roswell/bin.
         echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
         echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
@@ -56,24 +53,16 @@ runs:
         echo "/c/roswell/roswell" >> "$GITHUB_PATH"
         echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
 
-    # macOS: Homebrew SBCL is the impl. `sbcl/system` is source-built and
-    # is not registered; PATH sbcl is `sbcl-bin/system`.
-    - name: Install SBCL (macOS)
+    - name: Use system SBCL (macOS)
       if: runner.os == 'macOS' && inputs.install-sbcl == 'true'
       shell: bash
       run: |
         set -euo pipefail
         eval "$(brew shellenv)"
-        brew install sbcl
         command -v sbcl
         sbcl --version
-        # PATH sbcl = sbcl-bin/system. sbcl/system is source-built.
-        if ! ros lisp=sbcl-bin/system setup; then
-          echo "ros setup failed; setting config by hand"
-          ros config set default.lisp sbcl-bin
-          ros config set sbcl-bin.version system
-        fi
-        ros use sbcl-bin/system || true
+        ros lisp=sbcl/system setup
+        ros use sbcl/system
         ros -e '(format t "~&ok ~A ~A~%" (lisp-implementation-type) (lisp-implementation-version))' -q
 
     - name: Install SBCL
