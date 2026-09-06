@@ -101,8 +101,9 @@
            (parts (remove-if (lambda (s) (zerop (length s)))
                              (uiop:split-string registry :separator sep)))
            (drop (loop for d in dirs
-                       when (and d (plusp (length (string d))))
-                         collect (%registry-entry-dir (namestring d))))
+                       for ns = (and d (namestring d))
+                       when (and ns (plusp (length ns)))
+                         collect (%registry-entry-dir ns)))
            (kept (remove-if
                   (lambda (part)
                     (let ((p (%registry-entry-dir part)))
