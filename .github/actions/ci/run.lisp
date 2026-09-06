@@ -31,11 +31,8 @@
   (funcall fn))
 
 (defun %load-client ()
-  "Load cl-repository-client from the dest/image tree only.
-   CL_SOURCE_REGISTRY is checkout-first (activate.sh / setup-client). That
-   shadows bundled systems that the client itself depends on — e.g. a
-   http-encoding-chipz checkout whose 0.1.1 asd needs compression-protocol
-   while http-backend-dexador is still loading."
+  "Load cl-repository-client from setup-lisp's registry minus the checkout.
+   Checkout-first CL_SOURCE_REGISTRY shadows bundled client deps."
   (let ((boot (cl-repository-ci-lib:client-bootstrap-registry)))
     (when boot
       (format t "~&; ci: load client from ~a~%" boot)

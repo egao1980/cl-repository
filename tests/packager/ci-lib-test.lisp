@@ -92,6 +92,16 @@
   (ok (string= (cl-repository-ci-lib:format-tree-registry "D:/ws/.cl-repository/" :windows t)
                "D:/ws/.cl-repository//;")))
 
+(deftest drop-dirs-from-registry-keeps-client-tree
+  (ok (string= (cl-repository-ci-lib:drop-dirs-from-registry
+                "/ws/http-encoding-chipz//:/opt/cl-ci/cl-repository//:"
+                '("/ws/http-encoding-chipz"))
+               "/opt/cl-ci/cl-repository//:"))
+  (ok (string= (cl-repository-ci-lib:drop-dirs-from-registry
+                "D:/ws//;D:/ws/.cl-repository//;"
+                '("D:/ws"))
+               "D:/ws/.cl-repository//;")))
+
 (deftest discover-asd-system-names-includes-tests
   (let ((dir (make-temp-dir)))
     (unwind-protect
