@@ -100,7 +100,12 @@
   (ok (string= (cl-repository-ci-lib:drop-dirs-from-registry
                 "D:/ws//;D:/ws/.cl-repository//;"
                 '("D:/ws"))
-               "D:/ws/.cl-repository//;")))
+               "D:/ws/.cl-repository//;"))
+  ;; run.lisp passes uiop:getcwd (a pathname), not a string.
+  (ok (string= (cl-repository-ci-lib:drop-dirs-from-registry
+                "/ws/http-encoding-chipz//:/opt/cl-ci/cl-repository//:"
+                (list (uiop:ensure-directory-pathname "/ws/http-encoding-chipz")))
+               "/opt/cl-ci/cl-repository//:")))
 
 (deftest discover-asd-system-names-includes-tests
   (let ((dir (make-temp-dir)))
