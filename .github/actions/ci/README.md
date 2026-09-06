@@ -94,3 +94,6 @@ Call `setup-lisp` in **this** job first (Ubuntu `ci-base` image, or install on t
 `cl-repository-packager/*` and `cl-oci-client/*` symbols in `publish.lisp`
 (loaded after `%ensure-packager`). GitHub also forbids expressions in `uses:`
 — reusable workflows pin composite actions at `@main`.
+
+Client load drops the checkout from the existing `CL_SOURCE_REGISTRY`
+(setup-lisp already wrote it), then re-reads checkout asds. No extra env.

@@ -30,7 +30,19 @@
   #-sbcl
   (funcall fn))
 
-(%ci-muffle (lambda () (asdf:load-system "cl-repository-client")))
+(defun %load-client ()
+  "Load cl-repository-client from setup-lisp's registry minus the checkout.
+   Checkout-first CL_SOURCE_REGISTRY shadows bundled client deps."
+  (let ((boot (cl-repository-ci-lib:client-bootstrap-registry)))
+    (when boot
+      (format t "~&; ci: load client from ~a~%" boot)
+      (asdf:initialize-source-registry boot))
+    (%ci-muffle (lambda () (asdf:load-system "cl-repository-client")))
+    (when boot
+      (asdf:initialize-source-registry)
+      (cl-repository-ci-lib:clear-checkout-systems))))
+
+(%load-client)
 
 (defun %env (name &optional default)
   (or (cl-repository-ci-lib:nonempty-env name) default))

@@ -86,6 +86,41 @@
   (let ((cl-repository-ci-lib::*extra-with* '("hooked")))
     (ok (member "hooked" (cl-repository-ci-lib:ci-with nil) :test #'string=))))
 
+(deftest format-tree-registry-unix-and-windows
+  (ok (string= (cl-repository-ci-lib:format-tree-registry "/opt/cl-ci/cl-repository/")
+               "/opt/cl-ci/cl-repository//:"))
+  (ok (string= (cl-repository-ci-lib:format-tree-registry "D:/ws/.cl-repository/" :windows t)
+               "D:/ws/.cl-repository//;")))
+
+(deftest drop-dirs-from-registry-keeps-client-tree
+  (ok (string= (cl-repository-ci-lib:drop-dirs-from-registry
+                "/ws/http-encoding-chipz//:/opt/cl-ci/cl-repository//:"
+                '("/ws/http-encoding-chipz"))
+               "/opt/cl-ci/cl-repository//:"))
+  (ok (string= (cl-repository-ci-lib:drop-dirs-from-registry
+                "D:/ws//;D:/ws/.cl-repository//;"
+                '("D:/ws"))
+               "D:/ws/.cl-repository//;")))
+
+(deftest discover-asd-system-names-includes-tests
+  (let ((dir (make-temp-dir)))
+    (unwind-protect
+         (progn
+           (write-asd dir "http-encoding-chipz.asd"
+                      :systems '("http-encoding-chipz" "http-encoding-chipz/tests"))
+           (let ((names (cl-repository-ci-lib:discover-asd-system-names dir)))
+             (ok (equal names '("http-encoding-chipz" "http-encoding-chipz/tests")))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest run.lisp-unshadows-checkout-before-client-load
+  "Checkout-first CL_SOURCE_REGISTRY must not be active while loading the client."
+  (let* ((root (uiop:pathname-directory-pathname
+                (asdf:system-source-file "cl-repository-packager")))
+         (text (uiop:read-file-string (merge-pathnames ".github/actions/ci/run.lisp" root))))
+    (ok (search "%load-client" text))
+    (ok (search "client-bootstrap-registry" text))
+    (ok (search "clear-checkout-systems" text))))
+
 (deftest run.lisp-readable-before-packager
   "ros -l run.lisp reads the whole file before %ensure-packager. Package-qualified
    packager/oci-client symbols blow up install+test (schema-protocol canary)."

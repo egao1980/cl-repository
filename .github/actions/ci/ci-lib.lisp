@@ -23,6 +23,11 @@
            #:ci-record-versions
            #:hooks-directory
            #:hook-file
+           #:format-tree-registry
+           #:drop-dirs-from-registry
+           #:client-bootstrap-registry
+           #:discover-asd-system-names
+           #:clear-checkout-systems
            #:*extra-with*
            #:*extra-sources*))
 (in-package :cl-repository-ci-lib)
@@ -74,8 +79,49 @@
       (string (second form))
       (symbol (string-downcase (symbol-name (second form)))))))
 
-(defun discover-primary-systems (source-dir)
-  "Primary system names from top-level *.asd under SOURCE-DIR (tests/secondaries omitted)."
+(defun format-tree-registry (dir &key windows)
+  "One-entry CL_SOURCE_REGISTRY tree search for DIR."
+  (format nil "~a//~a"
+          (string-right-trim '(#\/ #\\) (namestring dir))
+          (if windows ";" ":")))
+
+(defun %registry-entry-dir (entry)
+  (let ((s (string-trim '(#\Space #\Tab) entry)))
+    (when (and (>= (length s) 2)
+               (string= s "//" :start1 (- (length s) 2)))
+      (setf s (subseq s 0 (- (length s) 2))))
+    (uiop:ensure-directory-pathname (string-right-trim '(#\/ #\\) s))))
+
+(defun drop-dirs-from-registry (registry dirs)
+  "Remove DIR tree entries from a CL_SOURCE_REGISTRY string. Preserves the
+   setup-lisp separator (`:` vs Windows `;`)."
+  (when (and registry (plusp (length registry)))
+    (let* ((windows (find #\; registry))
+           (sep (if windows ";" ":"))
+           (parts (remove-if (lambda (s) (zerop (length s)))
+                             (uiop:split-string registry :separator sep)))
+           (drop (loop for d in dirs
+                       when (and d (plusp (length (string d))))
+                         collect (%registry-entry-dir (namestring d))))
+           (kept (remove-if
+                  (lambda (part)
+                    (let ((p (%registry-entry-dir part)))
+                      (some (lambda (d) (uiop:pathname-equal p d)) drop)))
+                  parts)))
+      (when kept
+        (format nil (if windows "~{~a~^;~};" "~{~a~^:~}:") kept)))))
+
+(defun client-bootstrap-registry ()
+  "CL_SOURCE_REGISTRY without the consumer checkout.
+   setup-lisp writes checkout-first; that shadows bundled client deps."
+  (let ((registry (nonempty-env "CL_SOURCE_REGISTRY")))
+    (when registry
+      (drop-dirs-from-registry
+       registry
+       (list (uiop:getcwd) (nonempty-env "GITHUB_WORKSPACE"))))))
+
+(defun discover-asd-system-names (source-dir)
+  "All defsystem names from top-level *.asd under SOURCE-DIR."
   (let ((names nil)
         (*read-eval* nil)
         (*package* (find-package :cl-user))
@@ -87,10 +133,18 @@
               (loop for form = (read s nil :eof)
                     until (eq form :eof)
                     for name = (defsystem-name form)
-                    when (and name (not (secondary-system-name-p name)))
-                      do (pushnew name names :test #'string=))))
+                    when name do (pushnew name names :test #'string=))))
         (error () nil)))
     (nreverse names)))
+
+(defun clear-checkout-systems (&optional (source-dir (uiop:getcwd)))
+  "Drop ASDF registrations so the next find-system re-reads checkout asds."
+  (dolist (name (discover-asd-system-names source-dir))
+    (asdf:clear-system name)))
+
+(defun discover-primary-systems (source-dir)
+  "Primary system names from top-level *.asd under SOURCE-DIR (tests/secondaries omitted)."
+  (remove-if #'secondary-system-name-p (discover-asd-system-names source-dir)))
 
 (defun discover-primary-system (&optional (source-dir (uiop:getcwd)))
   "Pick the unique primary system, or the one matching the directory name."
