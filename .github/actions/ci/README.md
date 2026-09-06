@@ -94,3 +94,8 @@ Call `setup-lisp` in **this** job first (Ubuntu `ci-base` image, or install on t
 `cl-repository-packager/*` and `cl-oci-client/*` symbols in `publish.lisp`
 (loaded after `%ensure-packager`). GitHub also forbids expressions in `uses:`
 — reusable workflows pin composite actions at `@main`.
+
+Client load uses `CL_REPOSITORY_DEST` only (then re-reads checkout asds). A
+checkout-first `CL_SOURCE_REGISTRY` would shadow bundled client deps — a
+`http-encoding-chipz` 0.1.1 asd that needs `compression-protocol` dies while
+`http-backend-dexador` is still loading.

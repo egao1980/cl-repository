@@ -30,7 +30,22 @@
   #-sbcl
   (funcall fn))
 
-(%ci-muffle (lambda () (asdf:load-system "cl-repository-client")))
+(defun %load-client ()
+  "Load cl-repository-client from the dest/image tree only.
+   CL_SOURCE_REGISTRY is checkout-first (activate.sh / setup-client). That
+   shadows bundled systems that the client itself depends on — e.g. a
+   http-encoding-chipz checkout whose 0.1.1 asd needs compression-protocol
+   while http-backend-dexador is still loading."
+  (let ((boot (cl-repository-ci-lib:client-bootstrap-registry)))
+    (when boot
+      (format t "~&; ci: load client from ~a~%" boot)
+      (asdf:initialize-source-registry boot))
+    (%ci-muffle (lambda () (asdf:load-system "cl-repository-client")))
+    (when boot
+      (asdf:initialize-source-registry)
+      (cl-repository-ci-lib:clear-checkout-systems))))
+
+(%load-client)
 
 (defun %env (name &optional default)
   (or (cl-repository-ci-lib:nonempty-env name) default))
