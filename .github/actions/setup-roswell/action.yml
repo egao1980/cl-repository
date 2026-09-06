@@ -53,6 +53,9 @@ runs:
         echo "/c/roswell/roswell" >> "$GITHUB_PATH"
         echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
 
+    # PATH Homebrew sbcl is sbcl-bin/system. sbcl/system is a source build
+    # and is not registered (roswell#416). Cached ~/.roswell makes
+    # `ros use` report "unable to use" even after `ros setup`.
     - name: Use system SBCL (macOS)
       if: runner.os == 'macOS' && inputs.install-sbcl == 'true'
       shell: bash
@@ -61,8 +64,12 @@ runs:
         eval "$(brew shellenv)"
         command -v sbcl
         sbcl --version
-        ros lisp=sbcl/system setup
-        ros use sbcl/system
+        rm -rf "${HOME}/.roswell/impls"
+        mkdir -p "${HOME}/.roswell"
+        ros lisp=sbcl-bin/system setup || true
+        ros config set default.lisp sbcl-bin
+        ros config set sbcl-bin.version system
+        ros use sbcl-bin/system || true
         ros -e '(format t "~&ok ~A ~A~%" (lisp-implementation-type) (lisp-implementation-version))' -q
 
     - name: Install SBCL

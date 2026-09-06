@@ -2,7 +2,7 @@
 
 Roswell (Linux `install-for-ci.sh` / macOS Homebrew / Windows zip) + optional pinned `sbcl-bin`. Prefer `setup-lisp` (uses the `ci-base` job container on Ubuntu; falls back to this action on a VM). Pair with `setup-client` if you compose the install path yourself.
 
-macOS: Homebrew `roswell` + `sbcl`, then `ros use sbcl/system` (PATH SBCL). Do **not** `ros install sbcl-bin` — a restored `~/.roswell` pin is “already installed” and `ros use` dies.
+macOS: Homebrew `roswell` + `sbcl`, then pin `sbcl-bin/system` (PATH SBCL). Do **not** `ros install sbcl-bin` and do **not** `ros use sbcl/system` (source-build pin; cache-hit dies `unable to use`).
 
 ```yaml
 - uses: actions/checkout@v5

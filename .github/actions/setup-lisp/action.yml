@@ -70,7 +70,7 @@ runs:
         path: |
           ~/.roswell
           C:\roswell
-        key: ${{ runner.os }}-${{ runner.arch }}-roswell-${{ inputs.roswell-version }}-sbcl-${{ inputs.install-sbcl }}-${{ inputs.sbcl-version }}-macsys1
+        key: ${{ runner.os }}-${{ runner.arch }}-roswell-${{ inputs.roswell-version }}-sbcl-${{ inputs.install-sbcl }}-${{ inputs.sbcl-version }}-macsys2
 
     # uses: cannot interpolate — pin @v2 / @main (same as test-system.yml).
     - name: Install oras
@@ -98,8 +98,30 @@ runs:
         path: ${{ inputs.dest }}
         key: ${{ runner.os }}-${{ runner.arch }}-cl-repo-client-${{ steps.resolve.outputs.client-version }}-deps-${{ inputs.pull-deps }}-oras-${{ inputs.oras-version }}-${{ inputs.image }}-${{ inputs.systems }}-${{ inputs.dest }}
 
-    - name: Setup Roswell
+    # uses: cannot interpolate @${{ github.action_ref }}. Prefer the
+    # checkout's setup-roswell when dogfooding this repo; consumers
+    # have no such path and take @main.
+    - name: Prefer in-repo setup-roswell
       if: steps.image.outputs.image != 'true'
+      id: ros-src
+      shell: bash
+      run: |
+        if [[ -f "${GITHUB_WORKSPACE}/.github/actions/setup-roswell/action.yml" ]]; then
+          echo "local=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "local=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Setup Roswell (this repo)
+      if: steps.image.outputs.image != 'true' && steps.ros-src.outputs.local == 'true'
+      uses: ./.github/actions/setup-roswell
+      with:
+        sbcl-version: ${{ inputs.sbcl-version }}
+        roswell-version: ${{ inputs.roswell-version }}
+        install-sbcl: ${{ inputs.install-sbcl }}
+
+    - name: Setup Roswell
+      if: steps.image.outputs.image != 'true' && steps.ros-src.outputs.local != 'true'
       uses: egao1980/cl-repository/.github/actions/setup-roswell@main
       with:
         sbcl-version: ${{ inputs.sbcl-version }}
