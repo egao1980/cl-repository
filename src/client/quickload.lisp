@@ -292,10 +292,21 @@
     (when sys
       (remove nil (mapcar #'asdf-dep-name (asdf:system-depends-on sys))))))
 
+(defun extra-with-install-names (with)
+  "Names that :with must install. Always returned — a findable QL dummy does not count."
+  (delete-duplicates
+   (mapcar (lambda (s)
+             (string-downcase (string (if (consp s) (first s) s))))
+           (uiop:ensure-list with))
+   :test #'string=))
+
 (defun collect-missing-asdf-deps (local-roots &optional extras)
   "Walk ASDF :depends-on from LOCAL-ROOTS (findable systems). Return names that
    are not yet findable via ASDF — those need OCI/QL install. EXTRAS are always
-   considered (CI-only systems). Does not return LOCAL-ROOTS themselves."
+   considered (CI-only systems). Does not return LOCAL-ROOTS themselves.
+
+   EXTRAS themselves are not queued here: a QL dummy can be findable. Callers
+   must install extras via ENSURE-SYSTEMS first (see ENSURE-SYSTEM-DEPENDENCIES)."
   (let ((seen (make-hash-table :test #'equal))
         (local (mapcar (lambda (s) (string-downcase (string s))) local-roots))
         (missing '()))
@@ -316,8 +327,7 @@
                      (t
                       (pushnew n missing :test #'string=)))))))
       (dolist (r local) (walk r))
-      (dolist (e (mapcar (lambda (s) (string-downcase (string s)))
-                         (uiop:ensure-list extras)))
+      (dolist (e (extra-with-install-names extras))
         (walk e))
       (nreverse missing))))
 
@@ -332,15 +342,15 @@
    Does not install or ASDF-load SYSTEM-NAME itself.
 
    ALSO-TESTS (default T): also walk SYSTEM-NAME/tests when that system exists.
-   WITH: extra CI-only systems not in the .asd (e.g. event-backend-libuv, cl-stack-ssl)."
+   WITH: extra CI-only systems not in the .asd (e.g. event-backend-libuv, cl-stack-ssl).
+   Always installed from OCI even when ASDF already finds a QL dummy of the same name."
   (let* ((name (string-downcase (string system-name)))
          (sys (or (asdf:find-system name nil)
                   (error "ensure-system-dependencies: system ~a not findable via ASDF ~
 (is the checkout on CL_SOURCE_REGISTRY?)" name)))
          (test-name (format nil "~a/tests" name))
          (local-roots (list name))
-         (extras (mapcar (lambda (s) (string-downcase (string s)))
-                         (uiop:ensure-list with))))
+         (extras (extra-with-install-names with)))
     (declare (ignore sys))
     (when also-tests
       (let ((ts (if (stringp also-tests)
@@ -348,6 +358,17 @@
                     test-name)))
         (when (asdf:find-system ts nil)
           (push ts local-roots))))
+    ;; :with pins (mgl-pax / dref / autoload) must overlay QL dummies before the
+    ;; missing-deps walk, or collect-missing treats extras as already present.
+    (when extras
+      (msg "~&; cl-repo: ensure extra-with → ~{~a~^, ~}~%" extras)
+      (ensure-systems extras
+                      :silent silent :version version :force t
+                      :sources sources :deny deny :allow allow
+                      :default-source default-source
+                      :config-path config-path)
+      (dolist (e extras)
+        (ignore-errors (asdf:clear-system e))))
     ;; One pass only sees the SUT asd. After installing a package-inferred
     ;; system (rove → rove/core/assertion → dissect), re-walk until fixpoint.
     (let ((prev nil))
