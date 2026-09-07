@@ -4,6 +4,7 @@
                 #:asdf-dep-name
                 #:system-direct-deps
                 #:collect-missing-asdf-deps
+                #:extra-with-install-names
                 #:compute-install-plan
                 #:*missing-deps-accumulator*)
   (:import-from :cl-repository-client/source-policy
@@ -33,6 +34,15 @@
   ;; asdf is always findable; collecting from it should not list "asdf" itself.
   (let ((missing (collect-missing-asdf-deps '("asdf"))))
     (ok (not (member "asdf" missing :test #'string=)))))
+
+(deftest test-extra-with-install-names
+  "CI :with must install even when ASDF already finds a QL dummy of the same name."
+  (ok (equal '("mgl-pax" "dref" "autoload")
+             (extra-with-install-names '("mgl-pax" "dref" "autoload"))))
+  (ok (equal '("mgl-pax")
+             (extra-with-install-names '(("mgl-pax" :version "0.5")))))
+  (ok (equal '("mgl-pax")
+             (extra-with-install-names '("mgl-pax" "MGL-PAX")))))
 
 (deftest test-compute-plan-ql-only-queues-fallback
   "cl-stack#165: :ql source must not die with 'not found in any registry'
