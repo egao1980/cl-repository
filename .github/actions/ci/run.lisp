@@ -30,16 +30,28 @@
   #-sbcl
   (funcall fn))
 
+(defun %registry-form (dirs)
+  "ASDF source-registry as a list. A dir//: string lands in
+   *source-registry-parameter* and ABCL abcl-contrib type-errors on it.
+   :ignore-inherited-configuration skips CL_SOURCE_REGISTRY; deps are OCI."
+  `(:source-registry
+    ,@(loop for dir in dirs
+            when dir
+              collect (list :tree (uiop:ensure-directory-pathname dir)))
+    :ignore-inherited-configuration))
+
 (defun %load-client ()
-  "Load cl-repository-client from setup-lisp's registry minus the checkout.
-   Checkout-first CL_SOURCE_REGISTRY shadows bundled client deps."
-  (let ((boot (cl-repository-ci-lib:client-bootstrap-registry)))
-    (when boot
-      (format t "~&; ci: load client from ~a~%" boot)
-      (asdf:initialize-source-registry boot))
+  "Load cl-repository-client from the OCI client tree (CL_REPOSITORY_DEST).
+   Checkout is added only after the client is loaded, then cleared so the
+   next find-system re-reads the system under test."
+  (let ((client (cl-repository-ci-lib:nonempty-env "CL_REPOSITORY_DEST")))
+    (when client
+      (format t "~&; ci: load client from ~a~%" client)
+      (asdf:initialize-source-registry (%registry-form (list client))))
     (%ci-muffle (lambda () (asdf:load-system "cl-repository-client")))
-    (when boot
-      (asdf:initialize-source-registry)
+    (when client
+      (asdf:initialize-source-registry
+       (%registry-form (list (uiop:getcwd) client)))
       (cl-repository-ci-lib:clear-checkout-systems))))
 
 (%load-client)

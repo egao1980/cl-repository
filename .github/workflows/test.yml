@@ -134,20 +134,17 @@ jobs:
         id: cl-repo
         uses: ./.github/actions/setup-client
 
-      - name: Load client via CL_SOURCE_REGISTRY
+      - name: Load client from OCI dest
         shell: bash
         run: |
           : "${CL_REPOSITORY_CLIENT_VERSION:?}"
-          : "${CL_SOURCE_REGISTRY:?}"
           : "${CL_REPOSITORY_DEST:?}"
+          if [[ -n "${CL_SOURCE_REGISTRY:-}" ]]; then
+            echo "CL_SOURCE_REGISTRY must be unset" >&2
+            exit 1
+          fi
           echo "Resolved client ${CL_REPOSITORY_CLIENT_VERSION}"
-          echo "registry ${CL_SOURCE_REGISTRY}"
-          # Prove the extract tree is enough (checkout also has the asd).
-          case "$(uname -s)" in
-            MINGW*|MSYS*|CYGWIN*) export CL_SOURCE_REGISTRY="${CL_REPOSITORY_DEST}//;" ;;
-            *) export CL_SOURCE_REGISTRY="${CL_REPOSITORY_DEST}//:" ;;
-          esac
-          ros -e '(asdf:load-system "cl-repository-client")' -e '(format t "~&loaded cl-repository-client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' -q
+          ros -e '(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:ensure-directory-pathname (uiop:getenv "CL_REPOSITORY_DEST"))) :ignore-inherited-configuration))' -e '(asdf:load-system "cl-repository-client")' -e '(format t "~&loaded cl-repository-client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' -q
 
   setup-lisp-action:
     strategy:
@@ -164,16 +161,14 @@ jobs:
       - name: Setup Lisp (VM path — cache Roswell + client tree)
         uses: ./.github/actions/setup-lisp
 
-      - name: Load client via CL_SOURCE_REGISTRY
+      - name: Load client from OCI dest
         shell: bash
         run: |
           : "${CL_REPOSITORY_CLIENT_VERSION:?}"
-          : "${CL_SOURCE_REGISTRY:?}"
           : "${CL_REPOSITORY_DEST:?}"
+          if [[ -n "${CL_SOURCE_REGISTRY:-}" ]]; then
+            echo "CL_SOURCE_REGISTRY must be unset" >&2
+            exit 1
+          fi
           echo "Resolved client ${CL_REPOSITORY_CLIENT_VERSION}"
-          echo "registry ${CL_SOURCE_REGISTRY}"
-          case "$(uname -s)" in
-            MINGW*|MSYS*|CYGWIN*) export CL_SOURCE_REGISTRY="${CL_REPOSITORY_DEST}//;" ;;
-            *) export CL_SOURCE_REGISTRY="${CL_REPOSITORY_DEST}//:" ;;
-          esac
-          ros -e '(asdf:load-system "cl-repository-client")' -e '(format t "~&loaded cl-repository-client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' -q
+          ros -e '(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:ensure-directory-pathname (uiop:getenv "CL_REPOSITORY_DEST"))) :ignore-inherited-configuration))' -e '(asdf:load-system "cl-repository-client")' -e '(format t "~&loaded cl-repository-client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' -q

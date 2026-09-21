@@ -2,9 +2,10 @@ name: Setup cl-repository-client
 description: >-
   Pull cl-repository-client (and its Lisp bootstrap deps) from OCI with oras.
   Defaults to the :latest system-name anchor — do not pin a git tag of
-  cl-repository. Writes CL_SOURCE_REGISTRY / CL_REPOSITORY_CLIENT_* for
+  cl-repository. Writes CL_REPOSITORY_DEST / CL_REPOSITORY_CLIENT_* for
   subsequent steps in this job; re-run the action in any other job that
-  needs the client (same pattern as setup-node).
+  needs the client (same pattern as setup-node). Deps are OCI. Do not
+  export CL_SOURCE_REGISTRY.
 
 inputs:
   version:
@@ -50,9 +51,6 @@ outputs:
   dest:
     description: Absolute extract root
     value: ${{ steps.setup.outputs.dest }}
-  source-registry:
-    description: CL_SOURCE_REGISTRY value written to GITHUB_ENV
-    value: ${{ steps.setup.outputs.source-registry }}
 
 runs:
   using: composite

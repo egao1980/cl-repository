@@ -1,7 +1,9 @@
 name: Setup Lisp toolchain
 description: >-
-  If this job is running in the ci-base container, wire HOME/PATH/CL_SOURCE_REGISTRY
+  If this job is running in the ci-base container, wire HOME/PATH
   (no install). Otherwise install Roswell + SBCL + cl-repository-client.
+  The client tree is CL_REPOSITORY_DEST. Deps come from OCI; do not export
+  CL_SOURCE_REGISTRY.
   Job containers are Linux-only; macOS/Windows always take the install path.
   Client tree is cached on the resolved semver (never on the :latest alias).
 
@@ -51,9 +53,6 @@ outputs:
   dest:
     description: Client extract root
     value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.dest || (steps.restore.outputs.valid == 'true' && steps.restore.outputs.dest || steps.client.outputs.dest) }}
-  source-registry:
-    description: CL_SOURCE_REGISTRY
-    value: ${{ steps.image.outputs.image == 'true' && steps.image.outputs.source-registry || (steps.restore.outputs.valid == 'true' && steps.restore.outputs.source-registry || steps.client.outputs.source-registry) }}
 
 runs:
   using: composite

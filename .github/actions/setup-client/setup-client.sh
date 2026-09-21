@@ -331,14 +331,11 @@ if [[ "${PULL_DEPS}" == "true" || "${PULL_DEPS}" == "1" ]]; then
   fi
 fi
 
-SOURCE_REGISTRY="${WORKSPACE}//:${DEST}//:"
 if command -v cygpath >/dev/null 2>&1; then
   # SBCL/ASDF on Windows wants D:/…, not the MSYS /d/… mount used by tar.
-  # ASDF splits CL_SOURCE_REGISTRY on ';' on Windows — ':' would split D: drives.
   CLIENT_DIR="$(cygpath -m "${CLIENT_DIR}")"
   DEST="$(cygpath -m "${DEST}")"
   WORKSPACE="$(cygpath -m "${WORKSPACE}")"
-  SOURCE_REGISTRY="${WORKSPACE}//;${DEST}//;"
 fi
 
 if [[ -n "${GITHUB_ENV:-}" ]]; then
@@ -346,7 +343,6 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
     printf 'CL_REPOSITORY_CLIENT_DIR=%s\n' "${CLIENT_DIR}"
     printf 'CL_REPOSITORY_CLIENT_VERSION=%s\n' "${CLIENT_VER}"
     printf 'CL_REPOSITORY_DEST=%s\n' "${DEST}"
-    printf 'CL_SOURCE_REGISTRY=%s\n' "${SOURCE_REGISTRY}"
   } >> "${GITHUB_ENV}"
 fi
 
@@ -355,10 +351,9 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     printf 'client-dir=%s\n' "${CLIENT_DIR}"
     printf 'client-version=%s\n' "${CLIENT_VER}"
     printf 'dest=%s\n' "${DEST}"
-    printf 'source-registry=%s\n' "${SOURCE_REGISTRY}"
   } >> "${GITHUB_OUTPUT}"
 fi
 
 log "client-dir=${CLIENT_DIR}"
 log "client-version=${CLIENT_VER}"
-log "CL_SOURCE_REGISTRY=${SOURCE_REGISTRY}"
+log "dest=${DEST}"

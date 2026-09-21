@@ -91,7 +91,8 @@ EOF
 touch "${CI_HOME}/ok"
 
 # Prove the baked client loads without the checkout tree.
-export CL_SOURCE_REGISTRY="${CLIENT_DEST}//:"
-ros -e '(asdf:load-system "cl-repository-client")' \
-    -e '(format t "~&ci-base client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' \
-    -q
+CL_REPOSITORY_DEST="${CLIENT_DEST}" ros \
+  -e '(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:ensure-directory-pathname (uiop:getenv "CL_REPOSITORY_DEST"))) :ignore-inherited-configuration))' \
+  -e '(asdf:load-system "cl-repository-client")' \
+  -e '(format t "~&ci-base client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' \
+  -q

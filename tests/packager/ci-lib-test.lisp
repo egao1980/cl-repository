@@ -118,13 +118,15 @@
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
 (deftest run.lisp-unshadows-checkout-before-client-load
-  "Checkout-first CL_SOURCE_REGISTRY must not be active while loading the client."
+  "Client load uses the OCI dest as a list registry, not a CL_SOURCE_REGISTRY string."
   (let* ((root (uiop:pathname-directory-pathname
                 (asdf:system-source-file "cl-repository-packager")))
          (text (uiop:read-file-string (merge-pathnames ".github/actions/ci/run.lisp" root))))
     (ok (search "%load-client" text))
-    (ok (search "client-bootstrap-registry" text))
-    (ok (search "clear-checkout-systems" text))))
+    (ok (search "CL_REPOSITORY_DEST" text))
+    (ok (search ":ignore-inherited-configuration" text))
+    (ok (search "clear-checkout-systems" text))
+    (ok (not (search "client-bootstrap-registry" text)))))
 
 (deftest run.lisp-readable-before-packager
   "ros -l run.lisp reads the whole file before %ensure-packager. Package-qualified

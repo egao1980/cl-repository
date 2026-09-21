@@ -40,9 +40,6 @@ if [[ -f "${CI_HOME}/ok" && -f "${CI_HOME}/image.env" ]]; then
   if command -v cygpath >/dev/null 2>&1; then
     dest="$(cygpath -m "${dest}")"
     client_dir="$(cygpath -m "${client_dir}")"
-    registry="${WORKSPACE}//;${dest}//;"
-  else
-    registry="${WORKSPACE}//:${dest}//:"
   fi
 
   {
@@ -50,14 +47,12 @@ if [[ -f "${CI_HOME}/ok" && -f "${CI_HOME}/image.env" ]]; then
     printf 'CL_REPOSITORY_CLIENT_DIR=%s\n' "${client_dir}"
     printf 'CL_REPOSITORY_CLIENT_VERSION=%s\n' "${CL_REPOSITORY_CLIENT_VERSION}"
     printf 'CL_REPOSITORY_DEST=%s\n' "${dest}"
-    printf 'CL_SOURCE_REGISTRY=%s\n' "${registry}"
   } >> "${GITHUB_ENV}"
 
   {
     printf 'client-dir=%s\n' "${client_dir}"
     printf 'client-version=%s\n' "${CL_REPOSITORY_CLIENT_VERSION}"
     printf 'dest=%s\n' "${dest}"
-    printf 'source-registry=%s\n' "${registry}"
     printf 'image=true\n'
   } >> "${GITHUB_OUTPUT}"
 

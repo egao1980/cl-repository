@@ -41,23 +41,18 @@ if command -v cygpath >/dev/null 2>&1; then
   CLIENT_DIR="$(cygpath -m "${CLIENT_DIR}")"
   DEST="$(cygpath -m "${DEST}")"
   WORKSPACE="$(cygpath -m "${WORKSPACE}")"
-  SOURCE_REGISTRY="${WORKSPACE}//;${DEST}//;"
-else
-  SOURCE_REGISTRY="${WORKSPACE}//:${DEST}//:"
 fi
 
 {
   printf 'CL_REPOSITORY_CLIENT_DIR=%s\n' "${CLIENT_DIR}"
   printf 'CL_REPOSITORY_CLIENT_VERSION=%s\n' "${WANT_VER}"
   printf 'CL_REPOSITORY_DEST=%s\n' "${DEST}"
-  printf 'CL_SOURCE_REGISTRY=%s\n' "${SOURCE_REGISTRY}"
 } >> "${GITHUB_ENV}"
 
 {
   printf 'client-dir=%s\n' "${CLIENT_DIR}"
   printf 'client-version=%s\n' "${WANT_VER}"
   printf 'dest=%s\n' "${DEST}"
-  printf 'source-registry=%s\n' "${SOURCE_REGISTRY}"
   printf 'valid=true\n'
 } >> "${GITHUB_OUTPUT}"
 
