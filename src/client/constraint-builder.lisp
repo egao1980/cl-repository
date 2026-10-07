@@ -4,7 +4,7 @@
   (:import-from :cl-oci-client/registry #:make-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-blob)
   (:import-from :cl-oci-client/content-discovery #:list-tags)
-  (:import-from :cl-oci-client/conditions #:registry-error)
+  (:import-from :cl-oci-client/conditions #:registry-error #:registry-error-status)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests)
   (:import-from :cl-oci/manifest #:manifest #:manifest-config)
   (:import-from :cl-oci/descriptor #:descriptor-digest)
@@ -21,6 +21,8 @@
   (:import-from :cl-repository-client/source-policy
                 #:system-denied-p #:registry-allowed-p #:oci-allowed-p)
   (:export #:build-install-plan
+           #:list-tags/retry
+           #:*tag-list-attempts*
            #:scan-installed-systems
            #:find-missing-deps
            #:dependency-resolution-error))
@@ -71,6 +73,30 @@
 
 ;;; Registry queries (cached)
 
+(defparameter *tag-list-attempts* 3
+  "How many times LIST-TAGS/RETRY asks a registry before giving up.")
+
+(defun list-tags/retry (registry repo &key (attempts *tag-list-attempts*)
+                                           (lister #'list-tags))
+  "LIST-TAGS with transient-failure retries (linear backoff 1s, 2s, ...).
+   HTTP 404 (unknown repo) is final and yields NIL silently. Any other error
+   is logged per attempt; NIL after the last one. Swallowing errors silently
+   here made registry/TLS hiccups indistinguishable from a missing package
+   (\"not found in any registry\"). LISTER is the tag-listing function
+   (tests inject a stub)."
+  (loop for attempt from 1 to attempts
+        do (handler-case (return (funcall lister registry repo))
+             (registry-error (e)
+               (when (eql (registry-error-status e) 404)
+                 (return nil))
+               (msg "~&; cl-repo: ~a: tag listing failed (attempt ~d/~d): ~a~%"
+                    repo attempt attempts e))
+             (error (e)
+               (msg "~&; cl-repo: ~a: tag listing failed (attempt ~d/~d): ~a~%"
+                    repo attempt attempts e)))
+           (when (< attempt attempts) (sleep attempt))
+        finally (return nil)))
+
 (defun fetch-available-versions (name registries)
   "Get available versions for NAME from registries. Cached.
    Respects source policy: skips registries denied/not-allowed for NAME.
@@ -85,13 +111,9 @@
                      (repo (format nil "~a/~a" ns pkg))
                      (reg (make-registry url)))
                 (when (registry-allowed-p name url)
-                  (handler-case
-                      (let ((tags (list-tags reg repo)))
-                        (when tags
-                          (dolist (tag tags)
-                            (unless (string= tag "latest")
-                              (pushnew tag versions :test #'string=)))))
-                    (error () nil))))))
+                  (dolist (tag (list-tags/retry reg repo))
+                    (unless (string= tag "latest")
+                      (pushnew tag versions :test #'string=)))))))
           (setf (gethash pkg *version-cache*) versions)
           versions))))
 

@@ -3,7 +3,7 @@
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
   (:import-from :cl-oci-client/registry #:make-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-blob)
-  (:import-from :cl-oci-client/content-discovery #:list-tags #:list-referrers)
+  (:import-from :cl-oci-client/content-discovery #:list-referrers)
   (:import-from :cl-oci-client/conditions #:registry-error)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests)
   (:import-from :cl-oci/manifest #:manifest #:manifest-artifact-type #:manifest-config
@@ -22,7 +22,8 @@
   (:import-from :cl-repository-client/digest-cache
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
-                #:build-install-plan #:find-missing-deps #:dependency-resolution-error)
+                #:build-install-plan #:find-missing-deps #:dependency-resolution-error
+                #:list-tags/retry)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry
                 #:load-system-init-files)
@@ -127,7 +128,7 @@
     (handler-case
         (if version
             (values repo version)
-            (let ((tags (list-tags reg repo)))
+            (let ((tags (list-tags/retry reg repo)))
               (if tags
                   (let ((version-tags (remove "latest" tags :test #'string=)))
                     (if version-tags
@@ -135,7 +136,9 @@
                         (values repo (first tags))))
                   (unless (eq type :ocicl)
                     (find-via-anchor reg repo)))))
-      (error () nil))))
+      (error (e)
+        (msg "~&; cl-repo: ~a: lookup in ~a failed: ~a~%" system-name reg-url e)
+        nil))))
 
 (defun find-via-anchor (registry repo)
   "Try to find system via system-name anchor at :latest."
