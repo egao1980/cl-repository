@@ -79,16 +79,21 @@
 (defun list-tags/retry (registry repo &key (attempts *tag-list-attempts*)
                                            (lister #'list-tags))
   "LIST-TAGS with transient-failure retries (linear backoff 1s, 2s, ...).
-   HTTP 404 (unknown repo) is final and yields NIL silently. Any other error
-   is logged per attempt; NIL after the last one. Swallowing errors silently
-   here made registry/TLS hiccups indistinguishable from a missing package
-   (\"not found in any registry\"). LISTER is the tag-listing function
-   (tests inject a stub)."
+   HTTP 404 (unknown repo) is final and yields NIL silently. HTTP 401/403 is
+   final too (ghcr answers 403 at the token endpoint for an unknown repo when
+   stored credentials are presented — one per sb-posix/uiop-style builtin) and
+   is logged once. Any other error is logged per attempt; NIL after the last
+   one. Swallowing errors silently here made registry/TLS hiccups
+   indistinguishable from a missing package (\"not found in any registry\").
+   LISTER is the tag-listing function (tests inject a stub)."
   (loop for attempt from 1 to attempts
         do (handler-case (return (funcall lister registry repo))
              (registry-error (e)
-               (when (eql (registry-error-status e) 404)
-                 (return nil))
+               (case (registry-error-status e)
+                 (404 (return nil))
+                 ((401 403)
+                  (msg "~&; cl-repo: ~a: not accessible (~a); treating as absent~%" repo e)
+                  (return nil)))
                (msg "~&; cl-repo: ~a: tag listing failed (attempt ~d/~d): ~a~%"
                     repo attempt attempts e))
              (error (e)
