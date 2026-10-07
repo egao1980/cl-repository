@@ -40,6 +40,18 @@
               collect (list :tree (uiop:ensure-directory-pathname dir)))
     :ignore-inherited-configuration))
 
+#+abcl
+(defun %abcl-honour-classpath ()
+  "ABCL under roswell runs as `java -jar`, so CLASSPATH is ignored by the JVM.
+   Add its jars (JNA for CFFI) to ABCL's class loader before the client —
+   and thus cffi-abcl — loads. abcl-asdf's maven fallback stopped resolving
+   JNA on runner images shipping Maven 3.10 (Class not found: com.sun.jna.Pointer)."
+  (dolist (entry (cl-repository-ci-lib:classpath-entries))
+    (format t "~&; ci: abcl add-to-classpath ~a~%" entry)
+    (java:add-to-classpath entry)))
+
+#+abcl (%abcl-honour-classpath)
+
 (defun %load-client ()
   "Load cl-repository-client from the OCI client tree (CL_REPOSITORY_DEST).
    Checkout is added only after the client is loaded, then cleared so the

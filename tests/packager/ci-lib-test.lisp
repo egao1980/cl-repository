@@ -176,3 +176,21 @@
     (ok (not (search "github.workflow_sha" workflow)))
     (ok (not (search "apt-get install -y sbcl" workflow)))
     (ok (not (search "quicklisp.lisp" workflow)))))
+
+(deftest classpath-entries-keeps-existing-in-order
+  "Only entries that exist survive; separator follows the platform flag."
+  (let* ((dir (make-temp-dir))
+         (jar (merge-pathnames "jna.jar" dir)))
+    (with-open-file (s jar :direction :output :if-exists :supersede)
+      (write-string "" s))
+    (let ((cp (format nil "~a:~a:~a" (namestring jar) "/nonexistent/x.jar"
+                      (namestring dir))))
+      (ok (equal (cl-repository-ci-lib:classpath-entries cp nil)
+                 (list (namestring (probe-file jar))
+                       (namestring (probe-file dir))))))
+    (ok (equal (cl-repository-ci-lib:classpath-entries
+                (format nil "~a;/nonexistent/y.jar" (namestring jar)) t)
+               (list (namestring (probe-file jar)))))
+    (ok (null (cl-repository-ci-lib:classpath-entries nil)))
+    (ok (null (cl-repository-ci-lib:classpath-entries "" nil)))
+    (uiop:delete-directory-tree dir :validate t)))
