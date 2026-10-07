@@ -165,6 +165,25 @@
       (ok (= calls 1))
       (ok (string= log "")))))
 
+(deftest test-list-tags-retry-403-is-final
+  "HTTP 401/403 (token denied for an unknown/private repo) is final: one call,
+   one log line, NIL."
+  (let ((calls 0)
+        (*tag-list-attempts* 3)
+        (reg (make-registry "http://127.0.0.1:9" :insecure-p t)))
+    (multiple-value-bind (result log)
+        (%call-capturing-log
+         (lambda ()
+           (list-tags/retry reg "x/y"
+                            :lister (lambda (r p)
+                                      (declare (ignore r p))
+                                      (incf calls)
+                                      (error 'registry-error :status 403)))))
+      (ok (null result))
+      (ok (= calls 1))
+      (ok (search "not accessible" log))
+      (ng (search "attempt" log)))))
+
 (deftest test-list-tags-retry-recovers
   "A transient failure followed by success returns the tags."
   (let ((calls 0)
