@@ -32,16 +32,22 @@
 
 (defun load-system-asd (name source-dir)
   "Register SOURCE-DIR and load NAME.asd so auto-package-spec can introspect.
-   Inherit the setup-lisp / ensure-systems source registry — do not reset it
-   to ~/.local/share/cl-systems/ (that was the raw-oras extract layout)."
+   Prepend to the programmatic registry built by ensure-packager
+   (CL_REPOSITORY_DEST tree + configure-asdf-source-registry) — it is not
+   reachable via :inherit-configuration since setup-lisp stopped exporting
+   CL_SOURCE_REGISTRY, and :defsystem-depends-on (cffi-grovel, …) must still
+   resolve while NAME.asd is read."
   (let* ((source-dir (uiop:ensure-directory-pathname source-dir))
-         (asd (merge-pathnames (format nil "~a.asd" name) source-dir)))
+         (asd (merge-pathnames (format nil "~a.asd" name) source-dir))
+         (current asdf/source-registry:*source-registry-parameter*))
     (unless (probe-file asd)
       (error "No ~a (expected ~a.asd under PKG_SOURCE_DIR)" asd name))
     (asdf:initialize-source-registry
      `(:source-registry
        (:directory ,source-dir)
-       :inherit-configuration))
+       ,@(if (and (listp current) (eq (first current) :source-registry))
+             (rest current)
+             '(:inherit-configuration))))
     (asdf:load-asd asd)
     (asdf:find-system name t)))
 

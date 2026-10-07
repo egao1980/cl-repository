@@ -49,6 +49,42 @@
   (ok (equal '("mgl-pax")
              (extra-with-install-names '("mgl-pax" "MGL-PAX")))))
 
+(deftest test-ensure-deps-with-own-secondary-is-local
+  "compute-protocol#1 test-abcl: :with (\"foo/capability\") must not install a
+   published FOO next to the checkout (it shadowed the system under test).
+   The secondary is a local root; only its missing deps are installed."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (uiop:ensure-pathname
+                (format nil "~a/cl-repo-ensdep-~36r/" (uiop:temporary-directory) (random (expt 36 6))))))
+         (asd (merge-pathnames "cl-ensdep-foo.asd" dir))
+         (calls '())
+         (sym 'cl-repository-client/quickload::ensure-systems)
+         (orig (fdefinition sym)))
+    (ensure-directories-exist dir)
+    (with-open-file (out asd :direction :output :if-exists :supersede)
+      (write-string "(defsystem \"cl-ensdep-foo\" :depends-on ())
+(defsystem \"cl-ensdep-foo/extra\" :depends-on (\"cl-ensdep-foo\" \"cl-ensdep-bogus-dep\"))" out))
+    (push dir asdf:*central-registry*)
+    (unwind-protect
+         (progn
+           (setf (fdefinition sym)
+                 (lambda (systems &rest keys)
+                   (declare (ignore keys))
+                   (push (copy-list systems) calls)
+                   nil))
+           (let ((*standard-output* (make-broadcast-stream)))
+             (cl-repository-client/quickload:ensure-system-dependencies
+              "cl-ensdep-foo" :also-tests nil :with '("cl-ensdep-foo/extra")))
+           (let ((installed (reduce #'append calls)))
+             (ok (member "cl-ensdep-bogus-dep" installed :test #'string=))
+             (ng (member "cl-ensdep-foo" installed :test #'string=))
+             (ng (member "cl-ensdep-foo/extra" installed :test #'string=))))
+      (setf (fdefinition sym) orig)
+      (setf asdf:*central-registry* (remove dir asdf:*central-registry*))
+      (asdf:clear-system "cl-ensdep-foo")
+      (asdf:clear-system "cl-ensdep-foo/extra")
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
 (deftest test-compute-plan-ql-only-queues-fallback
   "cl-stack#165: :ql source must not die with 'not found in any registry'
    and must queue the system for Quicklisp fallback."

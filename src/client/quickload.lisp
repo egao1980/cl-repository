@@ -346,15 +346,25 @@
 
    ALSO-TESTS (default T): also walk SYSTEM-NAME/tests when that system exists.
    WITH: extra CI-only systems not in the .asd (e.g. event-backend-libuv, cl-stack-ssl).
-   Always installed from OCI even when ASDF already finds a QL dummy of the same name."
+   Always installed from OCI even when ASDF already finds a QL dummy of the same name.
+   Secondary systems of SYSTEM-NAME itself (\"foo/capability\" for \"foo\") are local
+   roots: their deps are walked, but they are never installed — otherwise an older
+   published FOO would be pulled next to the checkout and could shadow it."
   (let* ((name (string-downcase (string system-name)))
          (sys (or (asdf:find-system name nil)
                   (error "ensure-system-dependencies: system ~a not findable via ASDF ~
 (is the checkout on CL_SOURCE_REGISTRY?)" name)))
          (test-name (format nil "~a/tests" name))
          (local-roots (list name))
-         (extras (extra-with-install-names with)))
+         (extras '()))
     (declare (ignore sys))
+    (dolist (e (extra-with-install-names with))
+      (if (string= (asdf:primary-system-name e) name)
+          (if (asdf:find-system e nil)
+              (pushnew e local-roots :test #'string=)
+              (msg "~&; cl-repo: :with ~a is a secondary of ~a but not findable; skipping~%" e name))
+          (push e extras)))
+    (setf extras (nreverse extras))
     (when also-tests
       (let ((ts (if (stringp also-tests)
                     (string-downcase also-tests)
