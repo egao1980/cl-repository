@@ -45,10 +45,26 @@
   "ABCL under roswell runs as `java -jar`, so CLASSPATH is ignored by the JVM.
    Add its jars (JNA for CFFI) to ABCL's class loader before the client —
    and thus cffi-abcl — loads. abcl-asdf's maven fallback stopped resolving
-   JNA on runner images shipping Maven 3.10 (Class not found: com.sun.jna.Pointer)."
-  (dolist (entry (cl-repository-ci-lib:classpath-entries))
-    (format t "~&; ci: abcl add-to-classpath ~a~%" entry)
-    (java:add-to-classpath entry)))
+   JNA on runner images shipping Maven 3.10 (Class not found: com.sun.jna.Pointer).
+
+   JSS must be loaded first: its ADD-TO-CLASSPATH :after method imports the
+   jar's class names into the case-insensitive lookup table that cffi-abcl
+   relies on ('com.sun.jna.CallbackReference is read upcased). Without it the
+   client's HTTP stack dies with ClassNotFoundException COM.SUN.JNA.CALLBACKREFERENCE."
+  (let ((entries (cl-repository-ci-lib:classpath-entries)))
+    (when entries
+      (handler-case (progn (require :abcl-contrib) (require :jss))
+        (error (e) (format t "~&; ci: abcl jss unavailable: ~a~%" e)))
+      (let ((jar-import (and (find-package :jss)
+                             (find-symbol "JAR-IMPORT" :jss))))
+        (dolist (entry entries)
+          (format t "~&; ci: abcl add-to-classpath ~a~%" entry)
+          (java:add-to-classpath entry)
+          ;; Belt and braces: the :after method only exists once jss/classpath
+          ;; is loaded, so import explicitly as well (pushnew keeps it idempotent).
+          (when (and jar-import (fboundp jar-import)
+                     (string-equal (pathname-type entry) "jar"))
+            (funcall jar-import entry)))))))
 
 #+abcl (%abcl-honour-classpath)
 
