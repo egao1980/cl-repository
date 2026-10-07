@@ -9,7 +9,12 @@
                 #:*missing-deps-accumulator*)
   (:import-from :cl-repository-client/source-policy
                 #:*source-policy*
-                #:call-with-policy-overrides))
+                #:call-with-policy-overrides)
+  (:import-from :cl-repository-client/constraint-builder
+                #:list-tags/retry
+                #:*tag-list-attempts*)
+  (:import-from :cl-oci-client/registry #:make-registry)
+  (:import-from :cl-oci-client/conditions #:registry-error))
 (in-package :cl-repository-client/tests/quickload-test)
 
 (deftest test-asdf-dep-name-string
@@ -86,3 +91,58 @@
            (plan (compute-install-plan '("not+plus-xyz") :force t)))
        (ok (equal plan '(("not+plus-xyz"))))
        (ok (null *missing-deps-accumulator*))))))
+;;; list-tags/retry — transient registry failures must not be silent NILs.
+
+(defun %call-capturing-log (fn)
+  "Call FN with cl-oci msg output captured; return (values result log)."
+  (let (result)
+    (let ((log (with-output-to-string (s)
+                 (let ((cl-oci/runtime:*quiet* nil)
+                       (*standard-output* s))
+                   (setf result (funcall fn))))))
+      (values result log))))
+
+(deftest test-list-tags-retry-logs-and-returns-nil
+  "Unreachable registry: every attempt fails, each is logged, result is NIL (no signal)."
+  (let ((*tag-list-attempts* 2)
+        (reg (make-registry "http://127.0.0.1:9" :insecure-p t)))
+    (multiple-value-bind (result log)
+        (%call-capturing-log (lambda () (list-tags/retry reg "cl-systems/nope")))
+      (ok (null result))
+      (ok (search "tag listing failed (attempt 1/2)" log))
+      (ok (search "tag listing failed (attempt 2/2)" log)))))
+
+(deftest test-list-tags-retry-404-is-final
+  "HTTP 404 is a real answer (unknown repo): no retry, no log, NIL."
+  (let ((calls 0)
+        (*tag-list-attempts* 3)
+        (reg (make-registry "http://127.0.0.1:9" :insecure-p t)))
+    (multiple-value-bind (result log)
+        (%call-capturing-log
+         (lambda ()
+           (list-tags/retry reg "x/y"
+                            :lister (lambda (r p)
+                                      (declare (ignore r p))
+                                      (incf calls)
+                                      (error 'registry-error :status 404)))))
+      (ok (null result))
+      (ok (= calls 1))
+      (ok (string= log "")))))
+
+(deftest test-list-tags-retry-recovers
+  "A transient failure followed by success returns the tags."
+  (let ((calls 0)
+        (*tag-list-attempts* 3)
+        (reg (make-registry "http://127.0.0.1:9" :insecure-p t)))
+    (multiple-value-bind (result log)
+        (%call-capturing-log
+         (lambda ()
+           (list-tags/retry reg "x/y"
+                            :lister (lambda (r p)
+                                      (declare (ignore r p))
+                                      (if (= (incf calls) 1)
+                                          (error 'registry-error :status 503)
+                                          '("0.1.0" "latest"))))))
+      (ok (equal result '("0.1.0" "latest")))
+      (ok (= calls 2))
+      (ok (search "(attempt 1/3)" log)))))
