@@ -23,6 +23,7 @@
            #:ci-record-versions
            #:hooks-directory
            #:hook-file
+           #:classpath-entries
            #:format-tree-registry
            #:drop-dirs-from-registry
            #:client-bootstrap-registry
@@ -208,6 +209,19 @@
         collect (etypecase entry
                   (cons (cons (string-downcase (string (car entry)))
                               (string (cdr entry)))))))
+
+(defun classpath-entries (&optional (classpath (nonempty-env "CLASSPATH"))
+                                    (windows (uiop:os-windows-p)))
+  "Existing jar/dir entries of CLASSPATH, in order (colon-, or on Windows
+   semicolon-separated).
+   Roswell starts ABCL with `java -jar abcl.jar`, which ignores both -cp and
+   the CLASSPATH variable, so consumer jobs that export CLASSPATH (JNA for
+   CFFI) never reached the JVM; run.lisp feeds these to java:add-to-classpath."
+  (when classpath
+    (loop for entry in (uiop:split-string classpath
+                                          :separator (list (if windows #\; #\:)))
+          when (and (plusp (length entry)) (probe-file entry))
+            collect (namestring (probe-file entry)))))
 
 (defun hooks-directory ()
   (uiop:ensure-directory-pathname
