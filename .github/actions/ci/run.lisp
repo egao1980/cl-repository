@@ -179,13 +179,25 @@
 (defun %ensure-packager ()
   (cl-repo:add-registry "https://ghcr.io" :namespace "egao1980/cl-repository" :priority :prepend)
   (cl-repo:add-registry "https://ghcr.io" :namespace "egao1980/cl-systems" :priority :append)
-  (let ((ver (%env "PACKAGER_VERSION")))
+  (let ((ver (%env "PACKAGER_VERSION"))
+        (system (%resolve-system)))
     (%ci-muffle
      (lambda ()
        (if ver
            (cl-repo:ensure-systems "cl-repository-packager" :version ver :default-source :oci)
            (cl-repo:ensure-systems "cl-repository-packager" :default-source :oci))
-       (cl-repo:ensure-systems "cl-oci-client" :default-source :oci))))
+       (cl-repo:ensure-systems "cl-oci-client" :default-source :oci)
+       ;; The checkout is on the registry, so loading the packager re-plans a
+       ;; system it (or the client) depends on — http-protocol, encoding-protocol
+       ;; — from the checkout, whose new deps are not installed yet
+       ;; (MISSING-DEPENDENCY encoding-protocol on http-protocol 0.3.9 publish).
+       (let ((ci (cl-repository-ci-lib:system-ci-plist system)))
+         (apply #'cl-repo:ensure-system-dependencies system
+                :also-tests nil :default-source :oci
+                (append (let ((with (cl-repository-ci-lib:ci-with ci)))
+                          (when with (list :with with)))
+                        (let ((sources (cl-repository-ci-lib:ci-sources ci)))
+                          (when sources (list :sources sources)))))))))
   (cl-repository-client/asdf-integration:configure-asdf-source-registry)
   (cl-repository-client/asdf-integration:load-system-init-files)
   (%ci-muffle
