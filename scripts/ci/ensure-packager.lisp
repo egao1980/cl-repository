@@ -1,5 +1,5 @@
 ;;;; Load packager + oci-client the same way canned `ci` phase:publish does.
-;;;; Requires setup-lisp (cl-repository-client on CL_SOURCE_REGISTRY).
+;;;; Requires setup-lisp (client tree in CL_REPOSITORY_DEST; see %client-registry).
 ;;;; Do not colon-qualify packager/oci-client symbols here — this file is
 ;;;; LOADed before those systems exist.
 
@@ -25,6 +25,19 @@
   #-sbcl
   (funcall fn))
 
+(defun %client-registry ()
+  "setup-lisp no longer exports CL_SOURCE_REGISTRY (5c8af8c); the client tree is
+   CL_REPOSITORY_DEST. Register it (and the checkout) the same way the canned ci
+   action's %load-client does, inheriting whatever else the job configured."
+  (let ((dest (uiop:getenv "CL_REPOSITORY_DEST")))
+    (when (and dest (plusp (length dest)))
+      (asdf:initialize-source-registry
+       `(:source-registry
+         (:tree ,(uiop:ensure-directory-pathname dest))
+         (:tree ,(uiop:getcwd))
+         :inherit-configuration)))))
+
+(%client-registry)
 (%ci-muffle (lambda () (asdf:load-system "cl-repository-client")))
 
 (defun %env (name &optional default)
