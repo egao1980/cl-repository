@@ -86,6 +86,7 @@ scripts/ci/post-publish.lisp
 | `with` | | Space-separated extras, merged with `:ci :with` |
 | `version` | `.asd :version` | Publish tag |
 | `packager-version` | `latest` | Packager OCI tag |
+| `sbcl-dynamic-space-mb` | `4096` | `ros dynamic-space-size=` (macOS SBCL defaults to 1 GB → fset heap exhaustion). `0` = SBCL default; non-SBCL impls ignore it |
 
 `shell: bash` (Windows; also required inside a job container — default there is `sh`).
 Call `setup-lisp` in **this** job first (Ubuntu `ci-base` image, or install on the VM).

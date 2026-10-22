@@ -6,7 +6,8 @@
 #     test:
 #       uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
 #
-# Optional inputs: system, os-json, extra-with, sbcl-version, client-version, ci-image.
+# Optional inputs: system, os-json, extra-with, sbcl-version, client-version, ci-image,
+# sbcl-dynamic-space-mb (default 4096; macOS SBCL defaults to 1 GB).
 # Caller does not copy ci-install.lisp / ci-test.lisp.
 name: Test CL system
 
@@ -48,6 +49,11 @@ on:
         required: false
         type: string
         default: "ghcr.io/egao1980/cl-repository/ci-base:latest"
+      sbcl-dynamic-space-mb:
+        description: SBCL dynamic-space-size (MB) for install + test. 0 → SBCL default.
+        required: false
+        type: number
+        default: 4096
 
 jobs:
   test:
@@ -84,9 +90,11 @@ jobs:
         with:
           phase: install
           system: ${{ inputs.system }}
+          sbcl-dynamic-space-mb: ${{ inputs.sbcl-dynamic-space-mb }}
           with: ${{ inputs.extra-with }}
 
       - uses: egao1980/cl-repository/.github/actions/ci@main
         with:
           phase: test
           system: ${{ inputs.system }}
+          sbcl-dynamic-space-mb: ${{ inputs.sbcl-dynamic-space-mb }}

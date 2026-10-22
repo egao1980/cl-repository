@@ -36,6 +36,13 @@ inputs:
     description: Publish namespace
     required: false
     default: "egao1980/cl-systems"
+  sbcl-dynamic-space-mb:
+    description: >-
+      SBCL dynamic-space-size (MB) for the ros process. "0" or empty → SBCL
+      default (1 GB on macOS, too small for fset and friends). Non-SBCL impls
+      ignore it.
+    required: false
+    default: "4096"
 
 runs:
   using: composite
@@ -53,4 +60,11 @@ runs:
         OCI_NAMESPACE: ${{ inputs.oci-namespace }}
         GITHUB_TOKEN: ${{ github.token }}
         GITHUB_ACTOR: ${{ github.actor }}
-      run: ros -l "${GITHUB_ACTION_PATH}/run.lisp" -q
+        SBCL_DYNAMIC_SPACE_MB: ${{ inputs.sbcl-dynamic-space-mb }}
+      run: |
+        heap=""
+        if [[ -n "${SBCL_DYNAMIC_SPACE_MB}" && "${SBCL_DYNAMIC_SPACE_MB}" != 0 ]]; then
+          heap="dynamic-space-size=${SBCL_DYNAMIC_SPACE_MB}"
+        fi
+        # shellcheck disable=SC2086
+        ros ${heap} -l "${GITHUB_ACTION_PATH}/run.lisp" -q
