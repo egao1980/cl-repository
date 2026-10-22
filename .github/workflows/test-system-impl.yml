@@ -8,7 +8,7 @@
 #       with:
 #         lisp: ecl
 #
-# Optional inputs: system, extra-with, lisp-version, runs-on, timeout-minutes,
+# Optional inputs: system, extra-with, lisp-version, apt-packages, runs-on, timeout-minutes,
 # roswell-version, client-version.
 name: Test CL system (impl)
 
@@ -32,6 +32,11 @@ on:
         default: ""
       extra-with:
         description: Space-separated CI extras (merged with .asd :ci :with)
+        required: false
+        type: string
+        default: ""
+      apt-packages:
+        description: Extra Ubuntu packages (space-separated), e.g. libsqlite3-dev
         required: false
         type: string
         default: ""
@@ -77,11 +82,15 @@ jobs:
           version: ${{ inputs.client-version }}
           roswell-version: ${{ inputs.roswell-version }}
 
-      - name: Toolchain for ECL
-        if: inputs.lisp == 'ecl'
+      - name: System packages
+        if: runner.os == 'Linux' && (inputs.lisp == 'ecl' || inputs.apt-packages != '')
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
         run: |
+          pkgs=($APT_PACKAGES)
+          [[ "$LISP_IMPL" == ecl ]] && pkgs+=(build-essential libffi-dev libgc-dev libgmp-dev)
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends build-essential libffi-dev libgc-dev libgmp-dev
+          sudo apt-get install -y --no-install-recommends "${pkgs[@]}"
 
       - uses: actions/setup-java@v4
         if: inputs.lisp == 'abcl-bin'
