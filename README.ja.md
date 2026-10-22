@@ -203,6 +203,18 @@ jobs:
 これは `jobs.<id>.container` であり Docker コンテナアクションではありません。
 macOS / Windows は job container 非対応なので VM 上でインストールします（キャッシュあり）。
 
+他の処理系（ECL / CCL / ABCL）は `test-system-impl.yml` を使います。同じ
+install/test フェーズを VM 上で実行し、処理系は Roswell がインストール・キャッシュします。
+ECL の既定は `26.5.5`（cl-stack-mobile のピン）です:
+
+```yaml
+jobs:
+  test-ecl:
+    uses: egao1980/cl-repository/.github/workflows/test-system-impl.yml@main
+    with:
+      lisp: ecl            # または ccl-bin / abcl-bin（CFFI 用 JNA 設定済み）
+```
+
 または:
 
 ```yaml
