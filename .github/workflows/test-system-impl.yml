@@ -1,0 +1,141 @@
+# Reusable consumer test on a non-SBCL implementation (ECL / CCL / ABCL).
+# Same contract as test-system.yml (checkout + setup-lisp + ci install/test),
+# but on the VM (ci-base ships SBCL only) with the impl installed by Roswell.
+#
+#   jobs:
+#     test-ecl:
+#       uses: egao1980/cl-repository/.github/workflows/test-system-impl.yml@main
+#       with:
+#         lisp: ecl
+#
+# Optional inputs: system, extra-with, lisp-version, apt-packages, runs-on, timeout-minutes,
+# roswell-version, client-version.
+name: Test CL system (impl)
+
+on:
+  workflow_call:
+    inputs:
+      lisp:
+        description: Roswell impl name — ecl | ccl-bin | abcl-bin
+        required: false
+        type: string
+        default: ecl
+      lisp-version:
+        description: Roswell impl version (empty → impl default; ECL pins the mobile lane)
+        required: false
+        type: string
+        default: ""
+      system:
+        description: ASDF system (empty → discover from *.asd)
+        required: false
+        type: string
+        default: ""
+      extra-with:
+        description: Space-separated CI extras (merged with .asd :ci :with)
+        required: false
+        type: string
+        default: ""
+      apt-packages:
+        description: Extra Ubuntu packages (space-separated), e.g. libsqlite3-dev
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        required: false
+        type: string
+        default: ubuntu-latest
+      timeout-minutes:
+        description: ECL compiles every dep through C; Ironclad alone takes minutes.
+        required: false
+        type: number
+        default: 90
+      roswell-version:
+        required: false
+        type: string
+        default: "26.02.116"
+      client-version:
+        required: false
+        type: string
+        default: "latest"
+
+jobs:
+  test:
+    name: test (${{ inputs.lisp }})
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+      packages: read
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      LISP_IMPL: ${{ inputs.lisp }}
+      LISP_IMPL_VERSION: ${{ inputs.lisp-version || (inputs.lisp == 'ecl' && '26.5.5' || '') }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
+        with:
+          install-sbcl: "false"
+          version: ${{ inputs.client-version }}
+          roswell-version: ${{ inputs.roswell-version }}
+
+      - name: System packages
+        if: runner.os == 'Linux' && (inputs.lisp == 'ecl' || inputs.apt-packages != '')
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          pkgs=($APT_PACKAGES)
+          [[ "$LISP_IMPL" == ecl ]] && pkgs+=(build-essential libffi-dev libgc-dev libgmp-dev)
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends "${pkgs[@]}"
+
+      - uses: actions/setup-java@v4
+        if: inputs.lisp == 'abcl-bin'
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # ros install ecl builds from source (~6 min); keep the impl tree.
+      - name: Cache Roswell impl
+        uses: actions/cache@v4
+        with:
+          path: ~/.roswell/impls/*/*/${{ inputs.lisp }}
+          key: ${{ runner.os }}-${{ runner.arch }}-ros-impl-${{ inputs.lisp }}-${{ env.LISP_IMPL_VERSION || 'default' }}-v1
+
+      - name: Install ${{ inputs.lisp }}
+        run: |
+          set -euo pipefail
+          spec="${LISP_IMPL}${LISP_IMPL_VERSION:+/${LISP_IMPL_VERSION}}"
+          if ! ros use "$spec" 2>/dev/null; then
+            ros install "$spec"
+            ros use "$spec"
+          fi
+          ros -e '(format t "~&lisp ~A ~A~%" (lisp-implementation-type) (lisp-implementation-version))' -q
+
+      - name: Install JNA (CFFI on ABCL)
+        if: inputs.lisp == 'abcl-bin'
+        run: |
+          JNA_VER=5.14.0
+          mkdir -p "$HOME/jna"
+          curl -fsSL -o "$HOME/jna/jna-${JNA_VER}.jar" \
+            "https://repo1.maven.org/maven2/net/java/dev/jna/jna/${JNA_VER}/jna-${JNA_VER}.jar"
+          curl -fsSL -o "$HOME/jna/jna-platform-${JNA_VER}.jar" \
+            "https://repo1.maven.org/maven2/net/java/dev/jna/jna-platform/${JNA_VER}/jna-platform-${JNA_VER}.jar"
+          {
+            echo "CLASSPATH=$HOME/jna/jna-${JNA_VER}.jar:$HOME/jna/jna-platform-${JNA_VER}.jar${CLASSPATH:+:$CLASSPATH}"
+            echo "JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED ${JAVA_TOOL_OPTIONS:-}"
+          } >> "$GITHUB_ENV"
+
+      - uses: egao1980/cl-repository/.github/actions/ci@main
+        with:
+          phase: install
+          system: ${{ inputs.system }}
+          with: ${{ inputs.extra-with }}
+
+      - uses: egao1980/cl-repository/.github/actions/ci@main
+        with:
+          phase: test
+          system: ${{ inputs.system }}

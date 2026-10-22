@@ -203,6 +203,18 @@ Ubuntu-джобы в `test-system.yml` / `publish-source.yml` идут в
 Это `jobs.<id>.container`, не Docker container action.
 macOS / Windows job container не поддерживают — ставят тулчейн на VM (с кэшем).
 
+Другие реализации (ECL / CCL / ABCL) — через `test-system-impl.yml`: те же
+фазы install/test на VM, реализацию ставит и кэширует Roswell. ECL по умолчанию
+`26.5.5` (пин cl-stack-mobile):
+
+```yaml
+jobs:
+  test-ecl:
+    uses: egao1980/cl-repository/.github/workflows/test-system-impl.yml@main
+    with:
+      lisp: ecl            # или ccl-bin / abcl-bin (JNA для CFFI подключён)
+```
+
 Или по шагам:
 
 ```yaml

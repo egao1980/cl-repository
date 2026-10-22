@@ -211,6 +211,18 @@ Ubuntu jobs in `test-system.yml` / `publish-source.yml` run in
 installed). That is `jobs.<id>.container` — not a Docker container action.
 macOS / Windows cannot use a job container; they install on the VM (cached).
 
+Other implementations (ECL / CCL / ABCL) use `test-system-impl.yml` — same
+install/test phases on the VM, impl installed and cached by Roswell. ECL
+defaults to `26.5.5` (the cl-stack-mobile pin):
+
+```yaml
+jobs:
+  test-ecl:
+    uses: egao1980/cl-repository/.github/workflows/test-system-impl.yml@main
+    with:
+      lisp: ecl            # or ccl-bin / abcl-bin (JNA wired for CFFI)
+```
+
 Or compose:
 
 ```yaml
