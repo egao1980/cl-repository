@@ -13,5 +13,8 @@
    :cl-repository-client/asdf-integration
    :cl-repository-client/config
    :cl-repository-client/source-policy
+   :cl-repository-client/dep-satisfy
+   :cl-repository-client/asd-rewrite
+   :cl-repository-client/project
    :cl-repository-client/quickload
    :cl-repository-client/commands))

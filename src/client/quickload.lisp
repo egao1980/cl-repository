@@ -17,14 +17,17 @@
   (:import-from :cl-repository-client/installer #:install-system #:install-result
                 #:install-result-path #:install-result-name #:install-result-version
                 #:install-result-index-digest #:install-result-source-digest
-                #:install-result-overlay-digest #:install-result-registry-url
+                #:install-result-overlay-digest #:install-result-overlay-digests
+                #:install-result-registry-url
                 #:systems-root #:system-install-path)
   (:import-from :cl-repository-client/digest-cache
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
                 #:build-install-plan #:find-missing-deps #:dependency-resolution-error
                 #:list-tags/retry)
-  (:import-from :cl-repository-client/version-utils #:select-preferred-version)
+  (:import-from :cl-repository-client/version-utils #:select-preferred-version #:version<)
+  (:import-from :cl-repository-client/dep-satisfy
+                #:system-direct-dep-specs #:system-satisfied-p #:note-minimum)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry
                 #:load-system-init-files)
   (:import-from :cl-repository-client/lockfile
@@ -56,7 +59,7 @@
      ((\"http://localhost:5050\" :namespace \"cl-systems\")
       (\"https://ghcr.io\" :namespace \"ocicl\" :type :ocicl))")
 
-(defun add-registry (url &key (namespace "cl-systems") (priority :append) (type :cl-repo))
+(defun add-registry (url &key (namespace "egao1980/cl-systems") (priority :append) (type :cl-repo))
   "Add a registry to *registries*.
    PRIORITY is :prepend (search first) or :append (search last).
    TYPE is :cl-repo (default) or :ocicl for OCICL-format registries.
@@ -72,7 +75,7 @@
   *registries*)
 
 (defun registry-url (entry) (first entry))
-(defun registry-namespace (entry) (getf (rest entry) :namespace "cl-systems"))
+(defun registry-namespace (entry) (getf (rest entry) :namespace "egao1980/cl-systems"))
 (defun registry-type (entry) (getf (rest entry) :type :cl-repo))
 
 ;;; System presence checks
@@ -112,30 +115,40 @@
                         :index-digest (or (install-result-index-digest result) "")
                         :source-digest (install-result-source-digest result)
                         :overlay-digest (install-result-overlay-digest result)
+                        :overlay-digests (install-result-overlay-digests result)
                         :registry (or (install-result-registry-url result) ""))))
     (error (e)
       (msg "~&; cl-repo: warning: could not update lockfile: ~a~%" e))))
 
 ;;; Direct system install (for single system, bypasses SAT)
 
-(defun find-system-in-registry (reg-url namespace system-name &key version (type :cl-repo))
+(defun tag-older-than-p (tag minimum)
+  (handler-case (version< tag minimum)
+    (error () nil)))
+
+(defun find-system-in-registry (reg-url namespace system-name &key version minimum (type :cl-repo))
   "Find SYSTEM-NAME in a registry. Returns (values repo tag) or NIL.
-   If VERSION given, uses it directly. Otherwise discovers via tags or anchor.
+   VERSION is an exact tag. MINIMUM selects the newest tag that is not older.
    For :ocicl registries, the repo is just the system name (no namespace nesting)."
   (let* ((pkg (oci-package-name system-name))
          (repo (format nil "~a/~a" namespace pkg))
          (reg (make-registry reg-url)))
     (handler-case
-        (if version
-            (values repo version)
-            (let ((tags (list-tags/retry reg repo)))
-              (if tags
-                  (let ((version-tags (remove "latest" tags :test #'string=)))
-                    (if version-tags
-                        (values repo (select-preferred-version version-tags))
-                        (values repo (first tags))))
-                  (unless (eq type :ocicl)
-                    (find-via-anchor reg repo)))))
+        (cond
+          (version (values repo version))
+          (t
+           (let ((tags (list-tags/retry reg repo)))
+             (if tags
+                 (let* ((version-tags (remove "latest" tags :test #'string=))
+                        (ok (if minimum
+                                (remove-if (lambda (tag) (tag-older-than-p tag minimum)) version-tags)
+                                version-tags)))
+                   (cond
+                     (ok (values repo (select-preferred-version ok)))
+                     (version-tags nil)
+                     (t (values repo (first tags)))))
+                 (unless (eq type :ocicl)
+                   (find-via-anchor reg repo))))))
       (error (e)
         (msg "~&; cl-repo: ~a: lookup in ~a failed: ~a~%" system-name reg-url e)
         nil))))
@@ -158,7 +171,7 @@
                 (values alias-repo version))))))
     (error () nil)))
 
-(defun ensure-system-installed (name &key version)
+(defun ensure-system-installed (name &key version minimum)
   "Install NAME from configured registries. Returns INSTALL-RESULT or NIL."
   (dolist (entry *registries* nil)
     (let ((url (registry-url entry))
@@ -166,7 +179,7 @@
           (type (registry-type entry)))
       (handler-case
           (multiple-value-bind (repo tag)
-              (find-system-in-registry url ns name :version version :type type)
+              (find-system-in-registry url ns name :version version :minimum minimum :type type)
             (when (and repo tag)
               (msg "~&; cl-repo: found ~a:~a in ~a (~a)~%" name tag url type)
               (return-from ensure-system-installed
@@ -195,7 +208,7 @@
           (dolist (reg-entry (reverse registries))
             (when (and (listp reg-entry) (stringp (first reg-entry)))
               (add-registry (first reg-entry)
-                            :namespace (or (getf (rest reg-entry) :namespace) "cl-systems")
+                            :namespace (or (getf (rest reg-entry) :namespace) "egao1980/cl-systems")
                             :priority :append))))
         ;; Apply protected system prefixes from config
         (let ((protect (config-value config :protect)))
@@ -231,7 +244,14 @@
 
 ;;; Main entry points
 
-(defun ensure-systems (systems &key silent version force
+(defun installed-new-enough-p (name version minimum)
+  (let ((have (installed-system-version name)))
+    (and have
+         (if minimum
+             (not (tag-older-than-p have minimum))
+             (and version (string= have (princ-to-string version)))))))
+
+(defun ensure-systems (systems &key silent version force minimum
                                     with sources deny allow default-source
                                     config-path)
   "Resolve and install SYSTEMS from OCI registries, then Quicklisp for leftovers.
@@ -252,14 +272,14 @@
        (let ((plan (compute-install-plan system-list :version version :force force
                                                      :with with)))
          (dolist (entry plan)
-           (let ((name (car entry))
-                 (ver (cdr entry)))
+           (let* ((name (car entry))
+                  (ver (if minimum nil (cdr entry))))
              (unless (or (system-denied-p name)
                          (and (not force)
                               (system-already-installed-p name)
-                              (let ((iv (installed-system-version name)))
-                                (and iv (string= iv (princ-to-string ver))))))
-               (let ((result (ensure-system-installed name :version ver)))
+                              (installed-new-enough-p name (or ver version) minimum)))
+               (let ((result (ensure-system-installed name :version (or ver version)
+                                                           :minimum minimum)))
                  (when result
                    (configure-asdf-source-registry)
                    (record-lockfile-entry result)
@@ -304,40 +324,43 @@
    :test #'string=))
 
 (defun collect-missing-asdf-deps (local-roots &optional extras)
-  "Walk ASDF :depends-on from LOCAL-ROOTS (findable systems). Return names that
-   are not yet findable via ASDF — those need OCI/QL install. EXTRAS are always
-   considered (CI-only systems). Does not return LOCAL-ROOTS themselves.
-
-   EXTRAS themselves are not queued here: a QL dummy can be findable. Callers
-   must install extras via ENSURE-SYSTEMS first (see ENSURE-SYSTEM-DEPENDENCIES)."
+  "Walk ASDF :depends-on from LOCAL-ROOTS. Return names that are not satisfied.
+   A system is unsatisfied when it is missing, older than its :version minimum,
+   or found under a Quicklisp tree. Second value is an alist of (name . minimum).
+   Does not return LOCAL-ROOTS themselves."
   (let ((seen (make-hash-table :test #'equal))
+        (mins (make-hash-table :test #'equal))
         (local (mapcar (lambda (s) (string-downcase (string s))) local-roots))
         (missing '()))
     (labels ((local-p (n) (member n local :test #'string=))
-             (walk (name)
+             (walk-specs (sys)
+               (dolist (spec (system-direct-dep-specs sys))
+                 (walk (car spec) (cdr spec))))
+             (walk (name minimum)
                (let ((n (string-downcase (string name))))
+                 (note-minimum mins n minimum)
                  (unless (gethash n seen)
                    (setf (gethash n seen) t)
                    (cond
                      ((local-p n)
                       (let ((sys (asdf:find-system n nil)))
-                        (when sys
-                          (dolist (d (system-direct-deps sys))
-                            (walk d)))))
-                     ((asdf:find-system n nil)
-                      (dolist (d (system-direct-deps n))
-                        (walk d)))
+                        (when sys (walk-specs sys))))
+                     ((system-satisfied-p n minimum)
+                      (walk-specs n))
                      (t
                       (pushnew n missing :test #'string=)))))))
-      (dolist (r local) (walk r))
+      (dolist (r local) (walk r nil))
       (dolist (e (extra-with-install-names extras))
-        (walk e))
-      (nreverse missing))))
+        (walk e nil))
+      (values (nreverse missing)
+              (loop for k being the hash-key of mins
+                    when (gethash k mins)
+                      collect (cons k (gethash k mins)))))))
 
 (defun ensure-system-dependencies (system-name &key (also-tests t) with silent version force
                                                     sources deny allow default-source
                                                     config-path)
-  "Install dependency closure for a **local** SYSTEM-NAME (checkout on CL_SOURCE_REGISTRY).
+  "Install dependency closure for a local SYSTEM-NAME already visible to ASDF.
 
    Walks ASDF :depends-on (transitively while systems are findable). Missing names
    go through ENSURE-SYSTEMS (OCI registries → QL fallback). Re-walks after each
@@ -352,8 +375,8 @@
    published FOO would be pulled next to the checkout and could shadow it."
   (let* ((name (string-downcase (string system-name)))
          (sys (or (asdf:find-system name nil)
-                  (error "ensure-system-dependencies: system ~a not findable via ASDF ~
-(is the checkout on CL_SOURCE_REGISTRY?)" name)))
+                  (error "cl-repo: system ~a is not findable. The .asd must be the project file."
+                         name)))
          (test-name (format nil "~a/tests" name))
          (local-roots (list name))
          (extras '()))
@@ -386,19 +409,23 @@
     ;; system (rove → rove/core/assertion → dissect), re-walk until fixpoint.
     (let ((prev nil))
       (loop
-        (let ((targets (collect-missing-asdf-deps local-roots extras)))
+        (multiple-value-bind (targets minimums)
+            (collect-missing-asdf-deps local-roots extras)
           (when (or (null targets)
                     (equal (sort (copy-list targets) #'string<)
                            (sort (copy-list prev) #'string<)))
-            (when (and targets prev)
-              (msg "~&; cl-repo: still missing after install: ~{~a~^, ~}~%" targets))
+            (when targets
+              (error "cl-repo: system ~{~a~^, ~} is not in the registry" targets))
             (return))
           (msg "~&; cl-repo: ensure deps for local ~a → ~{~a~^, ~}~%" name targets)
-          (ensure-systems targets
-                          :silent silent :version version :force force
-                          :sources sources :deny deny :allow allow
-                          :default-source default-source
-                          :config-path config-path)
+          (dolist (target targets)
+            (ensure-systems (list target)
+                            :silent silent :version version :force force
+                            :minimum (cdr (assoc target minimums :test #'string=))
+                            :sources sources :deny deny :allow allow
+                            :default-source default-source
+                            :config-path config-path)
+            (ignore-errors (asdf:clear-system target)))
           (setf prev targets))))
     (values)))
 

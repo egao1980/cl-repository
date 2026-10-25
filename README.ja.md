@@ -42,49 +42,32 @@ qlot を使っている場合、`cl-repo` も「プロジェクト単位で依�
 
 ## クイックスタート
 
-```lisp
-;; 設定済み OCI registry からシステムをロード（ql:quickload 相当）
-(asdf:load-system "cl-repository-client")
-(cl-repo:add-registry "https://ghcr.io" :namespace "my-org/my-project")
-(cl-repo:load-system "alexandria")
-
-;; システムをパッケージ化して公開（.asd :properties の OCI 設定を読む）
-(asdf:load-system "cl-repository-packager")
-(asdf:operate 'cl-repository-packager:package-op "my-system")
+```sh
+cl-repo sync
+cl-repo test
+cl-repo publish
 ```
+
+普通の `.asd` で足ります。同じディレクトリの `qlfile` / `qlfile.lock` も入ります。
+既定のレジストリは `https://ghcr.io` / `egao1980/cl-systems` です。
 
 ### CLI
 
 ```sh
-cl-repo install alexandria
-cl-repo install cffi:0.24.1
+cl-repo sync
+cl-repo test
+cl-repo run -- sbcl --script tool.lisp
 cl-repo publish
-cl-repo publish-github fukamachi/sxql --ref main --registry ghcr.io --namespace my-org/my-project
-cl-repo sync-qlot --qlfile ./qlfile --registry ghcr.io --namespace my-org/my-project
-cl-repo ql-export https://beta.quicklisp.org/dist/quicklisp.txt --registry ghcr.io --namespace my-org/my-project
+cl-repo add-overlay
+cl-repo publish --overlay
+cl-repo install alexandria
 ```
 
 ### 既存プロジェクトのオンボーディング
 
-まだ OCI registry に存在しないプロジェクトでも、Quicklisp dist へ先に追加せずに取り込めます。
-
 ```sh
-# GitHub ソースから直接公開
-cl-repo publish-github owner/repo --ref v1.2.3 \
-  --registry ghcr.io --namespace my-org/my-project
-
-# qlot メタデータから install/publish（qlfile/qlfile.lock は自動検出）
-# - ql エントリは OCI registry からインストール
-# - github/git エントリは --publish-sources で先に自動公開可能
-cl-repo sync-qlot --publish-sources \
-  --use-lock \
-  --registry ghcr.io --namespace my-org/my-project
-
-# 必要な場合のみパスを明示
-cl-repo sync-qlot --use-lock \
-  --qlfile /path/to/qlfile \
-  --qlfile-lock /path/to/qlfile.lock \
-  --registry ghcr.io --namespace my-org/my-project
+cl-repo sync
+cl-repo test
 ```
 
 ### `.asd` に埋め込む OCI 設定
@@ -123,70 +106,16 @@ cl-repo publish my-cffi-lib --registry ghcr.io --namespace my-org/my-project
 
 2. **各対象プラットフォームでネイティブライブラリをビルド**（CI またはローカル）。
 
-3. **公開済みパッケージに overlay を追加**:
+3. **overlay を `.asd` に書き、そのあと公開する。** `add-overlay` はファイルだけを編集する。フラグなしはこのマシンの os と arch。`--os` / `--arch` / `--lisp` のどれかを渡すと、渡した部分だけがキーになる（値なしはそのマシン）。成果物は `lib/<key>/`、grovel は `grovel/<key>/`。
 
 ```sh
-# linux/amd64 runner:
-cl-repo add-overlay my-cffi-lib \
-  --os linux --arch amd64 \
-  --native-paths lib/linux-amd64/libfoo.so \
-  --tag 1.0.0 \
-  --registry ghcr.io --namespace my-org/my-project
-
-# darwin/arm64 runner:
-cl-repo add-overlay my-cffi-lib \
-  --os darwin --arch arm64 \
-  --native-paths lib/darwin-arm64/libfoo.dylib \
-  --tag 1.0.0 \
-  --registry ghcr.io --namespace my-org/my-project
-
-# windows/amd64 runner:
-cl-repo add-overlay my-cffi-lib \
-  --os windows --arch amd64 \
-  --native-paths lib/windows-amd64/foo.dll \
-  --tag 1.0.0 \
-  --registry ghcr.io --namespace my-org/my-project
+cl-repo add-overlay --os linux --arch amd64
+cl-repo add-overlay --lisp ecl
+cl-repo publish
+cl-repo publish --overlay
 ```
 
-`add-overlay` は毎回、既存 Image Index を pull し、新しい overlay blobs と manifest を push し、overlay descriptor を index に追加して同じ tag へ再 push します。OCI tag は mutable pointer なので、異なるプラットフォームターゲットに対して安全かつ冪等です。
-
-複数ネイティブファイルを 1 overlay に含めることもできます（カンマ区切り）:
-
-```sh
-cl-repo add-overlay my-cffi-lib \
-  --os linux --arch amd64 \
-  --native-paths lib/libfoo.so,lib/libbar.so \
-  --tag 1.0.0
-```
-
-ABI 依存の強い overlay（grovel 出力、特定 glibc/SDK でリンクした native libs）では `--os-version` で OS バージョンを固定してください。クライアントは `os-version` の厳密一致を優先し、なければ generic os/arch overlay にフォールバックします:
-
-```sh
-cl-repo add-overlay my-cffi-lib \
-  --os linux --arch amd64 --os-version ubuntu-22.04 \
-  --native-paths lib/linux-amd64-u2204/libfoo.so \
-  --tag 1.0.0
-```
-
-特定 CL 実装向け overlay の場合は `--lisp` を指定:
-
-```sh
-cl-repo add-overlay my-cffi-lib \
-  --os linux --arch amd64 --lisp sbcl \
-  --native-paths lib/linux-amd64/libfoo.so \
-  --tag 1.0.0
-```
-
-#### Programmatic API
-
-```lisp
-(let* ((overlay (parse-overlay-spec
-                  '(:platform (:os "linux" :arch "amd64")
-                    :layers ((:role "native-library"
-                              :files (("lib/libfoo.so" . "libfoo.so")))))))
-       (result (build-overlay "my-cffi-lib" overlay :version "1.0.0")))
-  (publish-overlay "https://ghcr.io" "my-org/my-project" "my-cffi-lib" "1.0.0" result))
-```
+`publish` はソースマニフェストと、ファイルがある overlay をすべて push する。`publish --overlay` はソースを飛ばし、このマシンに一番具体的な overlay を push する。`publish --overlay cuda` はその名前の overlay。`sync` は名前のない一致 overlay を、汎用から具体へ積む。`cuda` のような名前は `cl-repo sync --overlay cuda` まで入らない。
 
 #### コンシューマ CI（canned actions）
 
@@ -235,7 +164,7 @@ steps:
 
 ソースのみ公開: `publish-source.yml`。ネイティブ: `publish-native-package.yml`。詳細: [`.github/actions/ci`](.github/actions/ci/)。
 
-`setup-lisp` は `ci-base` 上では `CL_SOURCE_REGISTRY` を書くだけです。素の VM では `setup-client` + `setup-roswell` を呼び、`~/.roswell` と `.cl-repository` をキャッシュします（クライアントのキーは解決済み semver。`:latest` エイリアスは使わない）。`setup-client` は `ghcr.io/egao1980/cl-repository/cl-repository-client:latest`（system-name **anchor**）→ アノテーションの semver → `oras pull` します。**Lisp クライアントの版としてこのリポジトリの git タグをピンしないでください** — OCI 成果物を凍結するときだけ `version` を渡します。クライアントが必要な **各 job** で `setup-lisp` を呼んでください。
+`setup-lisp` はクライアントを runner に置き、`CL_SOURCE_REGISTRY` は export しない。素の VM では `setup-client` + `setup-roswell` を呼び、`~/.roswell` と `.cl-repository` をキャッシュする（クライアントのキーは解決済み semver。`:latest` エイリアスは使わない）。`setup-client` は `ghcr.io/egao1980/cl-repository/cl-repository-client:latest`（system-name **anchor**）→ アノテーションの semver → `oras pull` する。**Lisp クライアントの版としてこのリポジトリの git タグをピンしない。** `version` は OCI 成果物を凍結するときだけ渡す。クライアントが必要な **各 job** で `setup-lisp` を呼び、そのあと `cl-repo sync` と `cl-repo test` を実行する。
 
 #### CI 例（GitHub Actions）
 
@@ -245,7 +174,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: cl-repo publish my-cffi-lib --registry ghcr.io --namespace "${{ github.repository }}"
+      - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
+      - run: cl-repo publish
 
   add-overlay:
     needs: publish-source
@@ -263,76 +193,22 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
-      - run: make native  # .so/.dylib をビルド
-      - run: |
-          cl-repo add-overlay my-cffi-lib \
-            --os ${{ matrix.os }} --arch ${{ matrix.arch }} \
-            --native-paths ${{ matrix.lib }} \
-            --tag 1.0.0 \
-            --registry ghcr.io --namespace "${{ github.repository }}"
+      - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
+      - run: make native
+      - run: cl-repo add-overlay --os ${{ matrix.os }} --arch ${{ matrix.arch }}
+      - run: cl-repo publish --overlay
 ```
 
 インストール時にはクライアントが適切な overlay を自動選択します。pure-Lisp システムは overlay を完全にスキップします。
 
-### 標準 OCI クライアントの利用（`cl-repo` 不要）
-
-パッケージは標準 OCI アーティファクトです。任意 OCI クライアントで pull し、展開ディレクトリを ASDF に渡せます。
+### インストール
 
 ```sh
-# Pure-Lisp パッケージ（source のみ）
-oras pull ghcr.io/my-org/my-project/cl-oci:0.2.0 -o /tmp/
-mkdir -p ~/.local/share/cl-systems/
-tar -xzf /tmp/cl-oci-0.2.0.tar.gz -C ~/.local/share/cl-systems/
-
-# ネイティブ libs 付きパッケージ — 全 layer は同一 prefix を使うため順に展開
-oras pull --platform linux/amd64 ghcr.io/my-org/my-project/my-cffi-lib:1.0.0
-for f in *.tar.gz; do tar xzf "$f" -C ~/.local/share/cl-systems/; done
-# -> ~/.local/share/cl-systems/my-cffi-lib-1.0.0/         (source)
-# -> ~/.local/share/cl-systems/my-cffi-lib-1.0.0/native/  (platform libs)
+cl-repo install alexandria
+cl-repo install cffi:0.24.1
 ```
 
-`--platform` なしでは `oras` は universal manifest（source-only）を選びます。`--platform` 指定時は source + native libs を含む self-contained artifact を取得します。全 layer は OCICL 互換の `<name>-<version>/` prefix を共有するため、重ね展開がきれいに機能します。
-
-その後 Lisp 側で:
-
-```lisp
-(asdf:initialize-source-registry
-  '(:source-registry
-    (:tree (:home ".local/share/cl-systems/"))
-    :inherit-configuration))
-
-(asdf:load-system "cl-oci")
-```
-
-または `CL_SOURCE_REGISTRY` 環境変数を設定:
-
-```sh
-export CL_SOURCE_REGISTRY="(:source-registry (:tree (:home \".local/share/cl-systems/\")) :inherit-configuration)"
-sbcl --eval '(asdf:load-system "cl-oci")'
-```
-
-スクリプトで pull + extract + load を一括実行する例:
-
-```sh
-#!/bin/sh
-REGISTRY=ghcr.io/my-org/my-project
-SYSTEM=cl-oci
-TAG=0.2.0
-DEST=~/.local/share/cl-systems
-
-mkdir -p "${DEST}"
-oras pull "${REGISTRY}/${SYSTEM}:${TAG}" -o /tmp/
-tar -xzf "/tmp/${SYSTEM}-${TAG}.tar.gz" -C "${DEST}/"
-
-sbcl --eval "(asdf:initialize-source-registry
-               '(:source-registry
-                 (:tree (:home \".local/share/cl-systems/\"))
-                 :inherit-configuration))" \
-     --eval "(asdf:load-system \"${SYSTEM}\")" \
-     --eval "(format t \"~a loaded OK~%\" \"${SYSTEM}\")"
-```
-
-これは任意 OCI クライアント（`oras`、`crane`、`skopeo`）と、ASDF 対応の任意 CL 実装で動作します。
+アーティファクトは普通の OCI イメージです。`oras`、`crane`、`skopeo` で pull できます。ASDF へ入れるのは `cl-repo install` です。
 
 ### OCICL パッケージの読み込み
 

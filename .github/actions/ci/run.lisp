@@ -124,39 +124,25 @@
               (format out "~a=~a~%" (cdr pair) ver))))))))
 
 (defun %run-install ()
-  (let* ((system (%resolve-system))
-         (ci nil)
-         (extra (cl-repository-ci-lib:split-ws (%env "CL_REPO_CI_WITH"))))
+  (let ((system (%resolve-system)))
     (format t "~&; ci: install ~a~%" system)
     (%add-default-registry)
     (%maybe-load-hook "pre-install")
-    (setf ci (cl-repository-ci-lib:system-ci-plist system))
     (%ci-muffle
      (lambda ()
-       (apply #'cl-repo:ensure-system-dependencies system
-              :also-tests (cl-repository-ci-lib:ci-also-tests ci)
-              (append (let ((with (cl-repository-ci-lib:ci-with ci extra)))
-                        (when with (list :with with)))
-                      (let ((sources (cl-repository-ci-lib:ci-sources ci)))
-                        (when sources (list :sources sources)))))))
-    (%record-versions (cl-repository-ci-lib:ci-record-versions ci))
+       (cl-repo:cmd-sync :directory (uiop:getcwd) :system system)))
+    (%record-versions (cl-repository-ci-lib:ci-record-versions
+                       (cl-repository-ci-lib:system-ci-plist system)))
     (%maybe-load-hook "post-install")
     (format t "~&; ci: install phase done~%")))
 
 (defun %run-test ()
-  (let* ((system (%resolve-system))
-         (ci (cl-repository-ci-lib:system-ci-plist system)))
+  (let ((system (%resolve-system)))
     (format t "~&; ci: test ~a~%" system)
-    (cl-repository-client/asdf-integration:configure-asdf-source-registry)
-    (cl-repository-client/asdf-integration:load-system-init-files)
     (%maybe-load-hook "pre-test")
     (%ci-muffle
      (lambda ()
-       (dolist (n (cl-repository-ci-lib:ci-load-before-test ci))
-         (format t "~&; ci: load-before-test ~a~%" n)
-         (asdf:load-system n))
-       (asdf:load-system system)
-       (asdf:test-system system)))
+       (cl-repo:cmd-test :directory (uiop:getcwd) :system system)))
     (%maybe-load-hook "post-test")
     (format t "~&; ci: tests ok~%")))
 
@@ -200,10 +186,20 @@
                           (when sources (list :sources sources)))))))))
   (cl-repository-client/asdf-integration:configure-asdf-source-registry)
   (cl-repository-client/asdf-integration:load-system-init-files)
-  (%ci-muffle
-   (lambda ()
-     (asdf:load-system "cl-repository-packager")
-     (asdf:load-system "cl-oci-client"))))
+  ;; Load the packager with the checkout off the registry. A project system
+  ;; that the packager also depends on (http-protocol) would otherwise shadow
+  ;; the installed copy and miss dependencies that are not in the checkout.
+  (let ((saved asdf:*source-registry-parameter*))
+    (cl-repository-ci-lib:clear-checkout-systems)
+    (asdf:initialize-source-registry
+     (%registry-form (remove nil (list (namestring (cl-repo:systems-root))
+                                       (cl-repository-ci-lib:nonempty-env "CL_REPOSITORY_DEST")))))
+    (unwind-protect
+         (%ci-muffle
+          (lambda ()
+            (asdf:load-system "cl-repository-packager")
+            (asdf:load-system "cl-oci-client")))
+      (asdf:initialize-source-registry saved))))
 
 (defun %run-publish ()
   (%ensure-packager)

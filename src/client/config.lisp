@@ -50,8 +50,8 @@
 (defun generate-default-config (&optional (path (merge-pathnames *project-config-filename*
                                                                   (uiop:getcwd))))
   "Write a default cl-repo.conf to PATH."
-  (write-config '(:default-source :any
-                  :registries ()
+  (write-config '(:default-source :oci
+                  :registries (("https://ghcr.io" :namespace "egao1980/cl-systems"))
                   :sources ()
                   :rules ()
                   :protect ("swank" "slynk"))

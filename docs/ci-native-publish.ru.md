@@ -22,4 +22,5 @@ Nested нужен пакетам с pre-groveled CFFI (event backends). Flat —
 (2026-08-27) Дефолт `sbcl-dynamic-space-mb` — **8192** (gzip CUDA-размера overlay убивает ~1GB heap). `ros dynamic-space-size=`.
 (2026-09-01) packager грузится через `setup-lisp` + `ensure-systems`. Пин `0.10.0` — старый QL-workaround.
 (2026-09-03) checkout `scripts/ci` — `job.workflow_sha` (сам reusable). `github.workflow_sha` — SHA caller'а, не подходит.
+(2026-10-25) Входа `ci-ref` нет. Caller не может подменить checkout на другую ветку.
 (2026-08-28) `:skip-catalog t` пропускает только общий `<namespace>/catalog`. Якорь `:latest` на репозитории пакета всё равно пишется.

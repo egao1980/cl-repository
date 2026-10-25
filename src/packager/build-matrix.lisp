@@ -4,7 +4,7 @@
   (:import-from :cl-oci/annotations
                 #:+ann-title+ #:+ann-version+ #:+ann-licenses+ #:+ann-description+
                 #:+ann-created+ #:+ann-authors+ #:+ann-source+ #:+ann-revision+
-                #:+cl-implementation+ #:+cl-layer-roles+ #:+cl-depends-on+
+                #:+cl-implementation+ #:+cl-overlay-name+ #:+cl-layer-roles+ #:+cl-depends-on+
                 #:+cl-depends-on-versioned+ #:+cl-provides+)
   (:import-from :cl-oci/config #:+role-source+ #:+role-native-library+
                 #:+role-cffi-grovel-output+ #:+role-cffi-wrapper+ #:+role-headers+
@@ -32,6 +32,7 @@
            #:overlay-spec-arch
            #:overlay-spec-os-version
            #:overlay-spec-lisp
+           #:overlay-spec-name
            #:overlay-spec-native-paths
            #:overlay-spec-layers
            #:parse-overlay-spec
@@ -71,11 +72,12 @@
    (overlays :type list :initarg :overlays :accessor package-spec-overlays :initform nil)))
 
 (defclass overlay-spec ()
-  ((platform-os :type string :initarg :os :accessor overlay-spec-os)
-   (platform-arch :type string :initarg :arch :accessor overlay-spec-arch)
+  ((platform-os :type (or null string) :initarg :os :accessor overlay-spec-os :initform nil)
+   (platform-arch :type (or null string) :initarg :arch :accessor overlay-spec-arch :initform nil)
    (platform-os-version :type (or null string) :initarg :os-version :accessor overlay-spec-os-version
                         :initform nil)
    (lisp :type (or null string) :initarg :lisp :accessor overlay-spec-lisp :initform nil)
+   (name :type (or null string) :initarg :name :accessor overlay-spec-name :initform nil)
    (native-paths :type list :initarg :native-paths :accessor overlay-spec-native-paths :initform nil)
    (layers :type list :initarg :layers :accessor overlay-spec-layers :initform nil)
    (run-groveler :type boolean :initarg :run-groveler :accessor overlay-spec-run-groveler
@@ -145,10 +147,36 @@
       (setf (gethash +cl-provides+ ann) (comma-join (package-spec-provides spec))))
     ann))
 
+(defun overlay-key-parts (overlay)
+  "os, arch, and lisp that are present, joined. A lisp-only overlay is just the lisp."
+  (format nil "~{~a~^-~}"
+          (remove-if (lambda (part) (or (null part) (string= part "")))
+                     (list (overlay-spec-os overlay)
+                           (overlay-spec-arch overlay)
+                           (overlay-spec-lisp overlay)))))
+
+(defun overlay-platform (overlay)
+  "OCI platform for OVERLAY, or NIL when both os and arch are unset.
+   A lisp-only overlay must not carry a platform object: that would make it
+   look like the universal manifest to clients that only check platform."
+  (let ((os (overlay-spec-os overlay))
+        (arch (overlay-spec-arch overlay)))
+    (when (or (and os (plusp (length os)))
+              (and arch (plusp (length arch))))
+      (make-platform :os os
+                     :architecture arch
+                     :os-version (overlay-spec-os-version overlay)))))
+
 (defun make-overlay-annotations (overlay layers)
   "Build the OCI annotation hash-table for a platform OVERLAY manifest over LAYERS."
-  (let ((ann (make-hash-table :test 'equal)))
+  (let ((ann (make-hash-table :test 'equal))
+        (key (overlay-key-parts overlay))
+        (name (overlay-spec-name overlay)))
     (setf-when (gethash +cl-implementation+ ann) (overlay-spec-lisp overlay))
+    (when (and name (plusp (length name)) (not (string-equal name key)))
+      (setf (gethash +cl-overlay-name+ ann) name))
+    (when (and key (plusp (length key)) (or (null name) (string-equal name key)))
+      (setf (gethash +cl-overlay-name+ ann) key))
     (setf (gethash +cl-layer-roles+ ann) (comma-join layers #'layer-result-role))
     ann))
 
@@ -241,6 +269,7 @@
   "Parse an overlay spec from a plist like (:platform (:os \"linux\" :arch \"amd64\") ...)."
   (let ((plat (getf plist :platform)))
     (make-instance 'overlay-spec
+                   :name (getf plist :name)
                    :os (getf plat :os)
                    :arch (getf plat :arch)
                    :os-version (getf plat :os-version)
@@ -271,6 +300,23 @@
     (string (if source-dir
                 (merge-pathnames source source-dir)
                 (pathname source)))))
+
+(defun materialize-overlay-layer (layer &key source-dir)
+  "Expand directory entries to the files inside them. Drop paths that are not on disk.
+   Returns a layer plist, or NIL when nothing can be packed."
+  (let ((files nil))
+    (dolist (mapping (getf layer :files))
+      (let ((path (resolve-overlay-source-path (car mapping) :source-dir source-dir)))
+        (cond
+          ((uiop:directory-exists-p path)
+           (dolist (file (uiop:directory-files path))
+             (push (cons (namestring file) (file-namestring file)) files)))
+          ((probe-file path)
+           (push mapping files)))))
+    (when files
+      (list :role (getf layer :role)
+            :files (nreverse files)
+            :prefix (getf layer :prefix)))))
 
 (defun build-layer-from-overlay-layer (overlay-layer tar-prefix &key source-dir)
   "Build a layer-result from normalized OVERLAY-LAYER."
@@ -342,14 +388,18 @@
       ;; (oras pull --platform linux/amd64) get a complete, self-contained artifact.
       ;; The source blob is content-addressable -- the registry stores it once.
       (dolist (overlay (package-spec-overlays spec))
-        (let ((overlay-layers nil)
-              (plat (make-platform :os (overlay-spec-os overlay)
-                                   :architecture (overlay-spec-arch overlay)
-                                   :os-version (overlay-spec-os-version overlay))))
+        (let ((ready (remove nil
+                             (mapcar (lambda (layer)
+                                       (materialize-overlay-layer
+                                        layer :source-dir (package-spec-source-dir spec)))
+                                     (effective-overlay-layers overlay)))))
+          (when ready
+          (let ((overlay-layers nil)
+                (plat (overlay-platform overlay)))
           ;; Source layer first (same blob as universal, deduped by registry)
           (push source-layer overlay-layers)
           ;; Overlay layers from unified spec (including legacy native-path fallback)
-          (dolist (overlay-layer (effective-overlay-layers overlay))
+          (dolist (overlay-layer ready)
             (let ((layer (build-layer-from-overlay-layer
                           overlay-layer tar-prefix
                           :source-dir (package-spec-source-dir spec))))
@@ -371,7 +421,7 @@
                                                                overlay overlay-layers)
                                                  :platform plat)))
               (push bm all-manifests)
-              (push (built-manifest-descriptor bm) manifest-descriptors)))))
+              (push (built-manifest-descriptor bm) manifest-descriptors)))))))
       ;; 4. Build Image Index
       (multiple-value-bind (idx-json idx-digest idx-size)
           (build-image-index (nreverse manifest-descriptors) :annotations ann)
@@ -391,9 +441,7 @@
   (let* ((blobs nil)
          (overlay-layers nil)
          (tar-prefix (format nil "~a-~a/" system-name (or version "latest")))
-         (plat (make-platform :os (overlay-spec-os overlay)
-                              :architecture (overlay-spec-arch overlay)
-                              :os-version (overlay-spec-os-version overlay))))
+         (plat (overlay-platform overlay)))
     ;; Source layer first (if available) for OCI client compat
     (when source-layer
       (push source-layer overlay-layers))

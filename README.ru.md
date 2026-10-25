@@ -42,49 +42,32 @@ Quicklisp отлично подходит для старта с библиот�
 
 ## Быстрый старт
 
-```lisp
-;; Загрузка системы из настроенных OCI registry (аналог ql:quickload)
-(asdf:load-system "cl-repository-client")
-(cl-repo:add-registry "https://ghcr.io" :namespace "my-org/my-project")
-(cl-repo:load-system "alexandria")
-
-;; Упаковка и публикация системы (читает OCI-конфиг из .asd :properties)
-(asdf:load-system "cl-repository-packager")
-(asdf:operate 'cl-repository-packager:package-op "my-system")
+```sh
+cl-repo sync
+cl-repo test
+cl-repo publish
 ```
+
+Обычного `.asd` достаточно. `qlfile` и `qlfile.lock` в том же каталоге ставятся вместе с ним.
+Реестр по умолчанию — `https://ghcr.io` / `egao1980/cl-systems`.
 
 ### CLI
 
 ```sh
-cl-repo install alexandria
-cl-repo install cffi:0.24.1
+cl-repo sync
+cl-repo test
+cl-repo run -- sbcl --script tool.lisp
 cl-repo publish
-cl-repo publish-github fukamachi/sxql --ref main --registry ghcr.io --namespace my-org/my-project
-cl-repo sync-qlot --qlfile ./qlfile --registry ghcr.io --namespace my-org/my-project
-cl-repo ql-export https://beta.quicklisp.org/dist/quicklisp.txt --registry ghcr.io --namespace my-org/my-project
+cl-repo add-overlay
+cl-repo publish --overlay
+cl-repo install alexandria
 ```
 
 ### Онбординг существующих проектов
 
-Вы можете заводить проекты, которых ещё нет в вашем OCI registry, без предварительного добавления в Quicklisp dist.
-
 ```sh
-# Публикация напрямую из GitHub-исходников.
-cl-repo publish-github owner/repo --ref v1.2.3 \
-  --registry ghcr.io --namespace my-org/my-project
-
-# Установка/публикация из метаданных qlot (авто-поиск qlfile/qlfile.lock).
-# - ql-записи устанавливаются из OCI registry.
-# - github/git-записи можно сначала авто-публиковать через --publish-sources.
-cl-repo sync-qlot --publish-sources \
-  --use-lock \
-  --registry ghcr.io --namespace my-org/my-project
-
-# Переопределяйте пути только при необходимости.
-cl-repo sync-qlot --use-lock \
-  --qlfile /path/to/qlfile \
-  --qlfile-lock /path/to/qlfile.lock \
-  --registry ghcr.io --namespace my-org/my-project
+cl-repo sync
+cl-repo test
 ```
 
 ### Встроенный OCI-конфиг в `.asd`
@@ -123,70 +106,16 @@ cl-repo publish my-cffi-lib --registry ghcr.io --namespace my-org/my-project
 
 2. **Соберите нативные библиотеки** на каждой целевой платформе (в CI или локально).
 
-3. **Добавьте overlays** к уже опубликованному пакету:
+3. **Запишите overlay в `.asd`**, затем опубликуйте. `add-overlay` только правит файл. Вызов без флагов — os и arch этой машины. Любой из `--os`, `--arch`, `--lisp` оставляет только указанные части (флаг без значения — эта машина). Файлы кладите в `lib/<key>/`, grovel — в `grovel/<key>/`.
 
 ```sh
-# На linux/amd64 runner:
-cl-repo add-overlay my-cffi-lib \
-  --os linux --arch amd64 \
-  --native-paths lib/linux-amd64/libfoo.so \
-  --tag 1.0.0 \
-  --registry ghcr.io --namespace my-org/my-project
-
-# На darwin/arm64 runner:
-cl-repo add-overlay my-cffi-lib \
-  --os darwin --arch arm64 \
-  --native-paths lib/darwin-arm64/libfoo.dylib \
-  --tag 1.0.0 \
-  --registry ghcr.io --namespace my-org/my-project
-
-# На windows/amd64 runner:
-cl-repo add-overlay my-cffi-lib \
-  --os windows --arch amd64 \
-  --native-paths lib/windows-amd64/foo.dll \
-  --tag 1.0.0 \
-  --registry ghcr.io --namespace my-org/my-project
+cl-repo add-overlay --os linux --arch amd64
+cl-repo add-overlay --lisp ecl
+cl-repo publish
+cl-repo publish --overlay
 ```
 
-Каждый вызов `add-overlay` вытягивает текущий Image Index, публикует новые overlay blobs и manifest, дописывает descriptor overlay в index и повторно публикует обновлённый index под тем же тегом. OCI-теги — это изменяемые указатели, поэтому для различных platform target это безопасно и идемпотентно.
-
-Можно включать несколько нативных файлов в один overlay (через запятую):
-
-```sh
-cl-repo add-overlay my-cffi-lib \
-  --os linux --arch amd64 \
-  --native-paths lib/libfoo.so,lib/libbar.so \
-  --tag 1.0.0
-```
-
-Для ABI-чувствительных overlays (grovel output, native libs, собранные под конкретный glibc/SDK) фиксируйте версию ОС через `--os-version`. Клиент предпочитает точные совпадения `os-version` и откатывается на generic os/arch overlays:
-
-```sh
-cl-repo add-overlay my-cffi-lib \
-  --os linux --arch amd64 --os-version ubuntu-22.04 \
-  --native-paths lib/linux-amd64-u2204/libfoo.so \
-  --tag 1.0.0
-```
-
-Если overlay нацелен на конкретную реализацию CL, передайте `--lisp`:
-
-```sh
-cl-repo add-overlay my-cffi-lib \
-  --os linux --arch amd64 --lisp sbcl \
-  --native-paths lib/linux-amd64/libfoo.so \
-  --tag 1.0.0
-```
-
-#### Programmatic API
-
-```lisp
-(let* ((overlay (parse-overlay-spec
-                  '(:platform (:os "linux" :arch "amd64")
-                    :layers ((:role "native-library"
-                              :files (("lib/libfoo.so" . "libfoo.so")))))))
-       (result (build-overlay "my-cffi-lib" overlay :version "1.0.0")))
-  (publish-overlay "https://ghcr.io" "my-org/my-project" "my-cffi-lib" "1.0.0" result))
-```
+`publish` пушит исходный манифест и каждый overlay, чьи файлы есть. `publish --overlay` пропускает исходники и пушит самое специфичное совпадение для этой машины. `publish --overlay cuda` пушит именованный overlay. `sync` ставит все подходящие безымянные overlay, от общего к частному. Имя вроде `cuda` не ставится, пока не вызван `cl-repo sync --overlay cuda`.
 
 #### CI потребителя (canned actions)
 
@@ -235,7 +164,7 @@ steps:
 
 Source-only publish: `publish-source.yml`. Native: `publish-native-package.yml`. Подробности: [`.github/actions/ci`](.github/actions/ci/).
 
-`setup-lisp` на `ci-base` только выставляет `CL_SOURCE_REGISTRY`. На голой VM вызывает `setup-client` + `setup-roswell` и кэширует `~/.roswell` и `.cl-repository` (ключ клиента — резолвленный semver, не алиас `:latest`). `setup-client` резолвит `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → semver из аннотации → `oras pull`. **Не пиньте git-тег этого репозитория как версию Lisp-клиента** — `version` только чтобы заморозить OCI-артефакт. Вызывайте `setup-lisp` в **каждом job**, которому нужен клиент.
+`setup-lisp` кладёт клиент на runner и не экспортирует `CL_SOURCE_REGISTRY`. На голой VM вызывает `setup-client` + `setup-roswell` и кэширует `~/.roswell` и `.cl-repository` (ключ клиента — резолвленный semver, не алиас `:latest`). `setup-client` резолвит `ghcr.io/egao1980/cl-repository/cl-repository-client:latest` (system-name **anchor**) → semver из аннотации → `oras pull`. **Не пиньте git-тег этого репозитория как версию Lisp-клиента** — `version` только чтобы заморозить OCI-артефакт. Вызывайте `setup-lisp` в **каждом job**, которому нужен клиент. Дальше job вызывает `cl-repo sync` и `cl-repo test`.
 
 #### Пример CI (GitHub Actions)
 
@@ -245,7 +174,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: cl-repo publish my-cffi-lib --registry ghcr.io --namespace "${{ github.repository }}"
+      - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
+      - run: cl-repo publish
 
   add-overlay:
     needs: publish-source
@@ -263,76 +193,22 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
-      - run: make native  # build the .so/.dylib
-      - run: |
-          cl-repo add-overlay my-cffi-lib \
-            --os ${{ matrix.os }} --arch ${{ matrix.arch }} \
-            --native-paths ${{ matrix.lib }} \
-            --tag 1.0.0 \
-            --registry ghcr.io --namespace "${{ github.repository }}"
+      - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
+      - run: make native
+      - run: cl-repo add-overlay --os ${{ matrix.os }} --arch ${{ matrix.arch }}
+      - run: cl-repo publish --overlay
 ```
 
 Клиент автоматически выберет подходящий overlay при установке — pure-Lisp системы overlays полностью пропускают.
 
-### Использование стандартного OCI-клиента (без `cl-repo`)
-
-Пакеты — стандартные OCI-артефакты: их можно получить любым OCI-клиентом, а затем указать ASDF на распакованный каталог.
+### Установка
 
 ```sh
-# Pure-Lisp пакет (только исходники)
-oras pull ghcr.io/my-org/my-project/cl-oci:0.2.0 -o /tmp/
-mkdir -p ~/.local/share/cl-systems/
-tar -xzf /tmp/cl-oci-0.2.0.tar.gz -C ~/.local/share/cl-systems/
-
-# Пакет с нативными библиотеками — все слои используют один и тот же префикс, распаковывайте по порядку
-oras pull --platform linux/amd64 ghcr.io/my-org/my-project/my-cffi-lib:1.0.0
-for f in *.tar.gz; do tar xzf "$f" -C ~/.local/share/cl-systems/; done
-# -> ~/.local/share/cl-systems/my-cffi-lib-1.0.0/         (source)
-# -> ~/.local/share/cl-systems/my-cffi-lib-1.0.0/native/  (platform libs)
+cl-repo install alexandria
+cl-repo install cffi:0.24.1
 ```
 
-Без `--platform` `oras` выберет universal manifest (только исходники, любая платформа). С `--platform` вы получите self-contained артефакт, включающий source + native libs. Все слои разделяют OCICL-совместимый префикс `<name>-<version>/`, поэтому корректно накладываются друг на друга.
-
-Дальше в Lisp:
-
-```lisp
-(asdf:initialize-source-registry
-  '(:source-registry
-    (:tree (:home ".local/share/cl-systems/"))
-    :inherit-configuration))
-
-(asdf:load-system "cl-oci")
-```
-
-Или задайте переменную окружения `CL_SOURCE_REGISTRY`:
-
-```sh
-export CL_SOURCE_REGISTRY="(:source-registry (:tree (:home \".local/share/cl-systems/\")) :inherit-configuration)"
-sbcl --eval '(asdf:load-system "cl-oci")'
-```
-
-Для скриптов: pull + extract + load одним шагом:
-
-```sh
-#!/bin/sh
-REGISTRY=ghcr.io/my-org/my-project
-SYSTEM=cl-oci
-TAG=0.2.0
-DEST=~/.local/share/cl-systems
-
-mkdir -p "${DEST}"
-oras pull "${REGISTRY}/${SYSTEM}:${TAG}" -o /tmp/
-tar -xzf "/tmp/${SYSTEM}-${TAG}.tar.gz" -C "${DEST}/"
-
-sbcl --eval "(asdf:initialize-source-registry
-               '(:source-registry
-                 (:tree (:home \".local/share/cl-systems/\"))
-                 :inherit-configuration))" \
-     --eval "(asdf:load-system \"${SYSTEM}\")" \
-     --eval "(format t \"~a loaded OK~%\" \"${SYSTEM}\")"
-```
-
-Это работает с любым OCI-клиентом (`oras`, `crane`, `skopeo`) и любой CL-реализацией с ASDF.
+Артефакты — обычные OCI-образы. `oras`, `crane` и `skopeo` умеют их скачивать. В ASDF их ставит `cl-repo install`.
 
 ### Загрузка пакетов OCICL
 

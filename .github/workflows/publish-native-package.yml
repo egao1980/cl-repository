@@ -98,11 +98,6 @@ on:
         required: false
         type: string
         default: ""
-      ci-ref:
-        description: Override cl-repository ref for scripts/ci (empty → this workflow's SHA)
-        required: false
-        type: string
-        default: ""
       client-version:
         description: cl-repository-client OCI tag
         required: false
@@ -164,10 +159,10 @@ jobs:
       - name: Checkout cl-repository CI scripts
         uses: actions/checkout@v5
         with:
-          # job.workflow_* is this reusable workflow, not the caller
-          # (github.workflow_sha is the caller's commit — wrong repo).
-          repository: ${{ inputs.ci-ref != '' && 'egao1980/cl-repository' || job.workflow_repository }}
-          ref: ${{ inputs.ci-ref != '' && inputs.ci-ref || job.workflow_sha }}
+          # This reusable workflow's repo and SHA. github.workflow_sha is the
+          # caller. No ref input: callers cannot point this at a working branch.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .cl-repository-ci
           sparse-checkout: |
             scripts/ci

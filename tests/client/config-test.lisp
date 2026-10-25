@@ -109,4 +109,6 @@
        (ok (probe-file path))
        (let ((config (read-config path)))
          (ok config)
-         (ok (eq :any (config-value config :default-source))))))))
+         (ok (eq :oci (config-value config :default-source)))
+         (ok (equal '(("https://ghcr.io" :namespace "egao1980/cl-systems"))
+                    (config-value config :registries))))))))

@@ -15,7 +15,7 @@ steps:
     with:
       sbcl-version: ${{ env.SBCL_VERSION }}
       roswell-version: ${{ env.ROSWELL_VERSION }}
-  # CL_SOURCE_REGISTRY / CL_REPOSITORY_CLIENT_DIR already on GITHUB_ENV
+  # CL_REPOSITORY_DEST / CL_REPOSITORY_CLIENT_DIR already on GITHUB_ENV
   - uses: egao1980/cl-repository/.github/actions/ci@main
     with: { phase: install }
   - uses: egao1980/cl-repository/.github/actions/ci@main
@@ -62,8 +62,10 @@ Roswell is not required for this action. Client Lisp deps come from `ghcr.io/ega
 
 ## Outputs / env
 
-`client-dir`, `client-version`, `dest`, `source-registry` — also `GITHUB_ENV`:
+`client-dir`, `client-version`, `dest` — also `GITHUB_ENV`:
 
-- `CL_SOURCE_REGISTRY` — `${workspace}//:${dest}//:`
+- `CL_REPOSITORY_DEST`
 - `CL_REPOSITORY_CLIENT_DIR`
 - `CL_REPOSITORY_CLIENT_VERSION` — resolved semver, not `latest`
+
+`CL_SOURCE_REGISTRY` is not set. `cl-repo sync` / `cl-repo test` configure ASDF themselves.

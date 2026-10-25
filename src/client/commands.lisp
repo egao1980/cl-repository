@@ -40,13 +40,15 @@
            #:cmd-lock
            #:cmd-restore
            #:cmd-verify
-           #:cmd-sync-qlot))
+           #:cmd-sync-qlot
+           #:*default-registry*
+           #:*default-namespace*))
 (in-package :cl-repository-client/commands)
 
-(defvar *default-registry* "ghcr.io"
+(defvar *default-registry* "https://ghcr.io"
   "Default OCI registry URL.")
 
-(defvar *default-namespace* "cl-systems"
+(defvar *default-namespace* "egao1980/cl-systems"
   "Default repository namespace.")
 
 (defun catalog-root-repo (namespace)
@@ -301,7 +303,7 @@ SOURCE-HANDLER is an optional function called for non-:ql entries."
    Returns a LOCKFILE-ENTRY or NIL."
   (dolist (reg-entry *registries*)
     (let* ((url (first reg-entry))
-           (ns (getf (rest reg-entry) :namespace "cl-systems"))
+           (ns (getf (rest reg-entry) :namespace *default-namespace*))
            (repo (format nil "~a/~a" ns name))
            (reg (make-registry url)))
       (handler-case

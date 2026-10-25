@@ -28,14 +28,11 @@ CI extras that are not in `:depends-on` go in `:properties (:cl-repo (:ci (:with
 
 ## Consuming published packages
 
-```lisp
-(asdf:load-system "cl-repository-client")
-
-;; Use GHCR as a registry (public packages, no auth needed)
-(cl-repo:add-registry "https://ghcr.io" :namespace "my-org/my-project")
-
-(cl-repo:load-system "my-library")
+```sh
+cl-repo install my-library
 ```
+
+A namespace other than `egao1980/cl-systems` is `--namespace my-org/my-project`.
 
 ## Authentication
 

@@ -71,6 +71,13 @@
                  (lambda (systems &rest keys)
                    (declare (ignore keys))
                    (push (copy-list systems) calls)
+                   ;; The real installer would make the name findable. A stub that
+                   ;; leaves it missing is the "not in the registry" error.
+                   (dolist (name systems)
+                     (with-open-file (out (merge-pathnames (format nil "~a.asd" name) dir)
+                                          :direction :output :if-exists :supersede)
+                       (format out "(defsystem ~s :depends-on ())" name))
+                     (asdf:clear-system name))
                    nil))
            (let ((*standard-output* (make-broadcast-stream)))
              (cl-repository-client/quickload:ensure-system-dependencies

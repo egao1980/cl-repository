@@ -12,4 +12,7 @@
    :cl-repository-client/tests/protected-systems-test
    :cl-repository-client/tests/config-test
    :cl-repository-client/tests/source-policy-test
-   :cl-repository-client/tests/quickload-test))
+   :cl-repository-client/tests/quickload-test
+   :cl-repository-client/tests/stream-extract-test
+   :cl-repository-client/tests/asd-rewrite-test
+   :cl-repository-client/tests/project-test))

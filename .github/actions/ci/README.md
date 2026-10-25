@@ -96,5 +96,6 @@ Call `setup-lisp` in **this** job first (Ubuntu `ci-base` image, or install on t
 (loaded after `%ensure-packager`). GitHub also forbids expressions in `uses:`
 — reusable workflows pin composite actions at `@main`.
 
-Client load drops the checkout from the existing `CL_SOURCE_REGISTRY`
-(setup-lisp already wrote it), then re-reads checkout asds. No extra env.
+Client load uses a list source registry with `:ignore-inherited-configuration`.
+`setup-lisp` does not export `CL_SOURCE_REGISTRY`. The checkout is registered
+after the client, via `clear-checkout-systems`.
