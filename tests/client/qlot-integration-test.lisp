@@ -17,7 +17,16 @@
     (ok (eq (qlot-entry-kind gh) :github))
     (ok (string= (qlot-entry-name gh) "fukamachi/sxql"))
     (ok (string= (qlot-entry-ref gh) "v0.1.0")))
-  (ok (null (parse-qlot-line "dist ultralisp https://dist.ultralisp.org/")))
+  (let ((dist (parse-qlot-line "dist ultralisp https://dist.ultralisp.org/")))
+    (ok (eq (qlot-entry-kind dist) :dist))
+    (ok (string= (qlot-entry-name dist) "ultralisp"))
+    (ok (string= (qlot-entry-ref dist) "https://dist.ultralisp.org/")))
+  (let ((http (parse-qlot-line "http https://example.com/foo.tgz")))
+    (ok (eq (qlot-entry-kind http) :http))
+    (ok (string= (qlot-entry-ref http) "https://example.com/foo.tgz")))
+  (let ((local (parse-qlot-line "local ../foo")))
+    (ok (eq (qlot-entry-kind local) :local))
+    (ok (string= (qlot-entry-name local) "../foo")))
   (ok (null (parse-qlot-line "   # comment only"))))
 
 (deftest read-qlfile-and-sync-dispatch
@@ -69,6 +78,34 @@
              (ok (eq (qlot-entry-kind (third plan)) :git))))
       (when (probe-file path)
         (delete-file path)))))
+
+(deftest qlot-sexp-lock-reads-dist-ql-and-github
+  (let ((path (merge-pathnames (format nil "cl-repo-sexp-lock-~a" (get-universal-time))
+                               (uiop:temporary-directory))))
+    (unwind-protect
+         (progn
+           (with-open-file (out path :direction :output :if-exists :supersede)
+             (format out "(\"quicklisp\" .~%")
+             (format out " (:class qlot/source/dist:source-dist~%")
+             (format out "  :initargs (:distribution \"https://beta.quicklisp.org/dist/quicklisp.txt\")~%")
+             (format out "  :version \"2026-01-01\"))~%")
+             (format out "(\"alexandria\" .~%")
+             (format out " (:class qlot/source/ql:source-ql~%")
+             (format out "  :initargs (:%version :latest)~%")
+             (format out "  :version \"ql-2026-01-01\"))~%")
+             (format out "(\"demo\" .~%")
+             (format out " (:class qlot/source/github:source-github~%")
+             (format out "  :initargs (:repos \"egao1980/demo\" :ref nil)~%")
+             (format out "  :version \"github-abc123\"))~%"))
+           (let ((entries (read-qlfile-lock path)))
+             (ok (= (length entries) 3))
+             (ok (eq (qlot-entry-kind (first entries)) :dist))
+             (ok (eq (qlot-entry-kind (second entries)) :ql))
+             (ok (string= (qlot-entry-name (second entries)) "alexandria"))
+             (ok (eq (qlot-entry-kind (third entries)) :github))
+             (ok (string= (qlot-entry-name (third entries)) "egao1980/demo"))
+             (ok (string= (qlot-entry-ref (third entries)) "abc123"))))
+      (when (probe-file path) (delete-file path)))))
 
 (deftest qlfile-path-inference-from-parent-directory
   (let* ((root (uiop:ensure-directory-pathname

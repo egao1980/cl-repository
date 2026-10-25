@@ -7,6 +7,7 @@
            #:lockfile-entry-index-digest
            #:lockfile-entry-source-digest
            #:lockfile-entry-overlay-digest
+           #:lockfile-entry-overlay-digests
            #:lockfile-entry-registry
            #:read-lockfile
            #:write-lockfile
@@ -21,6 +22,8 @@
                   :accessor lockfile-entry-source-digest :initform nil)
    (overlay-digest :type (or null string) :initarg :overlay-digest
                    :accessor lockfile-entry-overlay-digest :initform nil)
+   (overlay-digests :type list :initarg :overlay-digests
+                    :accessor lockfile-entry-overlay-digests :initform nil)
    (registry :type string :initarg :registry :accessor lockfile-entry-registry)))
 
 (defun lockfile-path (&optional (directory (uiop:getcwd)))
@@ -35,6 +38,8 @@
       (setf plist (append plist (list :source-digest (lockfile-entry-source-digest entry)))))
     (when (lockfile-entry-overlay-digest entry)
       (setf plist (append plist (list :overlay-digest (lockfile-entry-overlay-digest entry)))))
+    (when (lockfile-entry-overlay-digests entry)
+      (setf plist (append plist (list :overlay-digests (lockfile-entry-overlay-digests entry)))))
     plist))
 
 (defun plist-to-entry (plist)
@@ -44,6 +49,7 @@
                  :index-digest (getf plist :index-digest)
                  :source-digest (getf plist :source-digest)
                  :overlay-digest (getf plist :overlay-digest)
+                 :overlay-digests (getf plist :overlay-digests)
                  :registry (getf plist :registry)))
 
 (defun read-lockfile (&optional (path (lockfile-path)))

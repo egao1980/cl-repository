@@ -1,324 +1,364 @@
 (defpackage :cl-repository-client/project
   (:use :cl)
-  (:export #:discover-project-system
-           #:read-ci-env
-           #:plan-sync-systems))
+  (:import-from :cl-oci/runtime #:*quiet* #:msg)
+  (:import-from :cl-repository-client/commands
+                #:cmd-install #:cmd-restore
+                #:*default-registry* #:*default-namespace*)
+  (:import-from :cl-repository-client/quickload
+                #:add-registry #:ensure-system-dependencies)
+  (:import-from :cl-repository-client/asdf-integration
+                #:configure-asdf-source-registry #:load-system-init-files)
+  (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*)
+  (:import-from :cl-repository-client/qlot-integration
+                #:read-qlfile #:read-qlfile-lock
+                #:qlot-entry-kind #:qlot-entry-name #:qlot-entry-ref)
+  (:import-from :cl-repository-client/platform-resolver
+                #:choose-overlay-plists #:detect-local-platform #:overlay-key)
+  (:import-from :cl-repository-client/asd-rewrite #:read-system-overlays)
+  (:export #:client-source-tree
+           #:ensure-default-registry
+           #:register-project
+           #:discover-project-system
+           #:expand-ci-env
+           #:cmd-sync
+           #:cmd-test
+           #:cmd-run
+           #:cmd-grovel
+           #:*default-ql-dist*))
 (in-package :cl-repository-client/project)
 
-(defun read-lisp-forms (path)
-  (with-open-file (in path :direction :input)
-    (let ((*read-eval* nil)
-          (*package* (find-package :cl-user)))
-      (loop for form = (read in nil :eof)
-            until (eq form :eof)
-            collect form))))
+(defvar *default-ql-dist* "https://beta.quicklisp.org/dist/quicklisp.txt"
+  "Dist used for qlfile ql entries until a dist line says otherwise.")
 
-(defun defsystem-form-p (form)
-  (and (consp form)
-       (symbolp (first form))
-       (string-equal (symbol-name (first form)) "DEFSYSTEM")
-       (second form)))
+(defvar *sync-stack* nil)
 
-(defun defsystem-name (form)
-  (when (defsystem-form-p form)
-    (let ((name (second form)))
-      (etypecase name
-        (string name)
-        (symbol (string-downcase (symbol-name name)))))))
+(defun client-source-tree ()
+  "Directory that contains the client the running image loaded, or the install tree."
+  (or (uiop:getenv-absolute-directory "CL_REPOSITORY_CLIENT_DIR")
+      (let ((sys (asdf:find-system "cl-repository-client" nil)))
+        (when sys
+          (let ((dir (asdf:system-source-directory sys)))
+            (when (and dir (probe-file (merge-pathnames "cl-repository-client.asd" dir)))
+              dir))))
+      (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST")
+      (error "cl-repo: cannot find the cl-repository client tree")))
 
-(defun string-suffix-p (string suffix)
-  (let ((string-length (length string))
-        (suffix-length (length suffix)))
-    (and (>= string-length suffix-length)
-         (string= string suffix :start1 (- string-length suffix-length)))))
+(defun ensure-default-registry ()
+  (add-registry *default-registry* :namespace *default-namespace* :priority :append))
 
-(defun skipped-system-name-p (name)
-  "Skip secondary and test systems: a slash, a \"/tests\" fragment, or a
-   -test / -tests suffix."
-  (let ((down (string-downcase name)))
-    (or (search "/" down)
-        (search "/tests" down)
-        (string-suffix-p down "-tests")
-        (string-suffix-p down "-test"))))
+(defun source-registry-form (directories)
+  `(:source-registry
+    ,@(mapcar (lambda (dir)
+                (list :tree (namestring (uiop:ensure-directory-pathname dir))))
+              directories)
+    :ignore-inherited-configuration))
 
-(defun top-level-asd-files (dir)
-  (sort (uiop:directory-files dir "*.asd") #'string< :key #'namestring))
+(defun register-project (directory)
+  "Register the project, the installed systems, and the client tree.
+   Does not export CL_SOURCE_REGISTRY and does not inherit it."
+  (let ((dirs (remove-if #'null
+                         (list directory
+                               (let ((root (systems-root)))
+                                 (when (probe-file root) root))
+                               (ignore-errors (client-source-tree))))))
+    (asdf:initialize-source-registry (source-registry-form dirs))))
 
-(defun primary-candidates (dir)
-  "Alist of (system-name . defsystem-form) for primary systems in DIR."
-  (let ((found nil))
-    (dolist (path (top-level-asd-files dir))
-      (dolist (form (read-lisp-forms path))
-        (let ((name (defsystem-name form)))
-          (when (and name (not (skipped-system-name-p name)))
-            (push (cons name form) found)))))
-    (nreverse found)))
+(defun top-level-asds (directory)
+  (directory (merge-pathnames "*.asd" (uiop:ensure-directory-pathname directory))))
 
-(defun unique-system-names (candidates)
-  (let ((names nil))
-    (dolist (candidate candidates)
-      (pushnew (car candidate) names :test #'string-equal))
-    (nreverse names)))
+(defun secondary-system-name-p (name)
+  (find #\/ name))
 
-(defun directory-leaf (dir)
-  (let ((parts (pathname-directory dir)))
-    (when (consp parts)
-      (car (last parts)))))
-
-(defun discover-project-system (dir)
-  "Return the unique primary system name in DIR.
-   Names containing \"/\", containing \"/tests\", or ending in \"-test\" or
-   \"-tests\" are skipped. Several remaining names resolve to the one that
-   matches the directory name; otherwise this signals a SIMPLE-ERROR."
-  (check-type dir (or string pathname))
-  (let* ((directory (uiop:ensure-directory-pathname dir))
-         (names (unique-system-names (primary-candidates directory)))
-         (leaf (directory-leaf directory)))
+(defun discover-project-system (&optional (directory (uiop:getcwd)))
+  "The project system. NIL when the directory has a qlfile and no .asd.
+   Errors when several primary systems do not match the directory name."
+  (let* ((dir (uiop:ensure-directory-pathname directory))
+         (names (remove-if #'secondary-system-name-p
+                           (mapcar #'pathname-name (top-level-asds dir))))
+         (dir-name (car (last (pathname-directory dir)))))
     (cond
       ((null names)
-       (error "No primary ASDF system in ~A." (namestring directory)))
-      ((null (rest names))
-       (first names))
-      ((and leaf (find leaf names :test #'string-equal))
-       (find leaf names :test #'string-equal))
-      (t
-       (error "Ambiguous primary systems ~S in ~A." names (namestring directory))))))
+       (if (probe-file (merge-pathnames "qlfile" dir))
+           nil
+           (error "cl-repo: no .asd and no qlfile in ~a" dir)))
+      ((= (length names) 1) (first names))
+      ((and dir-name (find dir-name names :test #'string-equal))
+       (find dir-name names :test #'string-equal))
+      (t (error "cl-repo: ambiguous systems ~s in ~a" names dir)))))
 
-(defun dependency-name (designator)
-  (etypecase designator
-    (string designator)
-    (symbol (string-downcase (symbol-name designator)))))
+(defun system-properties (system)
+  (slot-value system (find-symbol (string '#:properties) (find-package :asdf/component))))
 
-(defun version-token (value)
-  (etypecase value
-    (string value)
-    (integer (write-to-string value))
-    (symbol (symbol-name value))))
+(defun cl-repo-plist (system-name)
+  (let* ((system (asdf:find-system system-name nil))
+         (props (and system (system-properties system))))
+    (etypecase (first props)
+      (keyword (getf props :cl-repo))
+      (cons (cdr (assoc :cl-repo props :test #'eq)))
+      (null nil))))
 
-(defun versioned-dependency-p (dep)
-  (and (consp dep)
-       (or (eq (first dep) :version)
-           (and (or (stringp (first dep))
-                    (and (symbolp (first dep)) (not (keywordp (first dep)))))
-                (eq (second dep) :version)))))
-
-(defun normalize-dependency (dep)
-  "Return a string or (name . min-version), or NIL for forms this planner skips."
-  (cond
-    ((or (stringp dep) (and (symbolp dep) (not (keywordp dep))))
-     (dependency-name dep))
-    ((and (consp dep) (eq (first dep) :version) (third dep))
-     (cons (dependency-name (second dep)) (version-token (third dep))))
-    ((and (consp dep)
-          (or (stringp (first dep))
-              (and (symbolp (first dep)) (not (keywordp (first dep)))))
-          (eq (second dep) :version)
-          (third dep))
-     (cons (dependency-name (first dep)) (version-token (third dep))))
-    (t nil)))
-
-(defun depends-on-entries (deps)
-  "Normalize a :depends-on value to a list of dependency forms.
-   A single (:version ...) or (name :version ...) form is one dependency."
-  (cond
-    ((null deps) nil)
-    ((or (stringp deps) (and (symbolp deps) (not (keywordp deps))))
-     (list deps))
-    ((versioned-dependency-p deps)
-     (list deps))
-    ((consp deps) deps)
-    (t nil)))
-
-(defun normalize-depends-on (deps)
-  (remove nil (mapcar #'normalize-dependency (depends-on-entries deps))))
-
-(defun blank-string-p (value)
-  (or (null value)
-      (every (lambda (char)
-               (member char '(#\Space #\Tab #\Newline #\Return)))
-             value)))
-
-(defun coerce-system-names (value)
-  (cond
-    ((null value) nil)
-    ((stringp value) (list value))
-    ((and (symbolp value) (not (keywordp value)))
-     (list (string-downcase (symbol-name value))))
-    ((consp value)
-     (loop for item in value
-           collect (cond
-                     ((stringp item) item)
-                     ((and (symbolp item) (not (keywordp item)))
-                      (string-downcase (symbol-name item)))
-                     (t (error "Expected a system name, got ~S." item)))))
-    (t (error "Expected a system name or list of names, got ~S." value))))
-
-(defun plist-values (plist key)
-  (loop for tail on plist by #'cddr
-        when (and (consp (cdr tail)) (eq (car tail) key))
-          collect (cadr tail)))
-
-(defun env-group-entries (group)
-  (cond
-    ((null group) nil)
-    ((and (consp group) (consp (first group))) group)
-    ((and (consp group) (stringp (first group))) (list group))
-    (t (error "Malformed :env entry ~S." group))))
-
-(defun choice-label (choice)
-  (let ((label (first choice)))
-    (etypecase label
-      (string label)
-      (symbol (symbol-name label)))))
-
-(defun env-token (value)
-  (etypecase value
-    (null "")
-    (string value)
-    (symbol (symbol-name value))))
-
-(defun env-or-default (var default)
-  (let ((raw (uiop:getenv var)))
-    (if (blank-string-p raw)
-        (env-token default)
-        (string-trim '(#\Space #\Tab #\Newline #\Return) raw))))
-
-(defun env-entry-systems (entry)
-  "Return (values install-names load-names) for one :env entry."
-  (unless (and (consp entry) (stringp (first entry)))
-    (error "Malformed :env entry ~S." entry))
-  (let* ((var (first entry))
-         (spec (rest entry))
-         (systems (getf spec :systems))
-         (value (env-or-default var (getf spec :default)))
-         (match (find value systems :key #'choice-label :test #'string=)))
-    (unless (and match (consp match))
-      (error "Unknown value ~S for environment variable ~A. Expected one of ~S."
-             value var (mapcar #'choice-label systems)))
-    (let ((names (coerce-system-names (rest match))))
-      (values (when (getf spec :install) (copy-list names))
-              (when (getf spec :load-before-test) (copy-list names))))))
-
-(defun read-ci-env (ci-plist)
-  "Expand :env entries in CI-PLIST.
-   Returns (values install-systems load-systems). An empty environment variable
-   uses :default. A value missing from :systems signals a SIMPLE-ERROR.
-   :install and :load-before-test default to NIL. Multiple :env entries append."
-  (check-type ci-plist list)
+(defun expand-ci-env (env-specs)
+  "Expand :ci :env. Returns (values systems-to-install systems-to-load)."
   (let ((install nil)
         (load nil))
-    (dolist (group (plist-values ci-plist :env))
-      (dolist (entry (env-group-entries group))
-        (multiple-value-bind (entry-install entry-load) (env-entry-systems entry)
-          (setf install (append install entry-install)
-                load (append load entry-load)))))
-    (values install load)))
+    (dolist (spec env-specs)
+      (let* ((var (string (first spec)))
+             (options (rest spec))
+             (value (or (uiop:getenv var) (getf options :default)))
+             (systems (getf options :systems)))
+        (unless value
+          (error "cl-repo: environment variable ~a is unset and has no :default" var))
+        (let ((match (find value systems :key #'first :test #'string-equal)))
+          (unless match
+            (error "cl-repo: ~a=~a is not one of ~{~a~^, ~}"
+                   var value (mapcar #'first systems)))
+          (when (getf options :install)
+            (push (second match) install))
+          (when (getf options :load-before-test)
+            (push (second match) load)))))
+    (values (nreverse install) (nreverse load))))
 
-(defun cl-repo-plist (properties)
+(defun ci-plist (system-name)
+  (getf (cl-repo-plist system-name) :ci))
+
+(defun project-with (system-name)
+  (mapcar (lambda (name) (string-downcase (string name)))
+          (uiop:ensure-list (getf (ci-plist system-name) :with))))
+
+(defun project-load-before-test (system-name)
+  (mapcar (lambda (name) (string-downcase (string name)))
+          (uiop:ensure-list (getf (ci-plist system-name) :load-before-test))))
+
+(defun clear-project-systems (directory)
+  (dolist (asd (top-level-asds directory))
+    (asdf:clear-system (pathname-name asd))))
+
+(defun ensure-publish-tools ()
+  (let ((tree (client-source-tree))
+        (saved asdf:*source-registry-parameter*))
+    (unwind-protect
+         (progn
+           (asdf:initialize-source-registry (source-registry-form (list tree)))
+           (asdf:load-system "cl-repository-packager")
+           (asdf:load-system "cl-repository-ql-exporter"))
+      (when saved
+        (asdf:initialize-source-registry saved)))))
+
+(defun publish-ql-system (name dist-url)
+  (ensure-publish-tools)
+  (uiop:symbol-call :cl-repository-ql-exporter/exporter :export-dist
+                    dist-url *default-registry*
+                    :namespace *default-namespace*
+                    :filter name
+                    :incremental t))
+
+(defun publish-source-dir (source-dir &key source-url revision ref)
+  (ensure-publish-tools)
+  (multiple-value-bind (spec result)
+      (uiop:symbol-call :cl-repository-packager/source-adapter :build-package-from-source
+                        source-dir :source-url source-url :revision revision :version ref)
+    (let ((tag (or (funcall (find-symbol "PACKAGE-SPEC-VERSION"
+                                         :cl-repository-packager/build-matrix)
+                            spec)
+                   ref
+                   "latest")))
+      (uiop:symbol-call :cl-repository-packager/publisher :publish-package
+                        *default-registry* *default-namespace* tag result spec)
+      (funcall (find-symbol "PACKAGE-SPEC-NAME" :cl-repository-packager/build-matrix) spec))))
+
+(defun install-or-publish (reference publish)
+  "Install REFERENCE. When that fails, call PUBLISH and install the bare name."
+  (handler-case
+      (progn (cmd-install reference :registry-url *default-registry*
+                          :namespace *default-namespace*)
+             t)
+    (error ()
+      (funcall publish)
+      (let ((name (subseq reference 0 (or (position #\: reference) (length reference)))))
+        (cmd-install name :registry-url *default-registry* :namespace *default-namespace*)))))
+
+(defun repo-system-name (repo)
+  (let ((slash (position #\/ repo :from-end t)))
+    (if slash (subseq repo (1+ slash)) repo)))
+
+(defun sync-github-entry (entry directory)
+  (declare (ignore directory))
+  (let* ((repo (qlot-entry-name entry))
+         (ref (qlot-entry-ref entry))
+         (system (repo-system-name repo))
+         (reference (if ref (format nil "~a:~a" system ref) system)))
+    (install-or-publish
+     reference
+     (lambda ()
+       (ensure-publish-tools)
+       (multiple-value-bind (source-dir revision cleanup)
+           (uiop:symbol-call :cl-repository-packager/source-adapter :clone-git-source
+                             (if (search "://" repo)
+                                 repo
+                                 (format nil "https://github.com/~a.git" repo))
+                             :ref ref)
+         (unwind-protect
+              (progn
+                (when (probe-file (merge-pathnames "qlfile" source-dir))
+                  (cmd-sync :directory source-dir :overlay *requested-overlay*))
+                (publish-source-dir source-dir
+                                    :source-url (if (search "://" repo) repo
+                                                    (format nil "https://github.com/~a" repo))
+                                    :revision revision
+                                    :ref ref))
+           (when cleanup (funcall cleanup))))))))
+
+(defun sync-qlot-entry (entry directory dist-url)
+  (case (qlot-entry-kind entry)
+    (:dist nil)
+    (:ql
+     (let* ((name (qlot-entry-name entry))
+            (ref (qlot-entry-ref entry))
+            (reference (if (and ref (not (string-equal ref "latest")))
+                           (format nil "~a:~a" name ref)
+                           name)))
+       (install-or-publish reference
+                           (lambda () (publish-ql-system name dist-url)))))
+    ((:github :git)
+     (sync-github-entry entry directory))
+    (:http
+     (let ((url (qlot-entry-ref entry)))
+       (install-or-publish (qlot-entry-name entry)
+                           (lambda ()
+                             (let ((root (uiop:ensure-directory-pathname
+                                          (merge-pathnames (format nil "cl-repo-http-~a/"
+                                                                   (get-universal-time))
+                                                           (uiop:temporary-directory)))))
+                               (ensure-directories-exist root)
+                               (uiop:run-program
+                                (list "curl" "-fsSL" url "-o" (namestring (merge-pathnames "pkg.tgz" root)))
+                                :output t :error-output t)
+                               (uiop:run-program
+                                (list "tar" "-xzf" (namestring (merge-pathnames "pkg.tgz" root))
+                                      "-C" (namestring root))
+                                :output t :error-output t)
+                               (publish-source-dir root :source-url url))))))
+    (:local
+     (let ((path (uiop:ensure-directory-pathname
+                  (merge-pathnames (qlot-entry-ref entry)
+                                   (uiop:ensure-directory-pathname directory)))))
+       (unless (uiop:directory-exists-p path)
+         (error "cl-repo: local dependency ~a does not exist" path))
+       (cmd-sync :directory path :overlay *requested-overlay*)))
+    (t (error "cl-repo: unsupported qlfile entry ~a" (qlot-entry-kind entry)))))
+
+(defun sync-qlfile (directory)
+  (let* ((dir (uiop:ensure-directory-pathname directory))
+         (qlfile (merge-pathnames "qlfile" dir))
+         (lock (merge-pathnames "qlfile.lock" dir)))
+    (unless (probe-file qlfile)
+      (return-from sync-qlfile nil))
+    (let ((entries (if (probe-file lock) (read-qlfile-lock lock) (read-qlfile qlfile)))
+          (dist-url *default-ql-dist*))
+      (dolist (entry entries)
+        (if (eq (qlot-entry-kind entry) :dist)
+            (when (qlot-entry-ref entry)
+              (setf dist-url (qlot-entry-ref entry)))
+            (sync-qlot-entry entry dir dist-url))))))
+
+(defun overlay-request (overlay)
+  "NIL for the automatic stack. A name selects that opt-in overlay."
+  (cond ((or (null overlay) (eq overlay t)) nil)
+        ((stringp overlay) overlay)
+        (t (string-downcase (string overlay)))))
+
+(defun cmd-sync (&key (directory (uiop:getcwd)) system overlay locked)
+  "Install what the .asd and qlfile ask for, and record the lock.
+   OVERLAY names an opt-in overlay such as cuda, installed on top of the automatic stack.
+   LOCKED installs cl-repo.lock."
+  (let ((dir (uiop:ensure-directory-pathname directory))
+        (*requested-overlay* (overlay-request overlay)))
+    (when (member (namestring dir) *sync-stack* :test #'equal)
+      (return-from cmd-sync nil))
+    (let ((*sync-stack* (cons (namestring dir) *sync-stack*)))
+      (ensure-default-registry)
+      (register-project dir)
+      (clear-project-systems dir)
+      (if locked
+          (cmd-restore :registry-url *default-registry* :namespace *default-namespace*)
+          (progn
+            (sync-qlfile dir)
+            (register-project dir)
+            (let ((name (or system (discover-project-system dir))))
+              (when name
+                (asdf:find-system name nil)
+                (multiple-value-bind (env-install env-load)
+                    (expand-ci-env (getf (ci-plist name) :env))
+                  (declare (ignore env-load))
+                  (ensure-system-dependencies
+                   name
+                   :with (append (project-with name) env-install)
+                   :also-tests (getf (ci-plist name) :also-tests t))))))))))
+
+(defun cmd-test (&key (directory (uiop:getcwd)) system overlay (sync t))
+  "Sync, then asdf:test-system. A system with no test-op still exits 0."
+  (when sync
+    (cmd-sync :directory directory :system system :overlay overlay))
+  (let ((name (or system (discover-project-system directory))))
+    (unless name
+      (error "cl-repo: no system to test in ~a" directory))
+    (register-project directory)
+    (configure-asdf-source-registry)
+    (load-system-init-files)
+    (multiple-value-bind (env-install env-load)
+        (expand-ci-env (getf (ci-plist name) :env))
+      (declare (ignore env-install))
+      (dolist (extra (append (project-load-before-test name) env-load))
+        (asdf:load-system extra)))
+    (asdf:load-system name)
+    (asdf:test-system name)))
+
+(defun lisp-startup (program form rest)
   (cond
-    ((null properties) nil)
-    ((and (consp properties) (keywordp (first properties)))
-     (getf properties :cl-repo))
-    ((consp properties)
-     (cdr (assoc :cl-repo properties :test #'eq)))
-    (t nil)))
+    ((string-equal program "ros") (append (list "-e" form) rest))
+    ((string-equal program "ecl") (append (list "-eval" form) rest))
+    ((member program '("sbcl" "ccl" "abcl") :test #'string-equal)
+     (append (list "--eval" form) rest))
+    (t rest)))
 
-(defun ci-plist-from-form (form)
-  (getf (cl-repo-plist (getf (cddr form) :properties)) :ci))
+(defun cmd-run (argv &key (directory (uiop:getcwd)) overlay)
+  "Sync, then exec ARGV. A lisp implementation is started with the source
+   registry already configured. CL_SOURCE_REGISTRY is not exported."
+  (when (null argv)
+    (error "cl-repo: run requires a command"))
+  (cmd-sync :directory directory :overlay overlay)
+  (let* ((form (format nil "(asdf:initialize-source-registry '~s)"
+                       (source-registry-form
+                        (remove nil (list directory (systems-root) (ignore-errors (client-source-tree)))))))
+         (args (lisp-startup (first argv) form (rest argv)))
+         (code (nth-value 2 (uiop:run-program (cons (first argv) args)
+                                              :ignore-error-status t
+                                              :output :interactive
+                                              :error-output :interactive
+                                              :input :interactive))))
+    (unless (zerop code)
+      (uiop:quit code))))
 
-(defun primary-defsystem-form (dir system-name)
-  (or (cdr (find system-name (primary-candidates dir) :key #'car :test #'string-equal))
-      (error "Primary system ~A has no defsystem form in ~A." system-name (namestring dir))))
+(defun machine-overlay-key (directory)
+  (multiple-value-bind (os arch impl) (detect-local-platform)
+    (let ((stack (ignore-errors
+                  (choose-overlay-plists (read-system-overlays directory)
+                                         :os os :arch arch :implementation impl))))
+      (or (let ((top (car (last stack))))
+            (when top
+              (let ((plat (getf top :platform)))
+                (overlay-key :os (getf plat :os) :arch (getf plat :arch) :lisp (getf plat :lisp)))))
+          (overlay-key :os os :arch arch)))))
 
-(defun strip-qlfile-comment (line)
-  (let ((pos (position #\# line)))
-    (if pos (subseq line 0 pos) line)))
-
-(defun qlfile-tokens (line)
-  (let ((text (string-trim '(#\Space #\Tab #\Newline #\Return)
-                           (strip-qlfile-comment line)))
-        (tokens nil)
-        (start nil))
-    (labels ((flush (end)
-               (when start
-                 (push (subseq text start end) tokens)
-                 (setf start nil))))
-      (loop for index from 0 below (length text)
-            for char = (char text index)
-            do (if (or (char= char #\Space) (char= char #\Tab))
-                   (flush index)
-                   (unless start
-                     (setf start index))))
-      (flush (length text)))
-    (nreverse tokens)))
-
-(defun qlot-entry (kind name ref)
-  (list :kind kind :name name :ref ref))
-
-(defun parse-qlot-tokens (tokens line)
-  (let* ((head (string-downcase (first tokens)))
-         (args (rest tokens))
-         (kind (cond
-                 ((string= head "ql") :ql)
-                 ((string= head "github") :github)
-                 ((string= head "git") :git)
-                 ((string= head "http") :http)
-                 ((string= head "local") :local)
-                 ((string= head "dist") :dist)
-                 (t nil))))
-    (flet ((check-count (min max)
-             (unless (<= min (length args) max)
-               (error "Malformed ~(~A~) qlfile line ~S." kind line))))
-      (cond
-        ((eq kind :ql) (check-count 1 2) (qlot-entry :ql (first args) (second args)))
-        ((eq kind :github) (check-count 1 2) (qlot-entry :github (first args) (second args)))
-        ((eq kind :git) (check-count 1 2) (qlot-entry :git (first args) (second args)))
-        ((eq kind :http) (check-count 2 2) (qlot-entry :http (first args) (second args)))
-        ((eq kind :local) (check-count 1 1) (qlot-entry :local (first args) nil))
-        ((eq kind :dist) (check-count 2 2) (qlot-entry :dist (first args) (second args)))
-        ((null args) (qlot-entry :bare (first tokens) nil))
-        (t (error "Unknown qlfile directive in ~S." line))))))
-
-(defun parse-qlot-line (line)
-  (let ((tokens (qlfile-tokens line)))
-    (when tokens
-      (parse-qlot-tokens tokens line))))
-
-(defun parse-qlot-file (path)
-  (let ((entries nil))
-    (with-open-file (in path :direction :input)
-      (loop for line = (read-line in nil nil)
-            while line
-            do (let ((entry (parse-qlot-line line)))
-                 (when entry
-                   (push entry entries)))))
-    (nreverse entries)))
-
-(defun qlot-source-path (dir)
-  "qlfile.lock wins over qlfile. NIL when neither is present."
-  (or (probe-file (merge-pathnames "qlfile.lock" dir))
-      (probe-file (merge-pathnames "qlfile" dir))))
-
-(defun read-project-qlot (dir)
-  (let ((path (qlot-source-path dir)))
-    (when path
-      (parse-qlot-file path))))
-
-(defun plan-sync-systems (dir)
-  "Plan a sync of the primary system in DIR.
-   Returns a plist :system :depends-on :install :load-before-test :qlot.
-   :depends-on entries are strings or (name . min-version). :ci :with and
-   :env :install systems go to :install; :ci :load-before-test and
-   :env :load-before-test go to :load-before-test. A qlfile.lock, else a
-   qlfile, supplies :qlot. Does not quickload."
-  (check-type dir (or string pathname))
-  (let* ((directory (uiop:ensure-directory-pathname dir))
-         (system (discover-project-system directory))
-         (form (primary-defsystem-form directory system))
-         (ci (ci-plist-from-form form)))
-    (multiple-value-bind (env-install env-load) (read-ci-env (or ci nil))
-      (list :system system
-            :depends-on (normalize-depends-on (getf (cddr form) :depends-on))
-            :install (append (coerce-system-names (getf ci :with)) env-install)
-            :load-before-test (append (coerce-system-names (getf ci :load-before-test)) env-load)
-            :qlot (read-project-qlot directory)))))
+(defun cmd-grovel (&key (directory (uiop:getcwd)) system overlay)
+  "Sync and load the system so cffi-grovel runs. The grovel directory of the
+   most specific matching overlay is created for the output."
+  (cmd-sync :directory directory :system system :overlay overlay)
+  (let* ((dir (uiop:ensure-directory-pathname directory))
+         (name (or system (discover-project-system dir)))
+         (key (machine-overlay-key dir))
+         (out (merge-pathnames (format nil "grovel/~a/" key) dir)))
+    (ensure-directories-exist (merge-pathnames ".keep" out))
+    (when name
+      (asdf:load-system name))
+    out))

@@ -29,6 +29,7 @@
            #:install-result-index-digest
            #:install-result-source-digest
            #:install-result-overlay-digest
+           #:install-result-overlay-digests
            #:install-result-registry-url
            #:extract-layer
            #:extract-layer-stripping-prefix
@@ -37,6 +38,7 @@
            #:compute-strip-prefix
            #:systems-root
            #:system-install-path
+           #:*requested-overlay*
            #:create-provides-symlinks
            #:parse-ocicl-layer-info))
 (in-package :cl-repository-client/installer)
@@ -72,7 +74,7 @@
 
 (defstruct install-result
   "Result of installing a system, carrying path and digest info for lockfile."
-  path name version index-digest source-digest overlay-digest registry-url)
+  path name version index-digest source-digest overlay-digest overlay-digests registry-url)
 
 (defun repository-basename (repository)
   "Last path segment of an OCI repository, e.g. \"cl-systems/alexandria\" -> \"alexandria\"."
@@ -90,6 +92,9 @@
              (format-digest digest) expected-size (length blob)))
     (verify-digest blob digest)
     blob))
+
+(defvar *requested-overlay* nil
+  "Named overlay installed on top of the automatic stack. NIL keeps named overlays out.")
 
 (defun install-system (registry-url repository reference &key (type :cl-repo))
   "Install a CL system from an OCI registry.
@@ -134,12 +139,18 @@
   (format nil "~a-~a/" name (or version "latest")))
 
 (defun install-from-index (registry repository index registry-url)
-  "Install from an image index - resolve platform and pull appropriate manifests."
-  (multiple-value-bind (universal-desc overlay-descs) (resolve-manifests index)
+  "Install from an image index - resolve platform and pull appropriate manifests.
+   *REQUESTED-OVERLAY* names an opt-in overlay (cuda) placed on top of the automatic stack."
+  (multiple-value-bind (universal-desc overlay-descs)
+      (resolve-manifests index :overlay *requested-overlay*)
     (let* ((source-digest (when universal-desc
                             (format-digest (descriptor-digest universal-desc))))
-           (overlay-digest (when (first overlay-descs)
-                             (format-digest (descriptor-digest (first overlay-descs)))))
+           (overlay-digests (mapcar (lambda (desc)
+                                       (format-digest (descriptor-digest desc)))
+                                     overlay-descs))
+           ;; Top of the stack is the most specific overlay. Single-slot readers
+           ;; still see that digest; the lock records the whole stack.
+           (overlay-digest (car (last overlay-digests)))
            (universal-manifest
              (when universal-desc
                (pull-manifest registry repository source-digest)))
@@ -199,6 +210,7 @@
                            :version version
                            :source-digest source-digest
                            :overlay-digest overlay-digest
+                           :overlay-digests overlay-digests
                            :registry-url registry-url))))
 
 (defun install-from-manifest (registry repository manifest registry-url)

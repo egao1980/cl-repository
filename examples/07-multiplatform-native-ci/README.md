@@ -95,38 +95,15 @@ docker run -d -p 5050:5000 --name oci-registry registry:2
 # Build the native library
 make -C libcalc/
 
-# Publish with overlays (from the repo root)
-qlot exec ros -e '
-(asdf:load-system "cl-repository-packager")
-(let* ((spec (make-instance (quote cl-repository-packager/build-matrix:package-spec)
-               :name "cl-calc"
-               :version "1.0.0"
-               :source-dir #p"examples/07-multiplatform-native-ci/cl-calc/"
-               :license "MIT"
-               :depends-on (list "cffi")
-               :provides (list "cl-calc")
-               :cffi-libraries (list "libcalc")
-               :overlays (list
-                 (make-instance (quote cl-repository-packager/build-matrix:overlay-spec)
-                   :os "linux" :arch "amd64"
-                   :layers (list
-                     (list :role "native-library"
-                           :files (list (cons "examples/07-multiplatform-native-ci/libcalc/libcalc.so"
-                                              "libcalc.so"))))))))
-       (result (cl-repository-packager/build-matrix:build-package spec)))
-  (cl-repository-packager/publisher:publish-package
-    "http://localhost:5050" "cl-systems" "1.0.0" result spec))'
+# Publish from the system directory. Overlays whose files exist are included.
+cd cl-calc
+cl-repo publish --registry http://localhost:5050 --namespace cl-systems
 
 # Verify
 oras manifest fetch localhost:5050/cl-systems/cl-calc:1.0.0 | jq .
 
-# Install and use
-qlot exec ros -e '
-(asdf:load-system "cl-repository-client")
-(cl-repo:add-registry "http://localhost:5050" :namespace "cl-systems")
-(cl-repo:load-system "cl-calc")
-(format t "calc_version: ~a~%" (cl-calc:calc-version))
-(format t "2 + 3 = ~a~%" (cl-calc:calc-add 2 3))'
+# Install
+cl-repo install cl-calc:1.0.0 --registry http://localhost:5050 --namespace cl-systems
 
 # Cleanup
 docker stop oci-registry && docker rm oci-registry

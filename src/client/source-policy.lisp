@@ -18,7 +18,7 @@
   "System-name -> source policy keyword.
    :oci  — only OCI registries
    :ql   — only Quicklisp
-   :any  — OCI first, QL fallback (default)
+   :any  — OCI first, QL fallback
    :deny — refuse from all sources")
 
 (defvar *source-rules* nil
@@ -28,8 +28,9 @@
    (:allow NAME :from REGISTRY-URL) — ONLY allow system from this registry (whitelist)
    (:allow NAME :from :ql)          — ONLY allow system from Quicklisp")
 
-(defvar *default-source* :any
-  "Default source policy for systems not in *source-policy* or *source-rules*.")
+(defvar *default-source* :oci
+  "Default source policy for systems not in *source-policy* or *source-rules*.
+   OCI only. Quicklisp is not a fallback unless a rule sets :ql or :any.")
 
 ;;; Utilities
 

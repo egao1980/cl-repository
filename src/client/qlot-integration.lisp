@@ -75,10 +75,27 @@
                             :name (second tokens)
                             :ref (third tokens)
                             :raw content))
-          ;; Dist/source declarations are currently ignored by cl-repo onboarding.
+          ;; dist <name> <url> — sets the dist used by later ql lines.
           ((or (string= kind-token "dist")
-               (string= kind-token "source")
-               (string= kind-token "http"))
+               (string= kind-token "source"))
+           (make-qlot-entry :kind :dist
+                            :name (second tokens)
+                            :ref (or (third tokens) (second tokens))
+                            :raw content))
+          ;; http <url> [name]
+          ((string= kind-token "http")
+           (make-qlot-entry :kind :http
+                            :name (or (third tokens) (second tokens))
+                            :ref (second tokens)
+                            :raw content))
+          ;; local <path>
+          ((string= kind-token "local")
+           (make-qlot-entry :kind :local
+                            :name (second tokens)
+                            :ref (second tokens)
+                            :raw content))
+          ;; A reader form is a qlfile.lock sexp, not a system name.
+          ((and (plusp (length kind-token)) (char= (char kind-token 0) #\())
            nil)
           ;; Bare symbol line => Quicklisp system shorthand.
           (t
@@ -157,9 +174,97 @@ Otherwise infer by nearest-parent lookup from CWD."
   "Read qlfile and return parsed QLOT-ENTRY list."
   (nth-value 0 (read-qlfile-with-path path)))
 
+(defun lock-class-kind (class)
+  "Map a qlot lock class name to a qlot-entry kind."
+  (let ((name (string-upcase (string class))))
+    (cond
+      ((string= name "SOURCE-QL") :ql)
+      ((string= name "SOURCE-DIST") :dist)
+      ((string= name "SOURCE-GITHUB") :github)
+      ((string= name "SOURCE-GIT") :git)
+      ((string= name "SOURCE-HTTP") :http)
+      ((string= name "SOURCE-LOCAL") :local)
+      (t nil))))
+
+(defun github-lock-ref (version initargs)
+  (or (getf initargs :ref)
+      (getf initargs :tag)
+      (getf initargs :branch)
+      (when (and (stringp version) (> (length version) 7)
+                 (string-equal version "github-" :end1 7))
+        (subseq version 7))))
+
+(defun parse-qlot-lock-cons (form)
+  "Parse one qlot qlfile.lock cons: (\"name\" :class source-ql :version ...)."
+  (let* ((project (first form))
+         (body (rest form))
+         (kind (lock-class-kind (getf body :class)))
+         (version (getf body :version))
+         (init (getf body :initargs)))
+    (when kind
+      (case kind
+        (:dist (make-qlot-entry :kind :dist
+                                :name (or (getf init :distribution) project)
+                                :ref (getf init :distribution)
+                                :raw (prin1-to-string form)))
+        (:github (make-qlot-entry :kind :github
+                                  :name (or (getf init :repos) project)
+                                  :ref (github-lock-ref (and (stringp version) version) init)
+                                  :raw (prin1-to-string form)))
+        (:git (make-qlot-entry :kind :git
+                               :name (or (getf init :url) (getf init :remote) project)
+                               :ref (or (getf init :ref) (and (stringp version) version))
+                               :raw (prin1-to-string form)))
+        (:http (make-qlot-entry :kind :http
+                                :name project
+                                :ref (or (getf init :url) (and (stringp version) version))
+                                :raw (prin1-to-string form)))
+        (:local (make-qlot-entry :kind :local
+                                 :name (or (getf init :path) project)
+                                 :ref (or (getf init :path) project)
+                                 :raw (prin1-to-string form)))
+        (t (make-qlot-entry :kind kind
+                            :name project
+                            :ref (and (stringp version) version)
+                            :raw (prin1-to-string form)))))))
+
+(defun strip-qlot-package-prefixes (text)
+  "Drop qlot/source/<pkg>: so the lock can be read without those packages."
+  (let ((from 0)
+        (pieces nil))
+    (loop for pos = (search "qlot/source/" text :start2 from)
+          while pos
+          do (push (subseq text from pos) pieces)
+             (let ((colon (position #\: text :start (+ pos (length "qlot/source/")))))
+               (setf from (if colon (1+ colon) (length text))))
+          finally (push (subseq text from) pieces))
+    (apply #'concatenate 'string (nreverse pieces))))
+
+(defun sexp-lock-file-p (path)
+  (with-open-file (in path)
+    (loop for line = (read-line in nil nil)
+          while line
+          for trimmed = (string-trim '(#\Space #\Tab) line)
+          unless (or (zerop (length trimmed)) (char= (char trimmed 0) #\#))
+            return (char= (char trimmed 0) #\())))
+
+(defun read-sexp-lock-entries (path)
+  (let ((text (strip-qlot-package-prefixes (uiop:read-file-string path)))
+        (entries nil))
+    (with-input-from-string (stream text)
+      (let ((*read-eval* nil))
+        (loop for form = (read stream nil :eof)
+              until (eq form :eof)
+              do (let ((entry (maybe-entry-from-lock-form form)))
+                   (when entry
+                     (push entry entries))))))
+    (nreverse entries)))
+
 (defun maybe-entry-from-lock-form (form)
   "Parse an s-expression lock FORM into QLOT-ENTRY or NIL."
   (cond
+    ((and (consp form) (stringp (first form)) (getf (rest form) :class))
+     (parse-qlot-lock-cons form))
     ;; plist-style: (:kind :github :name "foo/bar" :ref "abc")
     ((and (listp form) (keywordp (first form)))
      (let* ((kind (getf form :kind (getf form :source)))
@@ -178,6 +283,9 @@ Otherwise infer by nearest-parent lookup from CWD."
                     ((string= kind-token "ql") :ql)
                     ((string= kind-token "github") :github)
                     ((string= kind-token "git") :git)
+                    ((string= kind-token "http") :http)
+                    ((string= kind-token "local") :local)
+                    ((string= kind-token "dist") :dist)
                     (t nil))))
        (when kind
          (make-qlot-entry :kind kind
@@ -188,30 +296,23 @@ Otherwise infer by nearest-parent lookup from CWD."
 
 (defun read-qlfile-lock-with-path (&optional path)
   "Read qlfile.lock and return (values entries resolved-path).
-Supports line-oriented and simple s-expression lock files."
-  (let ((resolved-path (resolve-qlot-path path "qlfile.lock"))
-        (entries nil))
-    ;; Pass 1: line-oriented lock format
-    (with-open-file (stream resolved-path :direction :input)
-      (loop for line = (read-line stream nil nil)
-            while line
-            do (let ((entry (parse-qlot-lock-line line)))
-                 (when entry
-                   (push entry entries)))))
-    (when entries
-      (return-from read-qlfile-lock-with-path
-        (values (nreverse entries) resolved-path)))
-    ;; Pass 2: s-expression lock format
-    (with-open-file (stream resolved-path :direction :input)
-      (let ((*read-eval* nil))
-        (loop for form = (read stream nil :eof)
-              until (eq form :eof)
-              do (let ((entry (maybe-entry-from-lock-form form)))
-                   (when entry
-                     (push entry entries))))))
-    (if entries
-        (values (nreverse entries) resolved-path)
-        (error "Could not parse qlfile.lock format at ~a" resolved-path))))
+Supports qlot's sexp lock, line-oriented locks, and simple s-expression locks."
+  (let ((resolved-path (resolve-qlot-path path "qlfile.lock")))
+    (if (sexp-lock-file-p resolved-path)
+        (let ((entries (read-sexp-lock-entries resolved-path)))
+          (if entries
+              (values entries resolved-path)
+              (error "Could not parse qlfile.lock format at ~a" resolved-path)))
+        (let ((entries nil))
+          (with-open-file (stream resolved-path :direction :input)
+            (loop for line = (read-line stream nil nil)
+                  while line
+                  do (let ((entry (parse-qlot-lock-line line)))
+                       (when entry
+                         (push entry entries)))))
+          (if entries
+              (values (nreverse entries) resolved-path)
+              (error "Could not parse qlfile.lock format at ~a" resolved-path))))))
 
 (defun read-qlfile-lock (&optional path)
   "Read qlfile.lock and return parsed QLOT-ENTRY list."
@@ -223,6 +324,9 @@ Supports line-oriented and simple s-expression lock files."
     (:ql 0)
     (:github 1)
     (:git 2)
+    (:http 3)
+    (:local 4)
+    (:dist 5)
     (t 9)))
 
 (defun qlot-entry-key (entry)

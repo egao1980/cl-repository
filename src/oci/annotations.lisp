@@ -27,7 +27,8 @@
            #:+cl-depends-on+
            #:+cl-provides+
            #:+cl-alias-for+
-           #:+cl-depends-on-versioned+))
+           #:+cl-depends-on-versioned+
+           #:+cl-overlay-name+))
 (in-package :cl-oci/annotations)
 
 (defmacro define-annotations (&body pairs)
@@ -65,4 +66,5 @@
   (+cl-depends-on+ "dev.common-lisp.system.depends-on")
   (+cl-provides+ "dev.common-lisp.system.provides")
   (+cl-alias-for+ "dev.common-lisp.alias-for")
-  (+cl-depends-on-versioned+ "dev.common-lisp.system.depends-on.versioned"))
+  (+cl-depends-on-versioned+ "dev.common-lisp.system.depends-on.versioned")
+  (+cl-overlay-name+ "dev.common-lisp.overlay.name"))

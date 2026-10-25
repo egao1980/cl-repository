@@ -1,6 +1,7 @@
 # Basic Usage
 
-Load Common Lisp systems from an OCI registry with `cl-repo:load-system`.
+Everyday use is `cl-repo sync` against `https://ghcr.io` / `egao1980/cl-systems`.
+This example points `load-system` at a local registry instead.
 
 ## Prerequisites
 

@@ -1,7 +1,9 @@
 (defpackage :cl-repository-client/tests/platform-resolver-test
   (:use :cl :rove)
   (:import-from :cl-repository-client/platform-resolver
-                #:detect-local-platform #:resolve-manifests #:universal-manifest-p)
+                #:detect-local-platform #:resolve-manifests #:universal-manifest-p
+                #:choose-overlay-plists #:overlay-key)
+  (:import-from :cl-oci/annotations #:+cl-implementation+ #:+cl-overlay-name+)
   (:import-from :cl-oci/descriptor #:make-descriptor)
   (:import-from :cl-oci/digest #:parse-digest)
   (:import-from :cl-oci/platform #:make-platform)
@@ -97,7 +99,11 @@
     (multiple-value-bind (univ overlays)
         (resolve-manifests idx :os "linux" :arch "amd64" :implementation "ecl")
       (ok (eq univ universal))
-      (ok (equal overlays (list linux)) "named cuda overlay is not automatic"))))
+      (ok (equal overlays (list linux)) "named cuda overlay is not automatic"))
+    (multiple-value-bind (univ overlays)
+        (resolve-manifests idx :os "linux" :arch "amd64" :implementation "ecl" :overlay "cuda")
+      (declare (ignore univ))
+      (ok (equal overlays (list linux cuda)) "cuda is installed only when named"))))
 
 (deftest same-specificity-name-order
   (let* ((beta (test-manifest "sha256:beta" :os "linux" :arch "amd64" :name "beta"))
