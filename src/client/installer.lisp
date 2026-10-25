@@ -32,6 +32,8 @@
            #:install-result-registry-url
            #:extract-layer
            #:extract-layer-stripping-prefix
+           #:call-with-gunzip-stream
+           #:stream-gunzip-p
            #:compute-strip-prefix
            #:systems-root
            #:system-install-path
@@ -276,6 +278,11 @@
                              :version version
                              :registry-url registry-url)))))
 
+(defun stream-gunzip-p ()
+  "True when chipz can gunzip through a Gray stream. False on ABCL."
+  #+abcl nil
+  #-abcl t)
+
 (defun gunzip-octets (tar-gz-data)
   "Gunzip octet vector to a fresh octet vector.
    Uses chipz:DECOMPRESS (buffer API) — portable on ABCL/etc. where
@@ -283,11 +290,24 @@
   (let ((input (coerce tar-gz-data '(simple-array (unsigned-byte 8) (*)))))
     (chipz:decompress nil 'chipz:gzip input)))
 
+(defun call-with-gunzip-stream (tar-gz-data fn)
+  "Call FN with a binary input stream of the gunzip of TAR-GZ-DATA.
+   When STREAM-GUNZIP-P, FN reads a chipz decompressing stream. Otherwise
+   FN reads the buffer produced by GUNZIP-OCTETS."
+  (let ((input (coerce tar-gz-data '(simple-array (unsigned-byte 8) (*)))))
+    (if (stream-gunzip-p)
+        (funcall fn (chipz:make-decompressing-stream
+                     'chipz:gzip
+                     (flexi-streams:make-in-memory-input-stream input)))
+        (funcall fn (flexi-streams:make-in-memory-input-stream
+                     (gunzip-octets input))))))
+
 (defun extract-layer-stripping-prefix (tar-gz-data target-dir prefix)
   "Extract a tar+gzip layer to TARGET-DIR, stripping PREFIX from entry names."
-  (let* ((plain (gunzip-octets tar-gz-data))
-         (stream (flexi-streams:make-in-memory-input-stream plain)))
-    (extract-tar-stream stream target-dir :strip-prefix prefix)))
+  (call-with-gunzip-stream
+   tar-gz-data
+   (lambda (stream)
+     (extract-tar-stream stream target-dir :strip-prefix prefix))))
 
 (defun make-directory-link (link-path target-dir)
   "Create a directory symlink/junction LINK-PATH -> TARGET-DIR (portable)."
@@ -333,9 +353,10 @@
 
 (defun extract-layer (tar-gz-data target-dir)
   "Extract a tar+gzip layer to TARGET-DIR."
-  (let* ((plain (gunzip-octets tar-gz-data))
-         (stream (flexi-streams:make-in-memory-input-stream plain)))
-    (extract-tar-stream stream target-dir)))
+  (call-with-gunzip-stream
+   tar-gz-data
+   (lambda (stream)
+     (extract-tar-stream stream target-dir))))
 
 (defun safe-tar-entry-name-p (name)
   "T when tar entry NAME is safe to extract under a target directory:
