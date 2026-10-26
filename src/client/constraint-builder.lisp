@@ -20,6 +20,7 @@
   (:import-from :cl-repository-client/version-utils #:select-preferred-version)
   (:import-from :cl-repository-client/source-policy
                 #:system-denied-p #:registry-allowed-p #:oci-allowed-p)
+  (:import-from :cl-repository-client/protected-systems #:implementation-system-p)
   (:export #:build-install-plan
            #:list-tags/retry
            #:*tag-list-attempts*
@@ -106,6 +107,8 @@
   "Get available versions for NAME from registries. Cached.
    Respects source policy: skips registries denied/not-allowed for NAME.
    Registry path uses OCI-PACKAGE-NAME (slash → primary, + → -plus-)."
+  (when (implementation-system-p name)
+    (return-from fetch-available-versions nil))
   (let ((pkg (oci-package-name name)))
     (or (gethash pkg *version-cache*)
         (let ((versions nil))
@@ -271,6 +274,8 @@
                        (let* ((dn (dep-name dep))
                               (pkg (asdf-primary-system-name dn)))
                          (unless (or (gethash pkg universe)
+                                     (implementation-system-p dn)
+                                     (implementation-system-p pkg)
                                      (asdf:find-system dn nil)
                                      (asdf:find-system pkg nil))
                            (pushnew dn missing :test #'string=))))))))

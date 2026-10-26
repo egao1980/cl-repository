@@ -6,6 +6,7 @@
                 #:*loaded-systems-snapshot*
                 #:snapshot-loaded-systems
                 #:ensure-snapshot
+                #:implementation-system-p
                 #:system-protected-p))
 (in-package :cl-repository-client/tests/protected-systems-test)
 
@@ -104,6 +105,19 @@
         (ok (hash-table-p first-snapshot))
         (ensure-snapshot)
         (ok (eq first-snapshot *loaded-systems-snapshot*) "Same object, not re-taken")))))
+
+(deftest implementation-systems-are-not-registry-packages
+  (testing "Host ASDF and SBCL contribs are implementation systems; third-party names are not"
+    (ok (implementation-system-p "uiop"))
+    (ok (implementation-system-p "asdf"))
+    (ok (implementation-system-p "ASDF"))
+    (ok (not (implementation-system-p "alexandria")))
+    (ok (not (implementation-system-p "acclimation")))
+    (ok (not (implementation-system-p "sb-cga")))
+    #+sbcl
+    (progn
+      (ok (implementation-system-p "sb-posix"))
+      (ok (implementation-system-p "sb-rotate-byte")))))
 
 (deftest ensure-snapshot-noop-when-disabled
   (testing "ensure-snapshot does nothing when *protect-loaded-systems* is NIL"

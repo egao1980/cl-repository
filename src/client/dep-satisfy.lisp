@@ -1,6 +1,7 @@
 (defpackage :cl-repository-client/dep-satisfy
   (:use :cl)
   (:import-from :cl-repository-client/version-utils #:version<)
+  (:import-from :cl-repository-client/protected-systems #:implementation-system-p)
   (:export #:asdf-dep-spec
            #:system-direct-dep-specs
            #:quicklisp-source-p
@@ -47,7 +48,10 @@
     (and dir (search "quicklisp" (namestring dir) :test #'char-equal))))
 
 (defun system-satisfied-p (name &optional minimum)
-  "True when NAME is findable from OCI or the project, new enough, and not a Quicklisp tree."
+  "True when NAME is findable from OCI or the project, new enough, and not a Quicklisp tree.
+   Implementation systems (uiop, asdf, SBCL contribs) are satisfied without an OCI package."
+  (when (implementation-system-p name)
+    (return-from system-satisfied-p t))
   (let ((sys (asdf:find-system name nil)))
     (and sys
          (not (quicklisp-source-p sys))

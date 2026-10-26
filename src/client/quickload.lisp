@@ -34,6 +34,7 @@
                 #:lockfile-entry #:add-lockfile-entry)
   (:import-from :cl-repository-client/protected-systems
                 #:ensure-snapshot #:system-protected-p
+                #:implementation-system-p
                 #:*protected-system-prefixes*)
   (:import-from :cl-repository-client/config
                 #:load-merged-config #:config-value)
@@ -499,7 +500,8 @@
      (msg "~&; cl-repo: skipping denied system ~a~%" name)
      plan)
     ((and (not force) (or (asdf:find-system name nil)
-                          (system-protected-p name)))
+                          (system-protected-p name)
+                          (implementation-system-p name)))
      (msg "~&; cl-repo: ~a already available via ASDF~%" name)
      plan)
     (t
