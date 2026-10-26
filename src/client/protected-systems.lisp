@@ -5,6 +5,7 @@
            #:*loaded-systems-snapshot*
            #:snapshot-loaded-systems
            #:ensure-snapshot
+           #:implementation-system-p
            #:system-protected-p))
 (in-package :cl-repository-client/protected-systems)
 
@@ -40,6 +41,30 @@
       (and (> (length name) (length prefix))
            (string= name prefix :end1 (length prefix))
            (char= (char name (length prefix)) #\/))))
+
+(defun implementation-home ()
+  "Directory of this Lisp's bundled systems, or NIL."
+  #+sbcl
+  (let ((home (uiop:getenv "SBCL_HOME")))
+    (when (and home (plusp (length home)))
+      (uiop:ensure-directory-pathname home)))
+  #-sbcl nil)
+
+(defun implementation-system-p (system-name)
+  "True when SYSTEM-NAME ships with this Lisp or with ASDF.
+   uiop and asdf are the host ASDF. On SBCL, contrib/*.asd (sb-posix,
+   sb-rotate-byte, and the other contribs) are the implementation.
+   A third-party name that merely starts with sb- is not included unless
+   that asd is actually in the contrib directory."
+  (let ((name (string-downcase (string system-name))))
+    (or (and (member name '("asdf" "uiop") :test #'string=) t)
+        (let ((home (implementation-home)))
+          (and home
+               (or (probe-file (merge-pathnames (format nil "contrib/~a.asd" name) home))
+                   (probe-file (merge-pathnames
+                                (format nil "contrib/~a/~a.asd" name name)
+                                home)))
+               t)))))
 
 (defun system-protected-p (system-name)
   "Return T when SYSTEM-NAME should not be updated/reinstalled.
