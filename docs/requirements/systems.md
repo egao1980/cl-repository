@@ -40,7 +40,7 @@ Client library for installing packages from OCI registries.
 - Platform resolver: detect local OS/arch/impl via trivial-features
 - Installer: pull + extract layers to ASDF-loadable directory tree
 - Lockfile: generation, verification, update
-- ASDF integration: source-registry configuration, init file loading
+- ASDF integration: source-registry configuration (no init files: packages load their own natives)
 - High-level commands: install, update, list, search, info
 - Dependencies: cl-oci-client, chipz, flexi-streams, trivial-features
 

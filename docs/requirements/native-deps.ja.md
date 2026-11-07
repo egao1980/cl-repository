@@ -11,7 +11,7 @@ C/C++ ライブラリや CFFI/groveler 成果物を OCI overlays として配布
 - universal source と platform overlays の分離
 - `os` / `arch`（必要なら `os-version` / `implementation`）での明示的ターゲティング
 - prebuilt shared libraries と pre-groveled output の同梱
-- init/loader を通じた実行時統合
+- 実行時統合はパッケージ自身のローダーが ASDF ロード時に行う（`native/` のライブラリを絶対パスでロード）。cl-repo は init スクリプトを生成・実行しない
 
 ## 実運用
 

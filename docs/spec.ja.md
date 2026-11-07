@@ -25,7 +25,7 @@
 
 ## ネイティブ依存（cffi-libraries）
 
-config blob の `cffi-libraries` は各ネイティブライブラリに `define-foreign-library`・`canary`・`search-path` を対応付けます。インストール時に `search-path` が（`cl-repo-init.lisp` 経由で）`cffi:*foreign-library-directories*` へ追加され、システム自身の `define-foreign-library` が同梱ライブラリを解決できます。`.asd` では名前文字列または `(name . plist)` を指定できます。
+config blob の `cffi-libraries` は各ネイティブライブラリに `define-foreign-library`・`canary`・`search-path` を対応付けます。これらはパッケージのメタデータです。クライアントはインストール時にコードを実行しません。システム自身のローダーが ASDF ロード時に `search-path` を `cffi:*foreign-library-directories*` へ追加し、同梱ライブラリを絶対パスでロードします。`.asd` では名前文字列または `(name . plist)` を指定できます。
 
 ## コンシューマ CI（`:ci`）
 

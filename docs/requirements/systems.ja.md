@@ -7,7 +7,7 @@
 - `cl-oci`: OCI データモデル（descriptor/manifest/index/config/serialization）
 - `cl-oci-client`: OCI Distribution Spec HTTP クライアント
 - `cl-repository-packager`: CL システムを OCI へパッケージング
-- `cl-repository-client`: インストール/解決/CLI
+- `cl-repository-client`: インストール/解決/CLI。init ファイルは使わない（パッケージが自身のネイティブライブラリをロードする）
 - `cl-repository-ql-exporter`: Quicklisp/Ultralisp から OCI へエクスポート
 
 ## 設計方針
