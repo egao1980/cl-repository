@@ -169,14 +169,57 @@ resolve_system() {
   RESOLVED_DEPS="${MF_DEPS}"
 }
 
+runner_platform() {
+  # os/arch in OCI terms for this runner.
+  local os arch
+  case "$(uname -s)" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    MINGW*|MSYS*|CYGWIN*) os=windows ;;
+    *) os="$(uname -s | tr '[:upper:]' '[:lower:]')" ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;;
+    arm64|aarch64) arch=arm64 ;;
+    *) arch="$(uname -m)" ;;
+  esac
+  printf '%s/%s' "${os}" "${arch}"
+}
+
+# Prints the oras pull arguments for REF. A plain manifest pulls as is. An image
+# index (native overlays, e.g. cl-stack-ssl) cannot be pulled whole — its
+# platform manifests repeat layer names — so pull this runner's platform
+# manifest, or the generic (platform-less) manifest when the index has none.
+pull_args() {
+  local ref="$1" json
+  json="$(fetch_manifest "${ref}")" || { printf '%s' "${ref}"; return 0; }
+  printf '%s\n' "${json}" | "${PY}" -c '
+import json, sys
+ref, want = sys.argv[1], sys.argv[2]
+d = json.load(sys.stdin)
+if d.get("mediaType") != "application/vnd.oci.image.index.v1+json" or not d.get("manifests"):
+    print(ref); sys.exit(0)
+plats = {"%s/%s" % (m["platform"]["os"], m["platform"]["architecture"])
+         for m in d["manifests"] if m.get("platform")}
+if want in plats:
+    print("--platform", want, ref)
+else:
+    generic = [m["digest"] for m in d["manifests"] if not m.get("platform")]
+    base = ref.rsplit(":", 1)[0] if "@" not in ref else ref.split("@", 1)[0]
+    print(base + "@" + generic[0] if generic else ref)
+' "${ref}" "$(runner_platform)" | tr -d '\r'
+}
+
 pull_extract() {
   local ref="$1"
   local dest="$2"
   local tmp attempt=1 max=4 delay=4
+  local -a args
+  read -r -a args <<<"$(pull_args "${ref}")"
   mkdir -p "${dest}"
   while true; do
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/cl-repo-pull.XXXXXX")"
-    if oras pull "${ref}" -o "${tmp}"; then
+    if oras pull "${args[@]}" -o "${tmp}"; then
       break
     fi
     rm -rf "${tmp}"
