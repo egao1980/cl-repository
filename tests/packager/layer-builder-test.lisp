@@ -131,3 +131,46 @@
       (ok (null (layer-result-title lr)) "title defaults to nil")
       (setf (layer-result-title lr) "mylib-1.0.tar.gz")
       (ok (string= (layer-result-title lr) "mylib-1.0.tar.gz")))))
+
+;;; salza2's MERGE-INPUT recompresses the previous 32 KiB block when it gets
+;;; zero octets on a 32 KiB boundary. The 0.25.0 client layer had an empty
+;;; .gitkeep whose header ended at 327680 (10 x 32 KiB); the next header was
+;;; replaced by a stale copy of earlier data.
+(defun boundary-files (dir blocks)
+  "Files so that an empty file's header ends exactly at BLOCKS x 32 KiB."
+  (let* ((filler-size (- (* blocks 32768) 1024))   ; filler header + data + empty header
+         (filler (merge-pathnames "filler.bin" dir))
+         (empty (merge-pathnames "empty/.gitkeep" dir))
+         (after (merge-pathnames "after.txt" dir)))
+    (ensure-directories-exist empty)
+    (with-open-file (s filler :direction :output :element-type '(unsigned-byte 8) :if-exists :supersede)
+      (let ((buf (make-array filler-size :element-type '(unsigned-byte 8))))
+        (dotimes (i filler-size) (setf (aref buf i) (mod (* i 7) 251)))
+        (write-sequence buf s)))
+    (with-open-file (s empty :direction :output :if-exists :supersede))
+    (with-open-file (s after :direction :output :if-exists :supersede)
+      (write-string "the header after the empty file" s))
+    (list (cons "filler.bin" filler) (cons "empty/.gitkeep" empty) (cons "after.txt" after))))
+
+(deftest empty-file-on-a-32k-boundary
+  (dolist (blocks '(1 10))
+  (let ((dir (uiop:ensure-directory-pathname
+              (merge-pathnames (format nil "cl-repo-tar-~a/" (random 100000000))
+                               (uiop:temporary-directory)))))
+    (unwind-protect
+         (let* ((pairs (boundary-files dir blocks))
+                (data (make-tar-gzip-from-files pairs)))
+           (ok (equal (tar-entry-names data) '("filler.bin" "empty/.gitkeep" "after.txt"))
+               "every header present, in order")
+           (ok (cl-repository-packager/layer-builder::verify-tar-gzip
+                data '("filler.bin" "empty/.gitkeep" "after.txt"))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
+
+(deftest verify-rejects-a-damaged-layer
+  (let* ((good (salza2:compress-data
+                (let ((tar (make-array 2048 :element-type '(unsigned-byte 8) :initial-element 0)))
+                  (replace tar (babel:string-to-octets "not a tar header" :encoding :ascii))
+                  tar)
+                'salza2:gzip-compressor)))
+    (ok (signals (cl-repository-packager/layer-builder::verify-tar-gzip good '("x")) 'error)
+        "a block that isn't a header is caught before publishing")))

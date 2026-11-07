@@ -3,6 +3,7 @@
   (:import-from :babel #:string-to-octets)
   (:import-from :flexi-streams)
   (:import-from :salza2)
+  (:import-from :chipz)
   (:import-from :cl-oci/digest #:compute-digest #:format-digest)
   (:import-from :cl-oci/config #:+role-source+ #:+role-native-library+ #:+role-headers+
                 #:+role-documentation+ #:+role-cffi-grovel-output+ #:+role-cffi-wrapper+
@@ -65,10 +66,48 @@
           (write-tar-entry gzip-stream name content)))
       (write-tar-eof gzip-stream)
       (close gzip-stream))
-    (let ((raw (flexi-streams:get-output-stream-sequence output)))
-      (if (typep raw '(simple-array (unsigned-byte 8) (*)))
-          raw
-          (coerce raw '(simple-array (unsigned-byte 8) (*)))))))
+    (let* ((raw (flexi-streams:get-output-stream-sequence output))
+           (data (if (typep raw '(simple-array (unsigned-byte 8) (*)))
+                     raw
+                     (coerce raw '(simple-array (unsigned-byte 8) (*))))))
+      (verify-tar-gzip data (mapcar (lambda (pair)
+                                      (if tar-prefix
+                                          (concatenate 'string tar-prefix (namestring (car pair)))
+                                          (namestring (car pair))))
+                                    file-pairs))
+      data)))
+
+(defun verify-tar-gzip (data expected-names)
+  "Gunzip DATA and walk its tar headers. Signal an error unless every header
+checksums and the entries are exactly EXPECTED-NAMES in order. A layer that
+fails this must never be published."
+  (let* ((tar (chipz:decompress nil 'chipz:gzip data))
+         (offset 0)
+         (names '()))
+    (loop
+      (when (> (+ offset 512) (length tar))
+        (error "Tar layer truncated at ~D after ~A" offset (first names)))
+      (let ((header (subseq tar offset (+ offset 512))))
+        (when (every #'zerop header) (return))
+        (let* ((stored (parse-integer (map 'string #'code-char (subseq header 148 155))
+                                      :radix 8 :junk-allowed t))
+               (sum (+ (reduce #'+ header :end 148) (* 8 (char-code #\Space))
+                       (reduce #'+ header :start 156))))
+          (unless (eql stored sum)
+            (error "Tar layer header at ~D is damaged (after ~A)" offset (or (first names) "the start"))))
+        (let* ((name-end (or (position 0 header :end 100) 100))
+               (prefix-end (or (position 0 header :start 345 :end 500) 500))
+               (name (babel:octets-to-string (subseq header 0 name-end) :encoding :utf-8))
+               (prefix (babel:octets-to-string (subseq header 345 prefix-end) :encoding :utf-8))
+               (size (parse-integer (map 'string #'code-char (subseq header 124 135)) :radix 8)))
+          (push (if (plusp (length prefix)) (concatenate 'string prefix "/" name) name) names)
+          (incf offset (+ 512 (* 512 (ceiling size 512)))))))
+    (let ((names (nreverse names)))
+      (unless (equal names expected-names)
+        (error "Tar layer entries differ from the files packed: ~D entries, ~D files~@[, first difference ~A~]"
+               (length names) (length expected-names)
+               (loop for a in names for b in expected-names unless (equal a b) return (list a b)))))
+    t))
 
 (defun read-file-octets (path)
   "Read a file as an octet vector."
@@ -129,8 +168,13 @@
       (write-octal header 148 sum 7))
     ;; Write header
     (write-sequence header stream)
-    ;; Write content
-    (write-sequence content stream)
+    ;; Write content. Never a zero-length write: salza2's MERGE-INPUT, given
+    ;; no octets when its input sits on a 32 KiB boundary, compresses the
+    ;; previous 32 KiB block again, and that stale copy lands where the next
+    ;; header belongs (cl-repository-client 0.25.0: an empty .gitkeep at
+    ;; offset 327680 = 10 x 32 KiB).
+    (when (plusp size)
+      (write-sequence content stream))
     ;; Pad to 512-byte boundary
     (let ((remainder (mod size 512)))
       (when (plusp remainder)
