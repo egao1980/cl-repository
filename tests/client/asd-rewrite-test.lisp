@@ -36,3 +36,24 @@
                (ok (null (getf (getf ecl :platform) :os)))
                (ok (string= (getf (getf ecl :platform) :lisp) "ecl")))))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest asd-defsystem-depends-on-reads-without-loading
+  (let* ((dir (uiop:ensure-directory-pathname
+               (merge-pathnames (format nil "cl-repo-dsd-~a/" (random 1000000))
+                                (uiop:temporary-directory))))
+         (asd (merge-pathnames "demo.asd" dir))
+         (evil (merge-pathnames "evil.asd" dir)))
+    (ensure-directories-exist dir)
+    (unwind-protect
+         (progn
+           (with-open-file (out asd :direction :output :if-exists :supersede)
+             (format out "(defsystem \"demo\"~%  :defsystem-depends-on (\"asdf-native\" :cffi-grovel (:version \"foo-ext\" \"1.0\"))~%  :components ((:native-library \"demo\")))~%")
+             (format out "(defsystem \"demo/tests\" :defsystem-depends-on (\"asdf-native\") :depends-on (\"demo\"))~%"))
+           (with-open-file (out evil :direction :output :if-exists :supersede)
+             (format out "(defsystem \"evil\" :defsystem-depends-on (#.(error \"evaluated\")))~%"))
+           (ok (equal (cl-repository-client/asd-rewrite:asd-defsystem-depends-on asd)
+                      '("asdf-native" "cffi-grovel" "foo-ext"))
+               "strings, symbols and (:version …), deduplicated across defsystems")
+           (ok (null (cl-repository-client/asd-rewrite:asd-defsystem-depends-on evil))
+               "#. is not evaluated; the file is skipped"))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

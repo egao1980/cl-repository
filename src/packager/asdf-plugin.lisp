@@ -9,7 +9,11 @@
            #:normalize-dep
            #:collect-external-depends-on
            #:test-system-name-p
-           #:filter-publish-provides))
+           #:filter-publish-provides
+           #:native-library-components
+           #:check-native-libraries
+           #:native-overlay-files
+           #:derived-native-overlays))
 (in-package :cl-repository-packager/asdf-plugin)
 
 (defclass package-op (asdf:operation) ()
@@ -137,14 +141,110 @@
       (walk system)
       (nreverse external))))
 
-(defun auto-package-spec (system-name)
+;;; Native overlays by convention: a platform's overlay is every file in its
+;;; directory, lib/<os>-<arch>/ by default, shipped into native/ (what the CI
+;;; native publish already does with artifact directories). Nothing to declare:
+;;; platforms are the lib/<os>-<arch>/ directories present. Optional keys:
+;;;   :native-platforms ("linux-amd64" ("darwin-arm64" . "out/mac/"))  ; strict list
+;;;   :native-directory "build/{pair}/"                                 ; template
+;;; A system with asdf-native (:native-library ...) components is checked: each
+;;; platform must hold every non-optional library. asdf-native is reached via
+;;; FIND-SYMBOL; the packaged system loaded it, the packager doesn't need it.
+
+(defparameter +native-oses+ '("linux" "darwin" "windows" "freebsd"))
+
+(defun %asdf-native (name)
+  (let ((pkg (find-package "ASDF-NATIVE")))
+    (and pkg (find-symbol name pkg))))
+
+(defun native-library-components (system)
+  "SYSTEM's asdf-native :NATIVE-LIBRARY components in load order (modules included)."
+  (let ((class (let ((sym (%asdf-native "NATIVE-LIBRARY"))) (and sym (find-class sym nil)))))
+    (when class
+      (labels ((walk (c)
+                 (loop for child in (asdf:component-children c)
+                       if (typep child class) collect child
+                       else if (typep child 'asdf:parent-component) append (walk child))))
+        (walk system)))))
+
+(defun %split-pair (pair)
+  (let ((dash (position #\- pair)))
+    (unless (and dash (member (subseq pair 0 dash) +native-oses+ :test #'string=))
+      (error "Native platform ~S is not <os>-<arch> with os in ~{~A~^, ~}" pair +native-oses+))
+    (values (subseq pair 0 dash) (subseq pair (1+ dash)))))
+
+(defun %fill-pair (template pair)
+  (multiple-value-bind (os arch) (%split-pair pair)
+    (dolist (sub `(("{pair}" . ,pair) ("{os}" . ,os) ("{arch}" . ,arch)) template)
+      (loop for at = (search (car sub) template)
+            while at
+            do (setf template (concatenate 'string (subseq template 0 at) (cdr sub)
+                                           (subseq template (+ at (length (car sub))))))))))
+
+(defun check-native-libraries (system pair files)
+  "Signal an error unless FILES (file names) hold a variant of every
+non-optional :NATIVE-LIBRARY component of SYSTEM for PAIR."
+  (let ((names (%asdf-native "NATIVE-LIBRARY-NAMES"))
+        (optional-p (%asdf-native "NATIVE-LIBRARY-OPTIONAL-P"))
+        (os (intern (string-upcase (%split-pair pair)) :keyword)))
+    (dolist (c (native-library-components system))
+      (let ((wanted (funcall names c :os (if (member os '(:darwin :linux :windows)) os :unix))))
+        (unless (or (some (lambda (w) (member w files :test #'string=)) wanted)
+                    (and optional-p (funcall optional-p c)))
+          (error "~A: ~A has no ~A (one of ~{~A~^, ~}); found ~{~A~^, ~}"
+                 (asdf:component-name system) pair (asdf:component-name c) wanted files))))))
+
+(defun native-overlay-files (system pair dir)
+  "Files of DIR (non-recursive) as (absolute . file-name) pairs, checked
+against SYSTEM's :NATIVE-LIBRARY components for PAIR."
+  (let* ((files (uiop:directory-files (uiop:ensure-directory-pathname dir)))
+         (pairs (loop for abs in files collect (cons (namestring abs) (file-namestring abs)))))
+    (unless pairs (error "~A: no files under ~A for ~A" (asdf:component-name system) dir pair))
+    (check-native-libraries system pair (mapcar #'cdr pairs))
+    pairs))
+
+(defun native-platform-directories (cl-repo source-dir)
+  "→ list of (pair . directory) from :NATIVE-PLATFORMS, or discovered lib/<os>-<arch>/."
+  (let ((declared (getf cl-repo :native-platforms))
+        (template (getf cl-repo :native-directory)))
+    (if declared
+        (loop for entry in declared
+              for pair = (if (consp entry) (car entry) entry)
+              for dir = (merge-pathnames
+                         (uiop:ensure-directory-pathname
+                          (if (consp entry) (cdr entry) (%fill-pair (or template "lib/{pair}/") pair)))
+                         source-dir)
+              do (unless (uiop:directory-exists-p dir)
+                   (error ":native-platforms lists ~A but ~A does not exist" pair (namestring dir)))
+              collect (cons pair dir))
+        (unless template
+          (loop for dir in (uiop:subdirectories (merge-pathnames "lib/" source-dir))
+                for name = (car (last (pathname-directory dir)))
+                when (ignore-errors (%split-pair name) t)
+                  collect (cons name dir))))))
+
+(defun derived-native-overlays (system cl-repo source-dir)
+  "Overlay plists (PARSE-OVERLAY-SPEC form) for SYSTEM's native platforms.
+Only for systems with :native-library components or :native-platforms."
+  (when (or (getf cl-repo :native-platforms) (native-library-components system))
+    (loop for (pair . dir) in (native-platform-directories cl-repo source-dir)
+          collect (multiple-value-bind (os arch) (%split-pair pair)
+                    (list :platform (list :os os :arch arch)
+                          :layers (list (list :role "native-library"
+                                              :files (native-overlay-files system pair dir))))))))
+
+(defun auto-package-spec (system-name &key (derive-native-overlays t))
   "Auto-generate a package-spec by introspecting a loaded ASDF system.
    Reads OCI packaging metadata from the system's :properties under :cl-repo.
 
    Provides resolution order:
      1. Explicit :cl-repo :provides from .asd :properties
      2. Auto-discovered from *.asd files in source-dir
-     3. Fallback: (list system-name)"
+     3. Fallback: (list system-name)
+
+   Native overlays: explicit :overlays, after the ones derived from the
+   platform directories (DERIVED-NATIVE-OVERLAYS) unless DERIVE-NATIVE-OVERLAYS
+   is NIL (the CI native publish builds them from its artifact directories)."
   (let* ((system (asdf:find-system system-name))
          (cl-repo (system-cl-repo-properties system))
          (source-dir (asdf:system-source-directory system))
@@ -161,9 +261,19 @@
                    :author (normalize-metadata-string (asdf:system-author system))
                    :depends-on (collect-external-depends-on system)
                    :provides provides
-                   :cffi-libraries (getf cl-repo :cffi-libraries)
+                   :cffi-libraries (or (getf cl-repo :cffi-libraries)
+                                       (mapcar #'asdf:component-name
+                                               (native-library-components system)))
+                   ;; Explicit :overlays (named flavours, odd layouts) come after
+                   ;; the derived ones.
                    :overlays (mapcar #'parse-overlay-spec
-                                     (getf cl-repo :overlays)))))
+                                     (append (when (and derive-native-overlays
+                                                        ;; explicit platform overlays win;
+                                                        ;; named ones (cuda) add on top
+                                                        (notany (lambda (o) (null (getf o :name)))
+                                                                (getf cl-repo :overlays)))
+                                               (derived-native-overlays system cl-repo source-dir))
+                                             (getf cl-repo :overlays))))))
 
 (defmethod asdf:perform ((op package-op) (system asdf:system))
   (let* ((spec (auto-package-spec (asdf:component-name system)))

@@ -14,6 +14,7 @@
   :serial t
   :components ((:file "manifest-builder-test")
                (:file "asdf-plugin-test")
+               (:file "native-overlays-test")
                (:file "discover-systems-test")
                (:file "normalize-dep-test")
                (:file "source-adapter-test")
