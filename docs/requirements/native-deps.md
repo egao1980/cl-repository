@@ -65,6 +65,40 @@ in the shared store before tests. That preloaded natives of unrelated projects
 gone; `load-system-init-files` remains as a no-op for one release.
 
 
+### Convention: asdf-native components, no `:overlays`
+
+A system that declares its libraries as [asdf-native](https://github.com/egao1980/asdf-native)
+components needs no hand-written `:overlays`:
+
+```lisp
+(defsystem "foo"
+  :defsystem-depends-on ("asdf-native")
+  :components ((:file "package")
+               (:native-library "foo-cl")          ; loads libfoo-cl.* at ASDF load
+               (:file "ffi")))
+```
+
+- **Platforms.** Each `lib/<os>-<arch>/` directory (`linux-amd64`, `darwin-arm64`, …) becomes
+  that platform's overlay. Every file in it ships into `native/`, so libraries the
+  component's library depends on go along.
+- **Check.** Each platform must hold a file-name variant of every non-optional
+  `:native-library`, or packaging fails. The CI native publish runs the same check
+  on its artifact directories.
+- **Options** in `:properties (:cl-repo …)`:
+  - `:native-platforms ("linux-amd64" ("windows-amd64" . "out/win/"))` is a strict list. A
+    listed platform without a directory is an error. A pair may map to its own directory.
+  - `:native-directory "build/{pair}/"` sets the template (`{pair}`, `{os}`, `{arch}`).
+  - Explicit `:overlays` still work, for native libraries and for any other files. One
+    for a derived platform merges into it: its layers (headers, data files, extra
+    libraries) are added, and a destination already shipped isn't duplicated. A named
+    overlay (`cuda`) or one for another platform stays its own overlay. The CI native
+    publish merges the same way.
+- `:cffi-libraries` defaults to the component names.
+
+`:defsystem-depends-on` systems are read from the `.asd` without evaluating it and
+installed from OCI before ASDF loads the file (`cl-repo sync`/`test`, the CI action and
+the native publish).
+
 ### Config Blob Metadata
 
 `cffi-libraries` in config blob maps each foreign library to:

@@ -51,7 +51,7 @@
     (asdf:load-asd asd)
     (asdf:find-system name t)))
 
-(defun build-artifact-overlays (lib-root grovel-root platforms-file)
+(defun build-artifact-overlays (system lib-root grovel-root platforms-file)
   (loop for line in (uiop:read-file-lines platforms-file)
         for slash = (position #\/ line)
         when slash
@@ -62,7 +62,10 @@
                  (lib-dir (merge-pathnames (format nil "~a/" prefix) lib-root))
                  (grovel-dir (merge-pathnames (format nil "~a/" prefix) grovel-root))
                  (native-pairs (absolute-layer-files lib-dir))
-                 (layers (list (list :role "native-library" :files native-pairs))))
+                 (layers (progn
+                           (cl-repository-packager/asdf-plugin:check-native-libraries
+                            system prefix (mapcar #'cdr native-pairs))
+                           (list (list :role "native-library" :files native-pairs)))))
             (when (uiop:directory-exists-p grovel-dir)
               (setf layers
                     (append layers
@@ -118,15 +121,29 @@
          (reg (if use-auth
                   (cl-oci-client/registry:make-registry registry-url :auth auth)
                   (cl-oci-client/registry:make-registry registry-url))))
-    (load-system-asd name source-dir)
-    (let* ((overlays (build-artifact-overlays lib-root grovel-root platforms-file))
+    ;; :defsystem-depends-on (asdf-native, cffi-grovel) load while NAME.asd is
+    ;; read: install them from OCI first.
+    (let ((f (find-symbol "ENSURE-DEFSYSTEM-DEPENDS-ON" :cl-repo)))
+      (when (and f (fboundp f)) (funcall f source-dir)))
+    (let* ((system (load-system-asd name source-dir))
+           ;; Each platform's artifact directory must hold the system's
+           ;; :native-library components (asdf-native), if it declares any.
+           (overlays (build-artifact-overlays system lib-root grovel-root platforms-file))
            (spec (apply-env-overrides
-                  (cl-repository-packager/asdf-plugin:auto-package-spec name))))
+                  (cl-repository-packager/asdf-plugin:auto-package-spec
+                   name :derive-native-overlays nil))))
       (unless overlays (error "No overlays built from ~a" platforms-file))
-      ;; Staging tree is the publish source; asd :cl-repo overlays are relative
-      ;; inventory — replace with absolute artifact layers for this build.
+      ;; Staging tree is the publish source. Artifact layers are the platform
+      ;; overlays; explicit .asd :overlays fold in (same platform: extra layers
+      ;; such as headers or data files, a destination the artifacts already
+      ;; ship is skipped; named flavours and other platforms: their own overlay).
       (setf (cl-repository-packager/build-matrix:package-spec-source-dir spec) source-dir)
-      (setf (cl-repository-packager/build-matrix:package-spec-overlays spec) overlays)
+      (setf (cl-repository-packager/build-matrix:package-spec-overlays spec)
+            (let ((merge (find-symbol "MERGE-NATIVE-OVERLAYS" :cl-repository-packager/asdf-plugin)))
+              (if (and merge (fboundp merge))
+                  (funcall merge overlays
+                           (cl-repository-packager/build-matrix:package-spec-overlays spec))
+                  overlays)))
       (unless (cl-repository-packager/build-matrix:package-spec-version spec)
         (error "Package ~a has no :version in .asd and PKG_VERSION unset" name))
       (let ((result (cl-repository-packager/build-matrix:build-package spec))

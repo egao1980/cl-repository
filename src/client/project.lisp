@@ -5,7 +5,8 @@
                 #:cmd-install #:cmd-restore
                 #:*default-registry* #:*default-namespace*)
   (:import-from :cl-repository-client/quickload
-                #:add-registry #:ensure-system-dependencies)
+                #:add-registry #:ensure-system-dependencies #:ensure-systems)
+  (:import-from :cl-repository-client/asd-rewrite #:asd-defsystem-depends-on)
   (:import-from :cl-repository-client/asdf-integration
                 #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*)
@@ -20,6 +21,7 @@
            #:register-project
            #:project-registry-directories
            #:discover-project-system
+           #:ensure-defsystem-depends-on
            #:expand-ci-env
            #:cmd-sync
            #:cmd-test
@@ -283,6 +285,20 @@
         ((stringp overlay) overlay)
         (t (string-downcase (string overlay)))))
 
+(defun ensure-defsystem-depends-on (directory)
+  "Install the :defsystem-depends-on systems (asdf-native, cffi-grovel, ...) of
+the .asd files in DIRECTORY that ASDF can't find yet. ASDF loads them while
+reading the .asd, before any :depends-on walk can see them."
+  (let ((missing (remove-if (lambda (n) (asdf:find-system n nil))
+                            (remove-duplicates
+                             (loop for asd in (top-level-asds (uiop:ensure-directory-pathname directory))
+                                   append (asd-defsystem-depends-on asd))
+                             :test #'string=))))
+    (when missing
+      (msg "~&; cl-repo: installing :defsystem-depends-on ~{~a~^ ~}~%" missing)
+      (ensure-systems missing :default-source :oci))
+    missing))
+
 (defun cmd-sync (&key (directory (uiop:getcwd)) system overlay locked)
   "Install what the .asd and qlfile ask for, and record the lock.
    OVERLAY names an opt-in overlay such as cuda, installed on top of the automatic stack.
@@ -302,6 +318,7 @@
             (register-project dir)
             (let ((name (or system (discover-project-system dir))))
               (when name
+                (ensure-defsystem-depends-on dir)
                 (asdf:find-system name nil)
                 (multiple-value-bind (env-install env-load)
                     (expand-ci-env (getf (ci-plist name) :env))
