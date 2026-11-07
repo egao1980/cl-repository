@@ -6,7 +6,8 @@
 ;;;; event-backend-libuv, TLS through cl-stack-ssl) whenever it loads;
 ;;;; http-backend-dexador otherwise. CL_REPO_HTTP_BACKEND=async|dexador forces one.
 ;;;; Dexador stays a declared dependency until setup-client can install the
-;;;; native overlays (libuv, OpenSSL) the async stack needs on CI runners.
+;;;; native overlays (libuv, OpenSSL) the async stack needs on CI runners. To use
+;;;; cl-stack-ssl's OpenSSL, load it before this system: dexador loads cl+ssl.
 
 (defpackage :cl-oci-client/http
   (:use :cl)
