@@ -62,9 +62,15 @@ cl-repo test
 cl-repo run -- sbcl --script tool.lisp
 cl-repo publish
 cl-repo add-overlay
+cl-repo version --bump patch
 cl-repo publish --overlay
 cl-repo install alexandria
 ```
+
+
+### Версии
+
+`cl-repo version` печатает `:version`, `cl-repo version 1.4.0` задаёт, `cl-repo version --bump major|minor|patch|revision` повышает (`revision` — четвёртая часть поверх upstream-релиза: `3.5.9` → `3.5.9.1`). Меняется только строка версии в `.asd`; `--system foo/bar` выбирает другой `defsystem`. Workflow публикации делает `cl-repo version "$V"` — без `sed` и скриптов синхронизации.
 
 ### Онбординг существующих проектов
 
@@ -109,7 +115,7 @@ cl-repo publish my-cffi-lib --registry ghcr.io --namespace my-org/my-project
 
 2. **Соберите нативные библиотеки** на каждой целевой платформе (в CI или локально).
 
-3. **Запишите overlay в `.asd`**, затем опубликуйте. `add-overlay` только правит файл. Вызов без флагов — os и arch этой машины. Любой из `--os`, `--arch`, `--lisp` оставляет только указанные части (флаг без значения — эта машина). Файлы кладите в `lib/<key>/`, grovel — в `grovel/<key>/`.
+3. **Запишите overlay в `.asd`**, затем опубликуйте. `add-overlay` только правит файл, и только значение `:overlays` этой системы: комментарии, `#+` и вёрстка сохраняются. Вызов без флагов — os и arch этой машины. Любой из `--os`, `--arch`, `--lisp` оставляет только указанные части (флаг без значения — эта машина). Файлы кладите в `lib/<key>/`, grovel — в `grovel/<key>/`.
 
 ```sh
 cl-repo add-overlay --os linux --arch amd64

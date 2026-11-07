@@ -62,9 +62,15 @@ cl-repo test
 cl-repo run -- sbcl --script tool.lisp
 cl-repo publish
 cl-repo add-overlay
+cl-repo version --bump patch
 cl-repo publish --overlay
 cl-repo install alexandria
 ```
+
+
+### バージョン
+
+`cl-repo version` は `:version` を表示し、`cl-repo version 1.4.0` で設定、`cl-repo version --bump major|minor|patch|revision` で上げる（`revision` は上流リリースへの4番目: `3.5.9` → `3.5.9.1`）。`.asd` のバージョン文字列だけが変わる。`--system foo/bar` で別の `defsystem` を選ぶ。公開ワークフローは `cl-repo version "$V"` を使い、`sed` や同期スクリプトは不要。
 
 ### 既存プロジェクトのオンボーディング
 
@@ -109,7 +115,7 @@ cl-repo publish my-cffi-lib --registry ghcr.io --namespace my-org/my-project
 
 2. **各対象プラットフォームでネイティブライブラリをビルド**（CI またはローカル）。
 
-3. **overlay を `.asd` に書き、そのあと公開する。** `add-overlay` はファイルだけを編集する。フラグなしはこのマシンの os と arch。`--os` / `--arch` / `--lisp` のどれかを渡すと、渡した部分だけがキーになる（値なしはそのマシン）。成果物は `lib/<key>/`、grovel は `grovel/<key>/`。
+3. **overlay を `.asd` に書き、そのあと公開する。** `add-overlay` はファイルだけを、しかもそのシステムの `:overlays` の値だけを編集する（コメント・`#+`・レイアウトはそのまま）。フラグなしはこのマシンの os と arch。`--os` / `--arch` / `--lisp` のどれかを渡すと、渡した部分だけがキーになる（値なしはそのマシン）。成果物は `lib/<key>/`、grovel は `grovel/<key>/`。
 
 ```sh
 cl-repo add-overlay --os linux --arch amd64

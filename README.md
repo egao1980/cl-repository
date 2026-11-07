@@ -62,9 +62,18 @@ cl-repo test
 cl-repo run -- sbcl --script tool.lisp
 cl-repo publish
 cl-repo add-overlay
+cl-repo version --bump patch
 cl-repo publish --overlay
 cl-repo install alexandria
 ```
+
+### Versions
+
+`cl-repo version` prints the project system's `:version`. `cl-repo version 1.4.0` sets it, and
+`cl-repo version --bump major|minor|patch|revision` bumps it. `revision` is a fourth part on an
+upstream release: `3.5.9` becomes `3.5.9.1`. Only the version string in the `.asd` changes, and
+`--system foo/bar` picks another `defsystem` in the file. A publish workflow sets the version
+with `cl-repo version "$V"`; no `sed` or sync script.
 
 ### Onboarding Existing Projects
 
@@ -111,7 +120,7 @@ cl-repo publish my-cffi-lib --registry ghcr.io --namespace my-org/my-project
 
 2. **Build native libraries** on each target platform (in CI or locally).
 
-3. **Record the overlay in the `.asd`**, then publish it. `add-overlay` only edits the file. A bare call is this machine's os and arch. Passing any of `--os`, `--arch`, `--lisp` keeps only those parts (a bare flag means this machine). Put the built files in `lib/<key>/` and grovel output in `grovel/<key>/`.
+3. **Record the overlay in the `.asd`**, then publish it. `add-overlay` only edits the file, and only that system's `:overlays` value: comments, `#+` conditionals and layout stay as written. A bare call is this machine's os and arch. Passing any of `--os`, `--arch`, `--lisp` keeps only those parts (a bare flag means this machine). Put the built files in `lib/<key>/` and grovel output in `grovel/<key>/`.
 
 ```sh
 cl-repo add-overlay --os linux --arch amd64

@@ -2,6 +2,8 @@
   (:use :cl)
   (:import-from :cl-repository-client/platform-resolver
                 #:detect-local-platform #:overlay-key)
+  (:import-from :cl-repository-client/asd-text
+                #:find-defsystem-span #:plist-value-span #:splice #:print-value-at #:line-column)
   (:export #:cmd-add-overlay
            #:read-system-overlays
            #:overlay-entry-key))
@@ -13,15 +15,6 @@
       (loop for form = (read in nil :eof)
             until (eq form :eof)
             collect form))))
-
-(defun write-lisp-forms (path forms)
-  (with-open-file (out path :direction :output :if-exists :supersede :if-does-not-exist :create)
-    (let ((*print-case* :downcase)
-          (*print-pretty* t)
-          (*print-right-margin* 100))
-      (dolist (form forms)
-        (pprint form out)
-        (terpri out)))))
 
 (defun defsystem-form-p (form)
   (and (consp form)
@@ -80,15 +73,40 @@
                        overlays)
             (list entry))))
 
-(defun update-defsystem-form (form entry)
-  (let* ((plist (cddr form))
-         (properties (plist-put (getf plist :properties) :cl-repo
-                                (plist-put (getf (getf plist :properties) :cl-repo) :overlays
-                                           (replace-overlay
-                                            (getf (getf (getf plist :properties) :cl-repo) :overlays)
-                                            entry)))))
-    (append (list (first form) (second form))
-            (plist-put plist :properties properties))))
+;;; The .asd is edited as text: only the :overlays value changes (or the
+;;; missing :properties / :cl-repo / :overlays is inserted), so comments,
+;;; reader conditionals and layout survive.
+
+(defun splice-overlays (text system-name overlays)
+  "TEXT with SYSTEM-NAME's :properties :cl-repo :overlays set to OVERLAYS."
+  (multiple-value-bind (start end) (find-defsystem-span text system-name)
+    (unless start (error "cl-repo: no (defsystem ~s ...) in the .asd" system-name))
+    (flet ((insert-before-close (list-start list-end col string)
+             ;; before the list's closing paren; on its own line at COL unless
+             ;; the list is empty
+             (let ((lead (if (= list-end (+ list-start 2))
+                             ""
+                             (format nil "~%~a" (make-string col :initial-element #\Space)))))
+               (splice text (1- list-end) (1- list-end) (concatenate 'string lead string)))))
+      (multiple-value-bind (p-start p-end) (plist-value-span text start end ":properties" :skip 2)
+        (if (null p-start)
+            (insert-before-close start end 2
+                                 (format nil ":properties (:cl-repo (:overlays ~a))"
+                                         (print-value-at overlays 35)))
+            (multiple-value-bind (c-start c-end) (plist-value-span text p-start p-end ":cl-repo")
+              (if (null c-start)
+                  (let ((col (+ (line-column text p-start) 1)))
+                    (insert-before-close p-start p-end col
+                                         (format nil ":cl-repo (:overlays ~a)"
+                                                 (print-value-at overlays (+ col 20)))))
+                  (multiple-value-bind (o-start o-end) (plist-value-span text c-start c-end ":overlays")
+                    (if o-start
+                        (splice text o-start o-end
+                                (print-value-at overlays (line-column text o-start)))
+                        (let ((col (+ (line-column text c-start) 1)))
+                          (insert-before-close c-start c-end col
+                                               (format nil ":overlays ~a"
+                                                       (print-value-at overlays (+ col 10))))))))))))))
 
 (defun primary-asd (directory name)
   (let* ((dir (uiop:ensure-directory-pathname directory))
@@ -102,7 +120,9 @@
 
 (defun cmd-add-overlay (directory &key name (os nil os-p) (arch nil arch-p) (lisp nil lisp-p) system)
   "Edit the project .asd. Does not publish.
-   Re-running with the same name and key replaces that overlay and leaves the rest."
+   Re-running with the same name and key replaces that overlay and leaves the rest.
+   Only SYSTEM's (default: the system named after the .asd) :overlays value
+   changes; the rest of the file is kept as written."
   (multiple-value-bind (os arch lisp)
       (apply #'resolve-overlay-parts
              (append (when os-p (list :os os))
@@ -111,24 +131,20 @@
     (when (and (null os) (null arch) (null lisp))
       (error "cl-repo: add-overlay needs at least one of os, arch, lisp"))
     (let* ((path (primary-asd directory (or system name)))
-           (forms (read-lisp-forms path))
-           (entry (overlay-entry name os arch lisp))
-           (updated nil))
-      (unless (some #'defsystem-form-p forms)
-        (error "cl-repo: no defsystem in ~a" path))
-      (setf updated
-            (mapcar (lambda (form)
-                      (if (and (defsystem-form-p form)
-                               (or (null system)
-                                   (string-equal (princ-to-string (second form)) system)
-                                   (string-equal (pathname-name path) (princ-to-string (second form)))))
-                          (update-defsystem-form form entry)
-                          form))
-                    forms))
-      (write-lisp-forms path updated)
+           (system-name (string-downcase (or system (pathname-name path))))
+           (form (find-defsystem (read-lisp-forms path) system-name))
+           (entry (overlay-entry name os arch lisp)))
+      (unless form
+        (error "cl-repo: no (defsystem ~s ...) in ~a" system-name path))
+      (let* ((overlays (replace-overlay
+                        (getf (getf (getf (cddr form) :properties) :cl-repo) :overlays)
+                        entry))
+             (text (splice-overlays (uiop:read-file-string path) system-name overlays)))
+        (with-open-file (out path :direction :output :if-exists :supersede :external-format :utf-8)
+          (write-string text out)))
       (values path (getf entry :name) (overlay-entry-key entry)))))
 
 (defun read-system-overlays (directory &key system)
   (let* ((path (primary-asd directory system))
-         (form (find-defsystem (read-lisp-forms path) system)))
+         (form (find-defsystem (read-lisp-forms path) (or system (pathname-name path)))))
     (getf (getf (getf (cddr form) :properties) :cl-repo) :overlays)))

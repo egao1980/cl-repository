@@ -26,6 +26,7 @@
                (:file "quickload-test")
                (:file "stream-extract-test")
                (:file "asd-rewrite-test")
+               (:file "asd-version-test")
                (:file "project-test")
                (:file "all"))
   :perform (test-op (o c)

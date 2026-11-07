@@ -32,6 +32,7 @@ exec ros -Q -- $0 "$@"
                 #:cmd-sync #:cmd-test #:cmd-run #:cmd-grovel #:client-source-tree
                 #:ensure-default-registry #:discover-project-system)
   (:import-from :cl-repository-client/asd-rewrite #:cmd-add-overlay)
+  (:import-from :cl-repository-client/asd-version #:cmd-version)
   (:import-from :cl-repository-client/platform-resolver
                 #:choose-overlay-plists #:detect-local-platform)
   (:import-from :cl-repository-client/quickload #:add-registry)
@@ -55,6 +56,8 @@ exec ros -Q -- $0 "$@"
   (format t "  publish               Push the source and overlays whose files exist~%")
   (format t "  publish --overlay     Push one overlay. A name selects that overlay.~%")
   (format t "  add-overlay [name]    Record an overlay in the .asd. Does not publish.~%")
+  (format t "  version [<new>]       Print the .asd :version, or set it. Keeps the file as written.~%")
+  (format t "  version --bump <part> Bump major, minor, patch or revision (4th part: 3.5.9 → 3.5.9.1)~%")
   (format t "  install <ref>         Install a system (name, name:version, or full ref)~%")
   (format t "  load <names...>       Install (if needed) and load systems~%")
   (format t "  update                Update all installed systems~%")
@@ -323,6 +326,13 @@ exec ros -Q -- $0 "$@"
                     :name (first cmd-args)
                     :system (getf opts :system)
                     (flag-args opts '(:os :arch :lisp))))
+
+            ((string-equal command "version")
+             ;; Read: only the version on stdout, for V=$(cl-repo version).
+             (cmd-version (uiop:getcwd)
+                          :set (first cmd-args)
+                          :bump (getf opts :bump)
+                          :system (getf opts :system)))
 
             ((string-equal command "publish")
              (publish-project cmd-args opts registry-url namespace))
