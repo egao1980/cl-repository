@@ -139,10 +139,19 @@
 (defun %run-test ()
   (let ((system (%resolve-system)))
     (format t "~&; ci: test ~a~%" system)
-    (%maybe-load-hook "pre-test")
-    (%ci-muffle
-     (lambda ()
-       (cl-repo:cmd-test :directory (uiop:getcwd) :system system)))
+    ;; The pre-test hook needs the installed tree on the registry (its :ci :with
+    ;; extras). Clients with PREPARE-TEST run it inside CMD-TEST, after that
+    ;; setup; older clients keep the hook-first order.
+    (if (find-symbol "PREPARE-TEST" :cl-repo)
+        (%ci-muffle
+         (lambda ()
+           (cl-repo:cmd-test :directory (uiop:getcwd) :system system
+                             :pre-test (lambda () (%maybe-load-hook "pre-test")))))
+        (progn
+          (%maybe-load-hook "pre-test")
+          (%ci-muffle
+           (lambda ()
+             (cl-repo:cmd-test :directory (uiop:getcwd) :system system)))))
     (%maybe-load-hook "post-test")
     (format t "~&; ci: tests ok~%")))
 

@@ -87,3 +87,33 @@
       (lambda ()
         (ok (= 1 (count dest (project-registry-directories dest)
                         :test #'uiop:pathname-equal)))))))
+
+(defvar cl-user::*cl-repo-pretest-ran* nil)
+
+(deftest pre-test-runs-after-registry-setup-before-load
+  "CMD-TEST's PRE-TEST runs once the project is on the registry and before the
+   system loads (canned CI pre-test hooks rely on both)."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (merge-pathnames (format nil "cl-repo-pretest-~D/" (random 1000000 (make-random-state t)))
+                                (uiop:temporary-directory))))
+         (seen-system nil))
+    (ensure-directories-exist dir)
+    (unwind-protect
+         (progn
+           (with-open-file (o (merge-pathnames "cl-repo-pretest-demo.asd" dir) :direction :output)
+             (write-string "(defsystem \"cl-repo-pretest-demo\" :components ((:file \"demo\")))" o))
+           (with-open-file (o (merge-pathnames "demo.lisp" dir) :direction :output)
+             (write-string "(unless cl-user::*cl-repo-pretest-ran* (error \"pre-test did not run first\"))" o))
+           (setf cl-user::*cl-repo-pretest-ran* nil)
+           ;; an empty install tree: no other system's init file runs here
+           (let ((cl-repository-client/installer::*systems-root* (merge-pathnames "systems/" dir)))
+             (ensure-directories-exist cl-repository-client/installer::*systems-root*)
+           (cl-repository-client/project:cmd-test
+            :directory dir :system "cl-repo-pretest-demo" :sync nil
+            :pre-test (lambda ()
+                        (setf seen-system (and (asdf:find-system "cl-repo-pretest-demo" nil) t)
+                              cl-user::*cl-repo-pretest-ran* t))))
+           (ok seen-system "the project system is findable when the hook runs")
+           (ok cl-user::*cl-repo-pretest-ran*))
+      (asdf:clear-system "cl-repo-pretest-demo")
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
