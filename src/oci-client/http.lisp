@@ -1,6 +1,12 @@
-;;;; Thin HTTP adapter over http-protocol + http-backend-dexador.
+;;;; Thin HTTP adapter over http-protocol.
 ;;;; Preserves the Dexador-era (values body status headers) contract used by
 ;;;; registry/auth/QL exporter, while matching cl-stack-http wire semantics.
+;;;;
+;;;; Backend: the cl-stack async backend on libuv (http-backend-async +
+;;;; event-backend-libuv, TLS through cl-stack-ssl) whenever it loads;
+;;;; http-backend-dexador otherwise. CL_REPO_HTTP_BACKEND=async|dexador forces one.
+;;;; Dexador stays a declared dependency until setup-client can install the
+;;;; native overlays (libuv, OpenSSL) the async stack needs on CI runners.
 
 (defpackage :cl-oci-client/http
   (:use :cl)
@@ -11,20 +17,69 @@
                 #:response-headers
                 #:response-body)
   (:import-from :http #:request)
-  (:import-from :http-backend-dexador #:make-dexador-backend)
   (:export #:ensure-http-backend
+           #:http-backend-kind
            #:http-exchange
            #:response-header-value))
 (in-package :cl-oci-client/http)
 
+(defvar *http-backend-kind* nil
+  ":ASYNC or :DEXADOR once ENSURE-HTTP-BACKEND chose a backend.")
+
+(defun http-backend-kind () *http-backend-kind*)
+
+(defun %env-backend ()
+  (let ((v (uiop:getenv "CL_REPO_HTTP_BACKEND")))
+    (cond ((or (null v) (string= v "") (string-equal v "auto")) :auto)
+          ((string-equal v "async") :async)
+          ((string-equal v "dexador") :dexador)
+          (t (error "CL_REPO_HTTP_BACKEND must be async, dexador or auto, not ~S" v)))))
+
+(defun %backend-load-failure-p (condition)
+  "Failures that mean the async stack is not usable here (missing system,
+missing native library), as opposed to bugs."
+  (or (typep condition 'asdf:missing-component)
+      (typep condition 'asdf:missing-dependency)
+      (let ((cffi-error (and (find-package "CFFI")
+                             (find-symbol "LOAD-FOREIGN-LIBRARY-ERROR" "CFFI"))))
+        (and cffi-error (typep condition cffi-error)))))
+
+(defun %make-async-backend ()
+  ;; cl-stack-ssl first: it pins cl+ssl to its own OpenSSL when present
+  (when (asdf:find-system "cl-stack-ssl" nil)
+    (asdf:load-system "cl-stack-ssl"))
+  (asdf:load-system "event-backend-libuv")
+  (asdf:load-system "http-backend-async")
+  (setf (symbol-value (find-symbol "*EVENT-BACKEND-MAKER*" "HTTP-BACKEND-ASYNC"))
+        (symbol-function (find-symbol "MAKE-LIBUV-BACKEND" "EVENT-BACKEND-LIBUV")))
+  (uiop:symbol-call :http-backend-async :make-async-backend))
+
+(defun %make-dexador-backend ()
+  (asdf:load-system "http-backend-dexador")
+  (uiop:symbol-call :http-backend-dexador :make-dexador-backend))
+
 (defun ensure-http-backend ()
-  "Bind *HTTP-BACKEND* to the dexador sync backend if unset.
-   Same default as cl-stack-http :auto on non-Windows."
+  "Bind *HTTP-BACKEND* if unset: the async backend on libuv, or dexador when the
+async stack cannot load here (restart USE-DEXADOR, taken automatically unless
+CL_REPO_HTTP_BACKEND=async)."
   (or *http-backend*
       (progn
         ;; Load CE backend before first SEND so ASDF doesn't recurse mid-load.
         (asdf:load-system "http-encoding-chipz")
-        (setf *http-backend* (make-dexador-backend)))))
+        (let ((choice (%env-backend)))
+          (setf *http-backend*
+                (if (eq choice :dexador)
+                    (progn (setf *http-backend-kind* :dexador) (%make-dexador-backend))
+                    (restart-case
+                        (handler-bind ((error (lambda (c)
+                                                (when (and (eq choice :auto) (%backend-load-failure-p c))
+                                                  (warn "cl-repo: async HTTP backend unavailable (~A); using dexador" c)
+                                                  (invoke-restart 'use-dexador)))))
+                          (prog1 (%make-async-backend) (setf *http-backend-kind* :async)))
+                      (use-dexador ()
+                        :report "Use the dexador HTTP backend"
+                        (setf *http-backend-kind* :dexador)
+                        (%make-dexador-backend)))))))))
 
 (defun response-header-value (headers name)
   "Lookup NAME in a response header hash-table (lowercase EQUAL keys)."

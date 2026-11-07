@@ -30,6 +30,9 @@ Quicklisp отлично подходит для старта с библиот�
 - Стандартные OCI-инструменты: pull через `oras`, `crane`, `skopeo` — Lisp не обязателен
 - Совместимость с OCICL
 
+
+**HTTP.** Запросы к реестру идут через `http-protocol` на асинхронном бэкенде cl-stack (`http-backend-async` × `event-backend-libuv`, TLS через `cl-stack-ssl`), если этот стек загружается; иначе — через `http-backend-dexador`. `CL_REPO_HTTP_BACKEND=async|dexador|auto` задаёт выбор явно. В CI-образах dexador остаётся, пока `setup-client` не умеет ставить нативные оверлеи.
+
 ## Системы
 
 | Система | Описание |

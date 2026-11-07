@@ -30,6 +30,9 @@ If you're familiar with qlot, cl-repo shares the same per-project dependency phi
 - Standard OCI tooling: pull with `oras`, `crane`, `skopeo` -- no Lisp required
 - Cross-compatible with OCICL
 
+
+**HTTP.** Registry traffic goes through `http-protocol` on the cl-stack async backend (`http-backend-async` × `event-backend-libuv`, TLS via `cl-stack-ssl`) whenever that stack loads; otherwise `http-backend-dexador`. `CL_REPO_HTTP_BACKEND=async|dexador|auto` forces a choice. CI images still carry dexador until `setup-client` installs native overlays.
+
 ## Systems
 
 | System | Description |

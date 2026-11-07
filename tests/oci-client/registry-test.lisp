@@ -34,3 +34,26 @@
     (ok (string= host "ghcr.io"))
     (ok (string= repo "ns/foo"))
     (ok (string= tag "latest"))))
+
+(defun %with-backend-env (value thunk)
+  (let ((old (uiop:getenv "CL_REPO_HTTP_BACKEND"))
+        (http-protocol:*http-backend* nil))
+    (unwind-protect
+         (progn (setf (uiop:getenv "CL_REPO_HTTP_BACKEND") value)
+                (funcall thunk))
+      (setf (uiop:getenv "CL_REPO_HTTP_BACKEND") (or old "")))))
+
+(deftest http-backend-selection
+  ;; explicit dexador
+  (%with-backend-env "dexador"
+    (lambda ()
+      (ok (cl-oci-client/http:ensure-http-backend))
+      (ok (eq :dexador (cl-oci-client/http:http-backend-kind)))))
+  ;; auto: the async stack when it loads here, else dexador
+  (%with-backend-env "auto"
+    (lambda ()
+      (ok (cl-oci-client/http:ensure-http-backend))
+      (ok (member (cl-oci-client/http:http-backend-kind) '(:async :dexador)))))
+  (%with-backend-env "bogus"
+    (lambda ()
+      (ok (signals (cl-oci-client/http:ensure-http-backend) 'error)))))
