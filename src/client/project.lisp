@@ -23,6 +23,7 @@
            #:expand-ci-env
            #:cmd-sync
            #:cmd-test
+           #:prepare-test
            #:cmd-run
            #:cmd-grovel
            #:*default-ql-dist*))
@@ -310,10 +311,10 @@
                    :with (append (project-with name) env-install)
                    :also-tests (getf (ci-plist name) :also-tests t))))))))))
 
-(defun cmd-test (&key (directory (uiop:getcwd)) system overlay (sync t))
-  "Sync, then asdf:test-system. A system with no test-op still exits 0."
-  (when sync
-    (cmd-sync :directory directory :system system :overlay overlay))
+(defun prepare-test (&key (directory (uiop:getcwd)) system)
+  "Make the project's install tree visible to ASDF, load init files and the
+   :load-before-test systems. Returns the system name. After this, everything
+   cl-repo sync installed (including :ci :with extras) can be loaded."
   (let ((name (or system (discover-project-system directory))))
     (unless name
       (error "cl-repo: no system to test in ~a" directory))
@@ -325,6 +326,17 @@
       (declare (ignore env-install))
       (dolist (extra (append (project-load-before-test name) env-load))
         (asdf:load-system extra)))
+    name))
+
+(defun cmd-test (&key (directory (uiop:getcwd)) system overlay (sync t) pre-test)
+  "Sync, then asdf:test-system. A system with no test-op still exits 0.
+   PRE-TEST, a function of no arguments, runs once the install tree is on the
+   registry and before the system loads (CI pre-test hooks)."
+  (when sync
+    (cmd-sync :directory directory :system system :overlay overlay))
+  (let ((name (prepare-test :directory directory :system system)))
+    (when pre-test
+      (funcall pre-test))
     (asdf:load-system name)
     (asdf:test-system name)))
 
