@@ -7,7 +7,7 @@
   (:import-from :cl-repository-client/quickload
                 #:add-registry #:ensure-system-dependencies)
   (:import-from :cl-repository-client/asdf-integration
-                #:configure-asdf-source-registry #:load-system-init-files)
+                #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*)
   (:import-from :cl-repository-client/qlot-integration
                 #:read-qlfile #:read-qlfile-lock
@@ -322,11 +322,7 @@
     (configure-asdf-source-registry)
     (multiple-value-bind (env-install env-load)
         (expand-ci-env (getf (ci-plist name) :env))
-      ;; Only this project's closure: its tests, :with extras and env systems.
-      (load-system-init-files
-       :systems (append (list name (format nil "~a/tests" name))
-                        (project-with name) env-install env-load
-                        (project-load-before-test name)))
+      (declare (ignore env-install))
       (dolist (extra (append (project-load-before-test name) env-load))
         (asdf:load-system extra)))
     name))

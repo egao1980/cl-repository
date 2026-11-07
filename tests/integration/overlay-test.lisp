@@ -186,8 +186,8 @@
                                          install-dir)))
                         (ok (uiop:file-exists-p native-lib)
                             (format nil "Expected native lib at ~a" native-lib)))
-                      ;; cl-repo-init.lisp generated
-                      (ok (uiop:file-exists-p (merge-pathnames "cl-repo-init.lisp" install-dir)))
+                      ;; No init script: packages load their own natives at ASDF load.
+                      (ng (uiop:file-exists-p (merge-pathnames "cl-repo-init.lisp" install-dir)))
                       ;; Push native/ into CFFI search path
                       (let ((native-dir (merge-pathnames "native/" install-dir)))
                         (pushnew native-dir cffi:*foreign-library-directories* :test #'equal))
