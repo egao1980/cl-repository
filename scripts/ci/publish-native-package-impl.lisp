@@ -133,10 +133,17 @@
                   (cl-repository-packager/asdf-plugin:auto-package-spec
                    name :derive-native-overlays nil))))
       (unless overlays (error "No overlays built from ~a" platforms-file))
-      ;; Staging tree is the publish source; asd :cl-repo overlays are relative
-      ;; inventory — replace with absolute artifact layers for this build.
+      ;; Staging tree is the publish source. Artifact layers are the platform
+      ;; overlays; explicit .asd :overlays fold in (same platform: extra layers
+      ;; such as headers or data files, a destination the artifacts already
+      ;; ship is skipped; named flavours and other platforms: their own overlay).
       (setf (cl-repository-packager/build-matrix:package-spec-source-dir spec) source-dir)
-      (setf (cl-repository-packager/build-matrix:package-spec-overlays spec) overlays)
+      (setf (cl-repository-packager/build-matrix:package-spec-overlays spec)
+            (let ((merge (find-symbol "MERGE-NATIVE-OVERLAYS" :cl-repository-packager/asdf-plugin)))
+              (if (and merge (fboundp merge))
+                  (funcall merge overlays
+                           (cl-repository-packager/build-matrix:package-spec-overlays spec))
+                  overlays)))
       (unless (cl-repository-packager/build-matrix:package-spec-version spec)
         (error "Package ~a has no :version in .asd and PKG_VERSION unset" name))
       (let ((result (cl-repository-packager/build-matrix:build-package spec))

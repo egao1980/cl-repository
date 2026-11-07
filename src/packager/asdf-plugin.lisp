@@ -13,7 +13,8 @@
            #:native-library-components
            #:check-native-libraries
            #:native-overlay-files
-           #:derived-native-overlays))
+           #:derived-native-overlays
+           #:merge-native-overlays))
 (in-package :cl-repository-packager/asdf-plugin)
 
 (defclass package-op (asdf:operation) ()
@@ -233,6 +234,47 @@ Only for systems with :native-library components or :native-platforms."
                           :layers (list (list :role "native-library"
                                               :files (native-overlay-files system pair dir))))))))
 
+(defun %overlay-key (o)
+  (list (cl-repository-packager/build-matrix:overlay-spec-os o)
+        (cl-repository-packager/build-matrix:overlay-spec-arch o)
+        (cl-repository-packager/build-matrix:overlay-spec-os-version o)
+        (cl-repository-packager/build-matrix::overlay-spec-lisp o)))
+
+(defun %merge-layers (into from)
+  "INTO's layers plus FROM's. A FROM layer with the same role and prefix as one
+in INTO adds its files to it; a destination already present keeps INTO's file."
+  (let ((result (mapcar #'copy-list into)))
+    (dolist (layer from result)
+      (let ((same (find-if (lambda (l) (and (equal (getf l :role) (getf layer :role))
+                                            (equal (getf l :prefix) (getf layer :prefix))))
+                           result)))
+        (if same
+            (setf (getf same :files)
+                  (append (getf same :files)
+                          (remove-if (lambda (f) (member (cdr f) (getf same :files)
+                                                         :key #'cdr :test #'string=))
+                                     (getf layer :files))))
+            (setf result (append result (list layer))))))))
+
+(defun merge-native-overlays (derived explicit)
+  "Overlay specs: DERIVED (from :native-library platform directories) with
+EXPLICIT :overlays folded in. An unnamed explicit overlay for a derived
+platform adds its layers to that overlay (headers, data files, extra
+libraries); any other explicit overlay (another platform, a named flavour such
+as cuda) is kept as its own overlay."
+  (let ((result (copy-list derived)))
+    (dolist (e explicit result)
+      (let ((d (and (null (cl-repository-packager/build-matrix:overlay-spec-name e))
+                    (find (%overlay-key e) result
+                          :key (lambda (o) (and (null (cl-repository-packager/build-matrix:overlay-spec-name o))
+                                                (%overlay-key o)))
+                          :test #'equal))))
+        (if d
+            (setf (cl-repository-packager/build-matrix:overlay-spec-layers d)
+                  (%merge-layers (cl-repository-packager/build-matrix::effective-overlay-layers d)
+                                 (cl-repository-packager/build-matrix::effective-overlay-layers e)))
+            (setf result (append result (list e))))))))
+
 (defun auto-package-spec (system-name &key (derive-native-overlays t))
   "Auto-generate a package-spec by introspecting a loaded ASDF system.
    Reads OCI packaging metadata from the system's :properties under :cl-repo.
@@ -242,9 +284,10 @@ Only for systems with :native-library components or :native-platforms."
      2. Auto-discovered from *.asd files in source-dir
      3. Fallback: (list system-name)
 
-   Native overlays: explicit :overlays, after the ones derived from the
-   platform directories (DERIVED-NATIVE-OVERLAYS) unless DERIVE-NATIVE-OVERLAYS
-   is NIL (the CI native publish builds them from its artifact directories)."
+   Native overlays: the ones derived from the platform directories
+   (DERIVED-NATIVE-OVERLAYS; skipped when DERIVE-NATIVE-OVERLAYS is NIL, as the
+   CI native publish builds them from artifact directories), with explicit
+   :overlays merged in (MERGE-NATIVE-OVERLAYS)."
   (let* ((system (asdf:find-system system-name))
          (cl-repo (system-cl-repo-properties system))
          (source-dir (asdf:system-source-directory system))
@@ -264,16 +307,14 @@ Only for systems with :native-library components or :native-platforms."
                    :cffi-libraries (or (getf cl-repo :cffi-libraries)
                                        (mapcar #'asdf:component-name
                                                (native-library-components system)))
-                   ;; Explicit :overlays (named flavours, odd layouts) come after
-                   ;; the derived ones.
-                   :overlays (mapcar #'parse-overlay-spec
-                                     (append (when (and derive-native-overlays
-                                                        ;; explicit platform overlays win;
-                                                        ;; named ones (cuda) add on top
-                                                        (notany (lambda (o) (null (getf o :name)))
-                                                                (getf cl-repo :overlays)))
-                                               (derived-native-overlays system cl-repo source-dir))
-                                             (getf cl-repo :overlays))))))
+                   ;; Derived :native-library overlays, with explicit :overlays
+                   ;; merged into the same platform or added (other platforms,
+                   ;; named flavours, generic files).
+                   :overlays (merge-native-overlays
+                              (when derive-native-overlays
+                                (mapcar #'parse-overlay-spec
+                                        (derived-native-overlays system cl-repo source-dir)))
+                              (mapcar #'parse-overlay-spec (getf cl-repo :overlays))))))
 
 (defmethod asdf:perform ((op package-op) (system asdf:system))
   (let* ((spec (auto-package-spec (asdf:component-name system)))

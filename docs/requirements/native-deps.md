@@ -88,8 +88,11 @@ components needs no hand-written `:overlays`:
   - `:native-platforms ("linux-amd64" ("windows-amd64" . "out/win/"))` is a strict list. A
     listed platform without a directory is an error. A pair may map to its own directory.
   - `:native-directory "build/{pair}/"` sets the template (`{pair}`, `{os}`, `{arch}`).
-  - Explicit `:overlays` for platforms replace the derived ones. Named overlays (`cuda`)
-    are added on top of them.
+  - Explicit `:overlays` still work, for native libraries and for any other files. One
+    for a derived platform merges into it: its layers (headers, data files, extra
+    libraries) are added, and a destination already shipped isn't duplicated. A named
+    overlay (`cuda`) or one for another platform stays its own overlay. The CI native
+    publish merges the same way.
 - `:cffi-libraries` defaults to the component names.
 
 `:defsystem-depends-on` systems are read from the `.asd` without evaluating it and

@@ -101,17 +101,27 @@
                      :files '("build/linux/amd64/libfoo.so"))
     (ok (equal (overlay-summary (auto-package-spec "nat-demo")) '(("linux-amd64" "libfoo.so"))))))
 
-(deftest explicit-overlays
+(deftest explicit-overlays-merge
   (with-project (dir :properties '(:overlays ((:platform (:os "linux" :arch "amd64")
-                                               :native-paths ("lib/linux-amd64/libfoo.so")))))
-                     :files '("lib/linux-amd64/libfoo.so" "lib/linux-amd64/libextra.so"))
-    (ok (= 1 (length (package-spec-overlays (auto-package-spec "nat-demo"))))
-        "explicit platform overlays replace the derived ones"))
+                                               :layers ((:role "native-library"
+                                                         :files (("lib/linux-amd64/libfoo.so" . "libfoo.so")))
+                                                        (:role "headers" :files ("include/foo.h"))))))
+                     :files '("lib/linux-amd64/libfoo.so" "lib/linux-amd64/libextra.so" "include/foo.h"))
+    (let* ((spec (auto-package-spec "nat-demo"))
+           (overlays (package-spec-overlays spec)))
+      (ok (= 1 (length overlays)) "same platform → one overlay")
+      (ok (equal (overlay-summary spec) '(("linux-amd64" "foo.h" "libextra.so" "libfoo.so")))
+          "derived libraries kept, headers added, libfoo.so not duplicated")
+      (ok (equal (sort (mapcar (lambda (l) (getf l :role)) (overlay-spec-layers (first overlays))) #'string<)
+                 '("headers" "native-library"))
+          "a generic layer joins the native one")))
   (with-project (dir :properties '(:overlays ((:name "cuda" :platform (:os "linux" :arch "amd64")
-                                               :native-paths ("lib/linux-amd64-cuda/libggml-cuda.so")))))
+                                               :native-paths ("lib/linux-amd64-cuda/libggml-cuda.so"))
+                                              (:platform (:os "freebsd" :arch "amd64")
+                                               :native-paths ("bsd/libfoo.so")))))
                      :files '("lib/linux-amd64/libfoo.so"))
-    (ok (= 2 (length (package-spec-overlays (auto-package-spec "nat-demo"))))
-        "a named overlay adds to the derived ones")))
+    (ok (= 3 (length (package-spec-overlays (auto-package-spec "nat-demo"))))
+        "a named flavour and another platform are their own overlays")))
 
 (deftest ci-skips-derivation
   (with-project (dir :files '("lib/linux-amd64/libgpu.so"))
