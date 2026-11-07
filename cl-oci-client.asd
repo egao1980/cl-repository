@@ -5,11 +5,11 @@
   :description "OCI Distribution Spec v1.1 HTTP client"
   :class :package-inferred-system
   :pathname "src/oci-client"
+  ;; cl-stack-ssl first: it pins cl+ssl to its own OpenSSL before dexador loads
+  ;; cl+ssl. The primary system, not cl-stack-ssl/paths: setup-client skips
+  ;; "foo/bar" dependencies.
   ;; http-backend-dexador: fallback when the async/libuv stack cannot load.
-  ;; No hard cl-stack-ssl dependency: setup-client cannot pull a multi-platform
-  ;; index yet (oras: duplicate layer names) nor a "foo/bar" secondary. Callers
-  ;; that need the overlay OpenSSL load cl-stack-ssl before this system.
-  :depends-on ("cl-oci-client/all" "http-backend-dexador")
+  :depends-on ("cl-stack-ssl" "cl-oci-client/all" "http-backend-dexador")
   :in-order-to ((test-op (test-op "cl-oci-client/tests"))))
 
 (defsystem "cl-oci-client/tests"
