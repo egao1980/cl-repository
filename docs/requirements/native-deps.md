@@ -65,6 +65,37 @@ in the shared store before tests. That preloaded natives of unrelated projects
 gone; `load-system-init-files` remains as a no-op for one release.
 
 
+### Convention: asdf-native components, no `:overlays`
+
+A system that declares its libraries as [asdf-native](https://github.com/egao1980/asdf-native)
+components needs no hand-written `:overlays`:
+
+```lisp
+(defsystem "foo"
+  :defsystem-depends-on ("asdf-native")
+  :components ((:file "package")
+               (:native-library "foo-cl")          ; loads libfoo-cl.* at ASDF load
+               (:file "ffi")))
+```
+
+- **Platforms.** Each `lib/<os>-<arch>/` directory (`linux-amd64`, `darwin-arm64`, …) becomes
+  that platform's overlay. Every file in it ships into `native/`, so libraries the
+  component's library depends on go along.
+- **Check.** Each platform must hold a file-name variant of every non-optional
+  `:native-library`, or packaging fails. The CI native publish runs the same check
+  on its artifact directories.
+- **Options** in `:properties (:cl-repo …)`:
+  - `:native-platforms ("linux-amd64" ("windows-amd64" . "out/win/"))` is a strict list. A
+    listed platform without a directory is an error. A pair may map to its own directory.
+  - `:native-directory "build/{pair}/"` sets the template (`{pair}`, `{os}`, `{arch}`).
+  - Explicit `:overlays` for platforms replace the derived ones. Named overlays (`cuda`)
+    are added on top of them.
+- `:cffi-libraries` defaults to the component names.
+
+`:defsystem-depends-on` systems are read from the `.asd` without evaluating it and
+installed from OCI before ASDF loads the file (`cl-repo sync`/`test`, the CI action and
+the native publish).
+
 ### Config Blob Metadata
 
 `cffi-libraries` in config blob maps each foreign library to:
