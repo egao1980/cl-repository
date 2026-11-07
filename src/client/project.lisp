@@ -320,10 +320,13 @@
       (error "cl-repo: no system to test in ~a" directory))
     (register-project directory)
     (configure-asdf-source-registry)
-    (load-system-init-files)
     (multiple-value-bind (env-install env-load)
         (expand-ci-env (getf (ci-plist name) :env))
-      (declare (ignore env-install))
+      ;; Only this project's closure: its tests, :with extras and env systems.
+      (load-system-init-files
+       :systems (append (list name (format nil "~a/tests" name))
+                        (project-with name) env-install env-load
+                        (project-load-before-test name)))
       (dolist (extra (append (project-load-before-test name) env-load))
         (asdf:load-system extra)))
     name))

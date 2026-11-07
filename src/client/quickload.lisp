@@ -458,7 +458,7 @@
      sources deny allow default-source
      (lambda ()
        (let ((*quiet* (or *quiet* silent)))
-         (load-system-init-files)
+         (load-system-init-files :systems system-list)
          (dolist (sys system-list)
            (msg "~&; cl-repo: loading ~a~%" sys)
            (handler-case (asdf:load-system sys)
