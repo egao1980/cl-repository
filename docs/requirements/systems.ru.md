@@ -7,7 +7,7 @@
 - `cl-oci`: модель OCI (дескрипторы, manifests, index, config, serialization).
 - `cl-oci-client`: HTTP-клиент OCI Distribution Spec.
 - `cl-repository-packager`: упаковка CL-систем в OCI.
-- `cl-repository-client`: установка/резолв/CLI.
+- `cl-repository-client`: установка/резолв/CLI. Init-файлов нет: пакеты сами загружают свои нативные библиотеки.
 - `cl-repository-ql-exporter`: экспорт Quicklisp/Ultralisp в OCI.
 
 ## Принцип

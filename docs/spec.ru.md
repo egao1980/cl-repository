@@ -25,7 +25,7 @@
 
 ## Нативные зависимости (cffi-libraries)
 
-В config-блобе `cffi-libraries` сопоставляет каждой нативной библиотеке метаданные: `define-foreign-library`, `canary` и `search-path`. При установке `search-path` добавляется в `cffi:*foreign-library-directories*` (через `cl-repo-init.lisp`), чтобы `define-foreign-library` находил поставляемую библиотеку. В `.asd` запись допускается как имя-строка, так и `(имя . plist)`.
+В config-блобе `cffi-libraries` сопоставляет каждой нативной библиотеке метаданные: `define-foreign-library`, `canary` и `search-path`. Это метаданные пакета: при установке клиент не выполняет кода. Загрузчик самой системы при загрузке через ASDF добавляет `search-path` в `cffi:*foreign-library-directories*` и загружает поставляемую библиотеку по абсолютному пути. В `.asd` запись допускается как имя-строка, так и `(имя . plist)`.
 
 ## CI потребителя (`:ci`)
 

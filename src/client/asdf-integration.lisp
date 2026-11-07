@@ -26,11 +26,8 @@
         (asdf:initialize-source-registry new-config)))))
 
 (defun load-system-init-files ()
-  "Load cl-repo-init.lisp files from all installed systems for CFFI setup."
-  (let ((root (systems-root)))
-    (when (probe-file root)
-      (dolist (system-dir (uiop:subdirectories root))
-        (dolist (version-dir (uiop:subdirectories system-dir))
-          (let ((init-file (merge-pathnames "cl-repo-init.lisp" version-dir)))
-            (when (probe-file init-file)
-              (load init-file))))))))
+  "Deprecated no-op, kept for one release for callers' scripts.
+   cl-repo no longer writes or loads cl-repo-init.lisp: a package that ships
+   native libraries loads them itself at ASDF load (absolute paths from its
+   native/ directory), so (asdf:load-system \"foo\") is all a consumer needs."
+  nil)

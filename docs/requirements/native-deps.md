@@ -42,17 +42,27 @@ CFFI grovel output is **OS+architecture dependent but CL-implementation-independ
 
 ### Post-Install
 
-1. Push `<system-root>/native/` to `cffi:*foreign-library-directories*`
-2. **Absolute preload:** `cl-repo-init.lisp` calls `cffi:load-foreign-library` on each
-   shared object under `native/` (absolute path, `libcrypto` before `libssl`) so a
-   distro library with the same soname (e.g. Ubuntu `libssl.so.3`) cannot win via
-   bare `dlopen`. Init runs before `asdf:load-system`.
-3. Redirect grovel-file ASDF components to use cached `.cffi.lisp` from `grovel-cache/`
-4. For CFFI canary pattern: prebuilt libs work transparently
-5. Falls back to from-source groveling if C compiler is available
+The client only places files: shared objects under `<system-root>/native/`,
+grovel output under `grovel-cache/`. **It writes and runs no init script.**
+
+1. **The package loads its own natives at ASDF load.** Its first component (a
+   `loader.lisp` or `ffi.lisp`) looks in `native/` (installed overlay), then
+   `lib/<os>-<arch>/` (a checkout with built libraries), pushes that directory onto
+   `cffi:*foreign-library-directories*`, and calls `cffi:load-foreign-library` on
+   **absolute paths** (dependencies first, e.g. `libcrypto` before `libssl`), so a
+   distro library with the same soname cannot win through a bare `dlopen`. Consumers
+   need nothing beyond `(asdf:load-system "foo")`.
+2. Redirect grovel-file ASDF components to use cached `.cffi.lisp` from `grovel-cache/`
+3. For CFFI canary pattern: prebuilt libs work transparently
+4. Falls back to from-source groveling if C compiler is available
 
 Do **not** rely on `LD_LIBRARY_PATH` for overlay correctness — mid-process
 `setenv` is ignored by the dynamic linker on Linux; absolute preload is the supported path.
+
+Earlier clients generated a `cl-repo-init.lisp` per system and loaded every one
+in the shared store before tests. That preloaded natives of unrelated projects
+(on a developer machine, a library whose initialisers abort the process) and is
+gone; `load-system-init-files` remains as a no-op for one release.
 
 
 ### Config Blob Metadata

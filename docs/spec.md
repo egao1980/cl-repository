@@ -278,7 +278,6 @@ After installation:
     cffi.asd
     src/...
     native/
-    cl-repo-init.lisp
   cffi-toolchain -> cffi           ← symlink
   cffi-libffi -> cffi              ← symlink
   .digest-cache.sexp               ← digest dedup cache
@@ -286,14 +285,10 @@ After installation:
 
 ### Post-Install Integration
 
-For systems with native dependencies, `cl-repo-init.lisp` is generated:
-
-```lisp
-(when (find-package :cffi)
-  (pushnew #p"<system-root>/native/"
-           (symbol-value (find-symbol "*FOREIGN-LIBRARY-DIRECTORIES*" :cffi))
-           :test #'equal))
-```
+The client generates and runs no init file. A system with native dependencies
+loads them itself at ASDF load: its loader finds `<system-root>/native/`, pushes it
+onto `cffi:*foreign-library-directories*` and loads each library by absolute path
+([native deps](requirements/native-deps.md)). Consumers only call `asdf:load-system`.
 
 The ASDF source registry includes the systems tree:
 
@@ -402,9 +397,9 @@ the metadata serialized into the [config blob](#config-blob-schema):
                            :search-path "native/"))
 ```
 
-At install time these populate `cl-repo-init.lisp`, which pushes each `:search-path`
-onto `cffi:*foreign-library-directories*` so the system's own `define-foreign-library`
-resolves the bundled library (Post-Install, [native deps](requirements/native-deps.md)).
+These are package metadata. The client runs no code at install; the system's own
+loader pushes each `:search-path` onto `cffi:*foreign-library-directories*` and loads
+the bundled library at ASDF load (Post-Install, [native deps](requirements/native-deps.md)).
 
 ### Provides Resolution
 

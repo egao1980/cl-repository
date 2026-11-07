@@ -7,7 +7,7 @@
   (:import-from :cl-repository-client/quickload
                 #:add-registry #:ensure-system-dependencies)
   (:import-from :cl-repository-client/asdf-integration
-                #:configure-asdf-source-registry #:load-system-init-files)
+                #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*)
   (:import-from :cl-repository-client/qlot-integration
                 #:read-qlfile #:read-qlfile-lock
@@ -320,7 +320,6 @@
       (error "cl-repo: no system to test in ~a" directory))
     (register-project directory)
     (configure-asdf-source-registry)
-    (load-system-init-files)
     (multiple-value-bind (env-install env-load)
         (expand-ci-env (getf (ci-plist name) :env))
       (declare (ignore env-install))

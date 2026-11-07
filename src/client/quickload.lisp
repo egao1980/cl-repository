@@ -28,8 +28,7 @@
   (:import-from :cl-repository-client/version-utils #:select-preferred-version #:version<)
   (:import-from :cl-repository-client/dep-satisfy
                 #:system-direct-dep-specs #:system-satisfied-p #:note-minimum)
-  (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry
-                #:load-system-init-files)
+  (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/lockfile
                 #:lockfile-entry #:add-lockfile-entry)
   (:import-from :cl-repository-client/protected-systems
@@ -458,7 +457,6 @@
      sources deny allow default-source
      (lambda ()
        (let ((*quiet* (or *quiet* silent)))
-         (load-system-init-files)
          (dolist (sys system-list)
            (msg "~&; cl-repo: loading ~a~%" sys)
            (handler-case (asdf:load-system sys)

@@ -11,7 +11,7 @@
 - Разделение universal source и platform overlays.
 - Явная привязка к платформе (`os`, `arch`, опционально `os-version`, `implementation`).
 - Возможность ship prebuilt shared libraries и pre-groveled output.
-- Корректная интеграция в runtime через init/loader логику.
+- Интеграция в runtime — загрузчиком самого пакета при загрузке через ASDF (библиотеки из `native/` по абсолютному пути). cl-repo не генерирует и не выполняет init-скрипты.
 
 ## Практика
 

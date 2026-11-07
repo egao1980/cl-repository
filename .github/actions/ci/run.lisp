@@ -194,7 +194,6 @@
                         (let ((sources (cl-repository-ci-lib:ci-sources ci)))
                           (when sources (list :sources sources)))))))))
   (cl-repository-client/asdf-integration:configure-asdf-source-registry)
-  (cl-repository-client/asdf-integration:load-system-init-files)
   ;; Load the packager with the checkout off the registry. A project system
   ;; that the packager also depends on (http-protocol) would otherwise shadow
   ;; the installed copy and miss dependencies that are not in the checkout.

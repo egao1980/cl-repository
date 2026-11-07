@@ -57,7 +57,6 @@
            (cl-repo:ensure-systems "cl-repository-packager" :default-source :oci))
        (cl-repo:ensure-systems "cl-oci-client" :default-source :oci))))
   (cl-repository-client/asdf-integration:configure-asdf-source-registry)
-  (cl-repository-client/asdf-integration:load-system-init-files)
   (%ci-muffle
    (lambda ()
      (asdf:load-system "cl-repository-packager")
