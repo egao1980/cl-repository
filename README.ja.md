@@ -30,6 +30,9 @@ qlot を使っている場合、`cl-repo` も「プロジェクト単位で依�
 - 標準 OCI ツール対応（`oras` / `crane` / `skopeo`）
 - OCICL 互換
 
+
+**HTTP.** レジストリ通信は `http-protocol` 上の cl-stack 非同期バックエンド（`http-backend-async` × `event-backend-libuv`、TLS は `cl-stack-ssl`）を、そのスタックがロードできる場合に使用し、できない場合は `http-backend-dexador` を使います。`CL_REPO_HTTP_BACKEND=async|dexador|auto` で選択を強制できます。`setup-client` がネイティブオーバーレイをインストールできるようになるまで、CI イメージには dexador が残ります。
+
 ## システム一覧
 
 | System | Description |
