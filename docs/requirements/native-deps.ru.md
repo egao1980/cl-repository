@@ -11,6 +11,7 @@
 - Разделение universal source и platform overlays.
 - Явная привязка к платформе (`os`, `arch`, опционально `os-version`, `implementation`).
 - Возможность ship prebuilt shared libraries и pre-groveled output.
+- Система с компонентами asdf-native `:native-library` не пишет `:overlays`: каждый каталог `lib/<os>-<arch>/` становится overlay своей платформы (все файлы в `native/`, обязательные библиотеки проверяются). Явные `:overlays` той же платформы сливаются с ним (заголовки, данные), именованные (cuda) и другие платформы остаются отдельными overlay. `:defsystem-depends-on` читается из .asd без выполнения и ставится из OCI заранее.
 - Интеграция в runtime — загрузчиком самого пакета при загрузке через ASDF (библиотеки из `native/` по абсолютному пути). cl-repo не генерирует и не выполняет init-скрипты.
 
 ## Практика

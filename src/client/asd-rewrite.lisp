@@ -5,6 +5,7 @@
   (:import-from :cl-repository-client/asd-text
                 #:find-defsystem-span #:plist-value-span #:splice #:print-value-at #:line-column)
   (:export #:cmd-add-overlay
+           #:asd-defsystem-depends-on
            #:read-system-overlays
            #:overlay-entry-key))
 (in-package :cl-repository-client/asd-rewrite)
@@ -27,6 +28,30 @@
                   (or (null name)
                       (string-equal (princ-to-string (second form)) name))))
            forms))
+
+(defun %dep-name (dep)
+  "Downcased system name of a :defsystem-depends-on entry, or NIL."
+  (cond ((stringp dep) (string-downcase dep))
+        ((and dep (symbolp dep)) (string-downcase (symbol-name dep)))
+        ((and (consp dep) (member (first dep) '(:version :feature) :test #'string-equal))
+         (%dep-name (if (string-equal (first dep) :feature) (third dep) (second dep))))
+        (t nil)))
+
+(defun asd-defsystem-depends-on (path)
+  "System names in every defsystem's :DEFSYSTEM-DEPENDS-ON in the .asd at PATH,
+read without evaluating it (*READ-EVAL* NIL). Those systems must be present
+before ASDF can load the file, so they can't come from walking a loaded
+system. NIL when the file can't be read statically (#. or an unknown package
+prefix): ASDF then reports what is missing."
+  (let ((forms (handler-case (read-lisp-forms path)
+                 (reader-error () nil)
+                 (package-error () nil))))
+    (remove-duplicates
+     (loop for form in forms
+           when (defsystem-form-p form)
+             append (remove nil (mapcar #'%dep-name
+                                        (getf (cddr form) :defsystem-depends-on))))
+     :test #'string=)))
 
 (defun plist-put (plist key value)
   (if (and plist (nth-value 1 (get-properties plist (list key))))

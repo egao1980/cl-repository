@@ -186,6 +186,10 @@
        ;; system it (or the client) depends on — http-protocol, encoding-protocol
        ;; — from the checkout, whose new deps are not installed yet
        ;; (MISSING-DEPENDENCY encoding-protocol on http-protocol 0.3.9 publish).
+       ;; :defsystem-depends-on (asdf-native …) must be installed before the
+       ;; checkout .asd can load. Older clients lack the function.
+       (let ((f (find-symbol "ENSURE-DEFSYSTEM-DEPENDS-ON" :cl-repo)))
+         (when (and f (fboundp f)) (funcall f (uiop:getcwd))))
        (let ((ci (cl-repository-ci-lib:system-ci-plist system)))
          (apply #'cl-repo:ensure-system-dependencies system
                 :also-tests nil :default-source :oci

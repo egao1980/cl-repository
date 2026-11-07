@@ -41,9 +41,12 @@
 missing native library), as opposed to bugs."
   (or (typep condition 'asdf:missing-component)
       (typep condition 'asdf:missing-dependency)
-      (let ((cffi-error (and (find-package "CFFI")
-                             (find-symbol "LOAD-FOREIGN-LIBRARY-ERROR" "CFFI"))))
-        (and cffi-error (typep condition cffi-error)))))
+      (flet ((named-type-p (package name)
+               (let ((type (and (find-package package) (find-symbol name package))))
+                 (and type (typep condition type)))))
+        (or (named-type-p "CFFI" "LOAD-FOREIGN-LIBRARY-ERROR")
+            ;; event-backend-libuv's (:native-library "uv") with no libuv anywhere
+            (named-type-p "ASDF-NATIVE" "NATIVE-LIBRARY-NOT-FOUND")))))
 
 (defun %make-async-backend ()
   ;; cl-stack-ssl first: it pins cl+ssl to its own OpenSSL when present
