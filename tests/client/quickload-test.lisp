@@ -238,3 +238,38 @@
       (dolist (s '("cl-dsd-root" "cl-dsd-pkg" "cl-dsd-definer"))
         (asdf:clear-system s))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest test-installed-but-too-old-is-resolved-again
+  "lisp-mcp needs mcp-protocol 0.3.0; an installed 0.2.0 counted as \"already
+   available via ASDF\", nothing was installed, and sync ended with \"system
+   mcp-protocol is not in the registry\"."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-min-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (sym 'cl-repository-client/constraint-builder:build-install-plan)
+         (orig (fdefinition sym))
+         (calls '()))
+    (ensure-directories-exist dir)
+    (with-open-file (out (merge-pathnames "cl-min-demo.asd" dir) :direction :output :if-exists :supersede)
+      (write-string "(defsystem \"cl-min-demo\" :version \"0.2.0\")" out))
+    (push dir asdf:*central-registry*)
+    (unwind-protect
+         (progn
+           (setf (fdefinition sym)
+                 (lambda (name version registries &key force)
+                   (declare (ignore registries force))
+                   (push name calls)
+                   (values (list (cons name (if (eq version :latest) "0.3.0" version))) nil)))
+           (let ((*standard-output* (make-broadcast-stream))
+                 (asdf/session:*asdf-session* nil))
+             (ok (null (cl-repository-client/quickload::%resolve-one-into-plan
+                        "cl-min-demo" nil nil :minimum "0.1.0"))
+                 "new enough: kept")
+             (ok (equal '(("cl-min-demo" . "0.3.0"))
+                        (cl-repository-client/quickload::%resolve-one-into-plan
+                         "cl-min-demo" nil nil :minimum "0.3.0"))
+                 "too old: resolved from the registry")
+             (ok (equal '("cl-min-demo") calls))))
+      (setf (fdefinition sym) orig)
+      (setf asdf:*central-registry* (remove dir asdf:*central-registry*))
+      (asdf:clear-system "cl-min-demo")
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

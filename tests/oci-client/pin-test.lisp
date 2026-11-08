@@ -158,3 +158,29 @@
       (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
       (uiop:delete-directory-tree client :validate t :if-does-not-exist :ignore)
       (uiop:delete-directory-tree checkout :validate t :if-does-not-exist :ignore))))
+
+(deftest defined-system-names-skip-dot-directories
+  "A checkout's .qlot/ links into ~/.cache/qlot; its systems are not the checkout's."
+  (let* ((checkout (%tmp-tree "co-dot"))
+         (elsewhere (%tmp-tree "qlot-cache")))
+    (unwind-protect
+         (progn
+           (%write-system checkout "1.0.0")
+           (ensure-directories-exist (merge-pathnames "sub/" checkout))
+           (with-open-file (s (merge-pathnames "sub/pin-sub.asd" checkout) :direction :output)
+             (write-string "(defsystem \"pin-sub\")" s))
+           (ensure-directories-exist elsewhere)
+           (with-open-file (s (merge-pathnames "foreign.asd" elsewhere) :direction :output)
+             (write-string "(defsystem \"foreign\")" s))
+           (ensure-directories-exist (merge-pathnames ".qlot/" checkout))
+           (with-open-file (s (merge-pathnames ".qlot/hidden.asd" checkout) :direction :output)
+             (write-string "(defsystem \"hidden\")" s))
+           #+unix (uiop:run-program (list "ln" "-s" (namestring elsewhere)
+                                          (namestring (merge-pathnames ".qlot/link" checkout))))
+           (let ((names (cl-oci-client/pin::defined-system-names (list checkout))))
+             (ok (gethash "pin-demo" names))
+             (ok (gethash "pin-sub" names) "subdirectories count")
+             (ng (gethash "hidden" names) "not inside a dot-directory")
+             (ng (gethash "foreign" names) "not through a symlink in one")))
+      (uiop:delete-directory-tree checkout :validate t :if-does-not-exist :ignore)
+      (uiop:delete-directory-tree elsewhere :validate t :if-does-not-exist :ignore))))

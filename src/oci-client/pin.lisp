@@ -36,15 +36,23 @@
         directories))
 
 (defun defined-system-names (directories)
-  "Primary names of the .asd files under DIRECTORIES (a project checkout),
-   skipping the install trees and qlot trees a checkout may hold."
+  "Primary names of the .asd files under DIRECTORIES (a project checkout).
+   Dot-directories (.git, .qlot, .cl-repository, ...) are not entered: their
+   symlinks lead to other trees, and DIRECTORY returns truenames, so a path
+   filter afterwards saw ~/.cache/qlot/... and took cl+ssl, usocket and the
+   rest of a qlot tree for the checkout's own systems."
   (let ((names (make-hash-table :test #'equal)))
     (dolist (dir directories names)
-      (dolist (asd (ignore-errors
-                    (directory (merge-pathnames "**/*.asd" (uiop:ensure-directory-pathname dir)))))
-        (let ((path (namestring asd)))
-          (unless (or (search "/.cl-repository/" path) (search "/.qlot/" path))
-            (setf (gethash (string-downcase (pathname-name asd)) names) t)))))))
+      (ignore-errors
+       (uiop:collect-sub*directories
+        (uiop:ensure-directory-pathname dir)
+        (constantly t)
+        (lambda (sub)
+          (let ((leaf (car (last (pathname-directory sub)))))
+            (not (and (stringp leaf) (plusp (length leaf)) (char= (char leaf 0) #\.)))))
+        (lambda (sub)
+          (dolist (asd (uiop:directory-files sub "*.asd"))
+            (setf (gethash (string-downcase (pathname-name asd)) names) t))))))))
 
 (defun loaded-system-files (&key except)
   "Hash table of every loaded system's name → the .asd it was loaded from,
