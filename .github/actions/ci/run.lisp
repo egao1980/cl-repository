@@ -123,6 +123,22 @@
                                  :if-exists :append :if-does-not-exist :create)
               (format out "~a=~a~%" (cdr pair) ver))))))))
 
+(defun %sync-extras ()
+  "Install roots beyond the .asd: the action's `with:` input and what the
+   pre-install hook pushed onto cl-repository-ci-lib:*extra-with*."
+  (cl-repository-ci-lib:ci-with nil (cl-repository-ci-lib:split-ws (%env "CL_REPO_CI_WITH" ""))))
+
+(defun %call-with-sync-extras (thunk)
+  "Run THUNK with the client's *SYNC-WITH* bound to %SYNC-EXTRAS. Clients
+   before 0.27.3 have no *SYNC-WITH*; they get THUNK alone."
+  (let ((sym (find-symbol "*SYNC-WITH*" :cl-repo))
+        (extras (%sync-extras)))
+    (when extras
+      (format t "~&; ci: extra install roots ~{~a~^, ~}~%" extras))
+    (if (and sym extras)
+        (progv (list sym) (list extras) (funcall thunk))
+        (funcall thunk))))
+
 (defun %run-install ()
   (let ((system (%resolve-system)))
     (format t "~&; ci: install ~a~%" system)
@@ -130,7 +146,8 @@
     (%maybe-load-hook "pre-install")
     (%ci-muffle
      (lambda ()
-       (cl-repo:cmd-sync :directory (uiop:getcwd) :system system)))
+       (%call-with-sync-extras
+        (lambda () (cl-repo:cmd-sync :directory (uiop:getcwd) :system system)))))
     (%record-versions (cl-repository-ci-lib:ci-record-versions
                        (cl-repository-ci-lib:system-ci-plist system)))
     (%maybe-load-hook "post-install")
@@ -145,8 +162,10 @@
     (if (find-symbol "PREPARE-TEST" :cl-repo)
         (%ci-muffle
          (lambda ()
-           (cl-repo:cmd-test :directory (uiop:getcwd) :system system
-                             :pre-test (lambda () (%maybe-load-hook "pre-test")))))
+           (%call-with-sync-extras
+            (lambda ()
+              (cl-repo:cmd-test :directory (uiop:getcwd) :system system
+                                :pre-test (lambda () (%maybe-load-hook "pre-test")))))))
         (progn
           (%maybe-load-hook "pre-test")
           (%ci-muffle

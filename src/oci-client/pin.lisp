@@ -12,19 +12,27 @@
 (defpackage :cl-oci-client/pin
   (:use :cl)
   (:export #:with-loaded-systems-pinned
-           #:loaded-system-files))
+           #:loaded-system-files
+           #:pinned-system-p))
 (in-package :cl-oci-client/pin)
 
 (defvar *pinned* nil
   "While pinned: hash table of loaded system name → its .asd pathname.")
 
-(defun loaded-system-files ()
-  "Hash table of every loaded system's name → the .asd it was loaded from."
+(defun under-any-p (file directories)
+  (some (lambda (dir)
+          (uiop:subpathp (or (probe-file file) file)
+                         (uiop:ensure-directory-pathname (or (probe-file dir) dir))))
+        directories))
+
+(defun loaded-system-files (&key except)
+  "Hash table of every loaded system's name → the .asd it was loaded from,
+   leaving out systems whose .asd lies under one of the EXCEPT directories."
   (let ((table (make-hash-table :test #'equal)))
     (dolist (name (asdf:already-loaded-systems) table)
       (let* ((sys (asdf:registered-system name))
              (file (and sys (asdf:system-source-file sys))))
-        (when file
+        (when (and file (not (under-any-p file except)))
           (setf (gethash name table) file))))))
 
 (defun pinned-system-search (name)
@@ -34,12 +42,17 @@
 
 (pushnew 'pinned-system-search asdf:*system-definition-search-functions*)
 
-(defun call-with-loaded-systems-pinned (thunk)
+(defun pinned-system-p (name)
+  "True while NAME is pinned: loaded in this image and outside the checkout."
+  (and *pinned* (nth-value 1 (gethash (string-downcase (string name)) *pinned*))))
+
+(defun call-with-loaded-systems-pinned (thunk &key except)
   (if *pinned*
       (funcall thunk)
-      (let ((*pinned* (loaded-system-files)))
+      (let ((*pinned* (loaded-system-files :except except)))
         (funcall thunk))))
 
-(defmacro with-loaded-systems-pinned (() &body body)
-  "Run BODY with every loaded system resolving to the .asd it was loaded from."
-  `(call-with-loaded-systems-pinned (lambda () ,@body)))
+(defmacro with-loaded-systems-pinned ((&key except) &body body)
+  "Run BODY with every loaded system resolving to the .asd it was loaded from.
+   Systems under the EXCEPT directories (a project checkout) are not pinned."
+  `(call-with-loaded-systems-pinned (lambda () ,@body) :except ,except))

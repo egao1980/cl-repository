@@ -54,3 +54,27 @@
     (let ((e (signalled 503)))
       (ok (and (typep e 'registry-error) (not (typep e '(or auth-error not-found-error)))))
       (ok (equal "{\"errors\":[]}" (registry-error-body e))))))
+
+(deftest pinning-skips-the-checkout
+  "cmd-test pins what the image already runs, except the project checkout:
+   its systems must load from the checkout even when already loaded."
+  (let ((live (%tmp-tree "co")) (other (%tmp-tree "co-other"))
+        (saved asdf:*source-registry-parameter*))
+    (%write-system live "2.0.0")
+    (%write-system other "1.0.0")
+    (unwind-protect
+         (progn
+           (asdf:initialize-source-registry `(:source-registry (:directory ,live) :ignore-inherited-configuration))
+           (handler-bind ((warning #'muffle-warning)) (asdf:load-system "pin-demo"))
+           (asdf:initialize-source-registry
+            `(:source-registry (:directory ,other) :ignore-inherited-configuration))
+           (with-loaded-systems-pinned ()
+             (ok (equal "2.0.0" (asdf:component-version (asdf:find-system "pin-demo")))))
+           ;; The loaded copy lives in the excepted checkout: resolve normally.
+           (with-loaded-systems-pinned (:except (list live))
+             (ok (equal "1.0.0" (asdf:component-version (asdf:find-system "pin-demo"))))))
+      (asdf:clear-system "pin-demo")
+      (when (find-package "PIN-DEMO") (delete-package "PIN-DEMO"))
+      (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+      (uiop:delete-directory-tree live :validate t :if-does-not-exist :ignore)
+      (uiop:delete-directory-tree other :validate t :if-does-not-exist :ignore))))
