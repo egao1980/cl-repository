@@ -2,9 +2,10 @@
 ;;;; Preserves the Dexador-era (values body status headers) contract used by
 ;;;; registry/auth/QL exporter, while matching cl-stack-http wire semantics.
 ;;;;
-;;;; Backend: the cl-stack async backend on libuv (http-backend-async +
-;;;; event-backend-libuv, TLS through cl-stack-ssl) whenever it loads;
-;;;; http-backend-dexador otherwise. CL_REPO_HTTP_BACKEND=async|dexador forces one.
+;;;; Backend: http-backend-dexador by default (see %DEFAULT-BACKEND-CHOICE);
+;;;; CL_REPO_HTTP_BACKEND=auto uses the cl-stack async backend on libuv
+;;;; (http-backend-async + event-backend-libuv, TLS through cl-stack-ssl) when
+;;;; it loads, =async requires it, =dexador forces dexador.
 ;;;; The client package ships the async stack (qlfile seeds for setup-client,
 ;;;; which pulls the libuv overlay per platform). Dexador stays as the fallback
 ;;;; for platforms without that overlay. cl-stack-ssl is a dependency
@@ -31,9 +32,21 @@
 
 (defun http-backend-kind () *http-backend-kind*)
 
+(defun %default-backend-choice ()
+  "The backend when CL_REPO_HTTP_BACKEND is unset: dexador, for now.
+   CL_REPO_HTTP_BACKEND=auto (async, else dexador) or =async opts in.
+   - http-backend-async 0.2.14 (what the client package ships) hangs on a HEAD
+     response, so every blob push timed out; fixed in 0.2.15.
+   - On macOS and Windows cl+ssl can load the OpenSSL it finds before
+     cl-stack-ssl loads its own; the async TLS path then gives cl+ssl's global
+     SSL_CTX to the other library and the image faults (CI, SBCL 2.6.10).
+   Dexador is what 0.27.4 used everywhere."
+  :dexador)
+
 (defun %env-backend ()
   (let ((v (uiop:getenv "CL_REPO_HTTP_BACKEND")))
-    (cond ((or (null v) (string= v "") (string-equal v "auto")) :auto)
+    (cond ((or (null v) (string= v "")) (%default-backend-choice))
+          ((string-equal v "auto") :auto)
           ((string-equal v "async") :async)
           ((string-equal v "dexador") :dexador)
           (t (error "CL_REPO_HTTP_BACKEND must be async, dexador or auto, not ~S" v)))))
