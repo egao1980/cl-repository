@@ -347,8 +347,10 @@ before any :depends-on walk can see them. → the names installed."
   (let ((name (or system (discover-project-system directory))))
     (unless name
       (error "cl-repo: no system to test in ~a" directory))
+    ;; register-project lists the checkout before the store. Do not prepend
+    ;; the store again (configure-asdf-source-registry): an installed copy of
+    ;; the project would then shadow the checkout.
     (register-project directory)
-    (configure-asdf-source-registry)
     (multiple-value-bind (env-install env-load)
         (expand-ci-env (getf (ci-plist name) :env))
       (declare (ignore env-install))
