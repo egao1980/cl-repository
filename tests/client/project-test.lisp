@@ -142,7 +142,9 @@
                 :directory project :system "cl-repo-shadow-demo"))
              (let ((system (asdf:find-system "cl-repo-shadow-demo")))
                (ok (equal "2.0" (asdf:component-version system)))
-               (ok (uiop:subpathp (asdf:system-source-file system) project))))
+               ;; Truenames: ASDF reports /private/var/... for macOS's /var/... temp dir.
+               (ok (uiop:subpathp (truename (asdf:system-source-file system))
+                                  (truename project)))))
         (asdf:clear-system "cl-repo-shadow-demo")
         (asdf:initialize-source-registry saved)
         (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
@@ -271,4 +273,31 @@
            (ok (null (asdf:find-system "cl-repo-qlot-only" nil))))
       (asdf:clear-system "cl-repo-qlot-only")
       (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest configure-registry-rescans-the-install-tree
+  "0.27.1: once the install tree was registered, configure-asdf-source-registry
+   no longer re-initialized, so a system installed during sync (rove) stayed
+   invisible: \"cl-repo: system rove is not in the registry\"."
+  (let* ((saved asdf:*source-registry-parameter*)
+         (dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-rescan-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (root (cl-repository-client/installer:systems-root))
+         (pkg (merge-pathnames (format nil "cl-repo-rescan-demo/1.0.0-~36r/" (random (expt 36 6))) root)))
+    (ensure-directories-exist dir)
+    (ensure-directories-exist root)
+    (unwind-protect
+         (progn
+           (cl-repository-client/project::register-project dir)
+           ;; An install lands after the registry was scanned.
+           (ensure-directories-exist pkg)
+           (with-open-file (s (merge-pathnames "cl-repo-rescan-demo.asd" pkg) :direction :output)
+             (write-string "(defsystem \"cl-repo-rescan-demo\")" s))
+           (ng (asdf:find-system "cl-repo-rescan-demo" nil))
+           (cl-repository-client/asdf-integration:configure-asdf-source-registry)
+           (ok (asdf:find-system "cl-repo-rescan-demo" nil)))
+      (asdf:clear-system "cl-repo-rescan-demo")
+      (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+      (uiop:delete-directory-tree (uiop:pathname-parent-directory-pathname pkg)
+                                  :validate t :if-does-not-exist :ignore)
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

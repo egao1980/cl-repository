@@ -19,27 +19,28 @@
              (rest parameter))))
 
 (defun configure-asdf-source-registry ()
-  "Prepend the cl-repository systems directory to the ASDF source registry.
-   Preserves existing programmatic configuration (e.g. Quicklisp paths)."
+  "Put the cl-repository systems directory on the ASDF source registry and
+   re-scan it, so systems installed since the last scan are found.
+   Preserves existing programmatic configuration (e.g. Quicklisp paths).
+   ASDF scans a :tree once, at INITIALIZE-SOURCE-REGISTRY, so this must
+   re-initialize even when the tree is already registered (0.27.1 stopped
+   doing that and lost every system a sync installed: \"rove is not in the
+   registry\")."
   (let ((root (systems-root)))
-    (when (and (probe-file root)
-               ;; Already on the registry (register-project put it there, after
-               ;; the checkout): prepending again would shadow the system under
-               ;; test with an older installed copy of itself.
-               (not (registry-mentions-p asdf/source-registry:*source-registry-parameter* root)))
+    (when (probe-file root)
       (let* ((root-str (namestring root))
              (current asdf/source-registry:*source-registry-parameter*)
              (new-config
-               (if (and (listp current)
-                        (eq (first current) :source-registry))
-                   ;; Prepend our tree to existing config entries
-                   `(:source-registry
-                     (:tree ,root-str)
-                     ,@(rest current))
-                   ;; No prior programmatic config — inherit defaults
-                   `(:source-registry
-                     (:tree ,root-str)
-                     :inherit-configuration))))
+               (cond
+                 ;; Already registered (register-project put it after the
+                 ;; checkout): keep the order — prepending would shadow the
+                 ;; system under test with an older installed copy — but
+                 ;; re-scan.
+                 ((registry-mentions-p current root) current)
+                 ((and (listp current) (eq (first current) :source-registry))
+                  `(:source-registry (:tree ,root-str) ,@(rest current)))
+                 (t
+                  `(:source-registry (:tree ,root-str) :inherit-configuration)))))
         (asdf:initialize-source-registry new-config)))))
 
 (defun load-system-init-files ()
