@@ -304,3 +304,32 @@
       (uiop:delete-directory-tree (uiop:pathname-parent-directory-pathname pkg)
                                   :validate t :if-does-not-exist :ignore)
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest install-tree-prefers-the-newest-or-locked-version
+  "ASDF takes the first .asd in a :tree (path order): with serdes-protocol 0.2.0
+   and 0.2.2 installed, 0.2.0 won and mime-protocol 0.1.4 failed to read."
+  (let* ((saved asdf:*source-registry-parameter*)
+         (root (uiop:ensure-directory-pathname
+                (format nil "~a/cl-repo-versions-~36r/" (uiop:temporary-directory) (random (expt 36 6))))))
+    (dolist (v '("0.2.0" "0.2.2" "0.10.1"))
+      (let ((dir (merge-pathnames (format nil "cl-repo-multi-demo/~a/" v) root)))
+        (ensure-directories-exist dir)
+        (with-open-file (s (merge-pathnames "cl-repo-multi-demo.asd" dir) :direction :output)
+          (format s "(defsystem \"cl-repo-multi-demo\" :version ~s)" v))))
+    (flet ((resolved (locked)
+             (asdf:initialize-source-registry
+              `(:source-registry
+                ,@(cl-repository-client/project::preferred-install-trees root locked)
+                (:tree ,(namestring root))
+                :ignore-inherited-configuration))
+             (asdf:clear-system "cl-repo-multi-demo")
+             (let ((asdf/session:*asdf-session* nil))
+               (asdf:component-version (asdf:find-system "cl-repo-multi-demo")))))
+      (unwind-protect
+           (progn
+             (ok (equal "0.10.1" (resolved nil)) "newest, not the first in path order")
+             (ok (equal "0.2.0" (resolved '(("cl-repo-multi-demo" . "0.2.0")))) "the locked version")
+             (ok (equal "0.10.1" (resolved '(("cl-repo-multi-demo" . "9.9.9")))) "a lock naming no installed version"))
+        (asdf:clear-system "cl-repo-multi-demo")
+        (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+        (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))))

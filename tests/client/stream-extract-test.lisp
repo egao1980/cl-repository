@@ -140,3 +140,21 @@
              (ok (= inode (sb-posix:stat-ino (sb-posix:stat path))))
              (ok (equalp (%file-octets path) bytes))))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest atomic-write-of-a-file-without-a-type
+  "LICENSE / VERSION have no pathname type: the temp's type leaked into the
+   rename target, so 0.27.4 never wrote them and left LICENSE.tmp-N behind."
+  (let ((dir (uiop:ensure-directory-pathname
+              (format nil "~a/cl-repo-atomic-~36r/" (uiop:temporary-directory) (random (expt 36 6))))))
+    (ensure-directories-exist dir)
+    (unwind-protect
+         (dolist (name '("LICENSE" "VERSION" "foo.lisp" "a.b.c"))
+           (let ((path (merge-pathnames name dir)))
+             (dolist (text '("one" "two"))
+               (cl-repository-client/atomic-file:with-atomic-output-file (s path)
+                 (write-string text s)))
+             (ok (equal "two" (uiop:read-file-string path)) name)))
+      (ok (equal '("LICENSE" "VERSION" "a.b.c" "foo.lisp")
+                 (sort (mapcar #'file-namestring (uiop:directory-files dir)) #'string<))
+          "no temp files left")
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
