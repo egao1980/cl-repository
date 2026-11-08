@@ -5,11 +5,28 @@
            #:load-system-init-files))
 (in-package :cl-repository-client/asdf-integration)
 
+(defun registry-mentions-p (parameter directory)
+  "True when the :source-registry form PARAMETER has a :tree or :directory entry
+   for DIRECTORY."
+  (and (consp parameter)
+       (eq (first parameter) :source-registry)
+       (some (lambda (entry)
+               (and (consp entry)
+                    (member (first entry) '(:tree :directory))
+                    (typep (second entry) (quote (or string pathname)))
+                    (uiop:pathname-equal (uiop:ensure-directory-pathname (second entry))
+                                         (uiop:ensure-directory-pathname directory))))
+             (rest parameter))))
+
 (defun configure-asdf-source-registry ()
   "Prepend the cl-repository systems directory to the ASDF source registry.
    Preserves existing programmatic configuration (e.g. Quicklisp paths)."
   (let ((root (systems-root)))
-    (when (probe-file root)
+    (when (and (probe-file root)
+               ;; Already on the registry (register-project put it there, after
+               ;; the checkout): prepending again would shadow the system under
+               ;; test with an older installed copy of itself.
+               (not (registry-mentions-p asdf/source-registry:*source-registry-parameter* root)))
       (let* ((root-str (namestring root))
              (current asdf/source-registry:*source-registry-parameter*)
              (new-config

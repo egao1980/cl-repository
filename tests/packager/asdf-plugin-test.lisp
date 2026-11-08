@@ -193,6 +193,39 @@
       (ignore-errors (asdf:clear-system "pis-demo/core"))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
+(deftest collect-external-depends-on-includes-defsystem-depends-on
+  "cl-stack-brotli's metadata listed cffi but not asdf-native, so consumers
+   installed it without the system ASDF needs to read its .asd."
+  (let ((dir (uiop:ensure-directory-pathname
+              (merge-pathnames (format nil "cl-repo-dsd-~a/" (get-universal-time))
+                               (uiop:temporary-directory))))
+        (def-dir (uiop:ensure-directory-pathname
+                  (merge-pathnames (format nil "cl-repo-dsd-def-~a/" (get-universal-time))
+                                   (uiop:temporary-directory)))))
+    (ensure-directories-exist dir)
+    (ensure-directories-exist def-dir)
+    (with-open-file (s (merge-pathnames "dsd-definer.asd" def-dir)
+                       :direction :output :if-exists :supersede)
+      (format s "(defsystem \"dsd-definer\")~%"))
+    (with-open-file (s (merge-pathnames "dsd-demo.asd" dir)
+                       :direction :output :if-exists :supersede)
+      (format s "(defsystem \"dsd-demo\" :defsystem-depends-on (\"dsd-definer\")~%")
+      (format s "  :depends-on (\"alexandria\"))~%"))
+    (unwind-protect
+         (progn
+           (asdf:initialize-source-registry
+            `(:source-registry (:directory ,(namestring dir))
+                               (:directory ,(namestring def-dir))
+                               :inherit-configuration))
+           (asdf:clear-system "dsd-demo")
+           (let ((deps (collect-external-depends-on (asdf:find-system "dsd-demo"))))
+             (ok (member "dsd-definer" deps :test #'equal))
+             (ok (member "alexandria" deps :test #'equal))))
+      (asdf:clear-system "dsd-demo")
+      (asdf:clear-system "dsd-definer")
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)
+      (uiop:delete-directory-tree def-dir :validate t :if-does-not-exist :ignore))))
+
 (deftest filter-publish-provides-keeps-slash-drops-tests
   (ok (test-system-name-p "ai-agent-protocol/tests"))
   (ok (not (test-system-name-p "ai-agent-protocol/mcp")))

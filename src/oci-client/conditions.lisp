@@ -21,9 +21,10 @@
 
 (define-condition auth-error (registry-error) ()
   (:report (lambda (c s)
-             (format s "Authentication failed~@[ (HTTP ~a)~]~@[ at ~a~]"
+             (format s "Authentication failed~@[ (HTTP ~a)~]~@[ at ~a~]~@[: ~a~]"
                      (registry-error-status c)
-                     (registry-error-url c)))))
+                     (registry-error-url c)
+                     (registry-error-body c)))))
 
 (define-condition not-found-error (registry-error) ()
   (:report (lambda (c s)

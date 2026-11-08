@@ -146,3 +146,129 @@
         (asdf:clear-system "cl-repo-shadow-demo")
         (asdf:initialize-source-registry saved)
         (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
+
+(deftest ql-entry-reference-ignores-qlot-dist-dates
+  "A qlot qlfile.lock pins `ql yason` to the dist date ql-2025-06-22. That is not
+   an OCI tag; installing it 404'd and sync tried to republish yason."
+  (let ((ref (fdefinition 'cl-repository-client/project::ql-entry-reference)))
+    (ok (string= "yason" (funcall ref "yason" "ql-2025-06-22")))
+    (ok (string= "yason" (funcall ref "yason" nil)))
+    (ok (string= "yason" (funcall ref "yason" "latest")))
+    (ok (string= "yason:0.8.3" (funcall ref "yason" "0.8.3")))))
+
+(defmacro with-stubbed-install ((calls &key fail-on fail-with) &body body)
+  "Run BODY with cmd-install recording each reference in CALLS. A reference
+   equal to FAIL-ON signals the condition FAIL-WITH builds."
+  (let ((orig (gensym)) (sym ''cl-repository-client/commands::cmd-install))
+    `(let ((,orig (fdefinition ,sym)))
+       (unwind-protect
+            (progn
+              (setf (fdefinition ,sym)
+                    (lambda (reference &rest keys)
+                      (declare (ignore keys))
+                      (push reference ,calls)
+                      (when (equal reference ,fail-on)
+                        (error (funcall ,fail-with)))
+                      t))
+              ,@body)
+         (setf (fdefinition ,sym) ,orig)))))
+
+(deftest install-or-publish-publishes-only-absent-packages
+  (let ((iop (fdefinition 'cl-repository-client/project::install-or-publish)))
+    (dolist (absent (list (lambda () (make-condition 'cl-oci-client/conditions:not-found-error
+                                                     :status 404))
+                          (lambda () (make-condition 'cl-oci-client/conditions:auth-error
+                                                     :status 401))))
+      (let ((calls '()) (published nil))
+        (with-stubbed-install (calls :fail-on "foo:1.0" :fail-with absent)
+          (funcall iop "foo:1.0" (lambda () (setf published t))))
+        (ok published)
+        (ok (equal '("foo" "foo:1.0") calls))))
+    (testing "a registry outage is not a missing package"
+      (let ((calls '()) (published nil))
+        (ok (signals
+             (with-stubbed-install (calls :fail-on "foo:1.0"
+                                          :fail-with (lambda ()
+                                                       (make-condition
+                                                        'cl-oci-client/conditions:registry-error
+                                                        :status 503)))
+               (funcall iop "foo:1.0" (lambda () (setf published t))))
+             'cl-oci-client/conditions:registry-error))
+        (ng published)))
+    (testing "an unrelated error propagates"
+      (let ((calls '()) (published nil))
+        (ok (signals
+             (with-stubbed-install (calls :fail-on "foo"
+                                          :fail-with (lambda () (make-condition 'simple-error
+                                                                                :format-control "tls")))
+               (funcall iop "foo" (lambda () (setf published t))))
+             'simple-error))
+        (ng published)))))
+
+(deftest explicit-tag-p-reads-only-the-last-segment
+  (let ((f (fdefinition 'cl-repository-client/commands::explicit-tag-p)))
+    (ok (null (funcall f "yason")))
+    (ok (funcall f "yason:0.8.3"))
+    (ok (funcall f "ghcr.io/ns/yason@sha256:abc"))
+    (ok (null (funcall f "localhost:5050/ns/yason")))))
+
+(deftest install-or-publish-skips-oci-install-after-a-local-install
+  "Without write access a publish installs the source locally; the bare-name
+   OCI install after it would 404 again."
+  (let ((iop (fdefinition 'cl-repository-client/project::install-or-publish))
+        (calls '()))
+    (with-stubbed-install (calls :fail-on "foo"
+                                 :fail-with (lambda () (make-condition
+                                                        'cl-oci-client/conditions:not-found-error
+                                                        :status 404)))
+      (let ((sym 'cl-repository-client/asdf-integration:configure-asdf-source-registry))
+        (let ((orig (fdefinition sym)))
+          (unwind-protect
+               (progn
+                 (setf (fdefinition sym) (lambda () nil))
+                 (funcall iop "foo"
+                          (lambda ()
+                            (setf cl-repository-client/project::*installed-locally* t))))
+            (setf (fdefinition sym) orig)))))
+    (ok (equal '("foo") calls))))
+
+(deftest configure-registry-keeps-the-checkout-first
+  "prepare-test re-prepended the install tree after register-project, so
+   cl-repo test in http-protocol compiled an installed http-protocol 0.3.0
+   instead of the checkout."
+  (let* ((saved asdf:*source-registry-parameter*)
+         (dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-order-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (root (cl-repository-client/installer:systems-root)))
+    (ensure-directories-exist dir)
+    (ensure-directories-exist root)
+    (unwind-protect
+         (progn
+           (cl-repository-client/project::register-project dir)
+           (let ((before asdf:*source-registry-parameter*))
+             (cl-repository-client/asdf-integration:configure-asdf-source-registry)
+             (ok (equal before asdf:*source-registry-parameter*))
+             (ok (uiop:pathname-equal
+                  dir (uiop:ensure-directory-pathname
+                       (second (find :tree (rest asdf:*source-registry-parameter*)
+                                     :key (lambda (e) (and (consp e) (car e))))))))))
+      (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest project-registry-skips-leftover-qlot-trees
+  "http-protocol's leftover .qlot/ made vom, cl-ppcre, ... resolve to Quicklisp
+   copies, so cl-repo test reported them missing."
+  (let* ((saved asdf:*source-registry-parameter*)
+         (dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-qlot-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (hidden (merge-pathnames ".qlot/dists/x/" dir)))
+    (ensure-directories-exist hidden)
+    (with-open-file (s (merge-pathnames "cl-repo-qlot-only.asd" hidden) :direction :output)
+      (write-string "(defsystem \"cl-repo-qlot-only\")" s))
+    (unwind-protect
+         (progn
+           (cl-repository-client/project::register-project dir)
+           (ok (null (asdf:find-system "cl-repo-qlot-only" nil))))
+      (asdf:clear-system "cl-repo-qlot-only")
+      (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
