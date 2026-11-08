@@ -54,7 +54,4 @@
                             ((vector (unsigned-byte 8))
                              (babel:octets-to-string body :encoding :utf-8)))))
             (from-json 'image-index json-str)))
-      (registry-error (e)
-        (if (eql (cl-oci-client/conditions:registry-error-status e) 404)
-            nil
-            (error e))))))
+      (cl-oci-client/conditions:not-found-error () nil))))

@@ -7,11 +7,14 @@
   (:import-from :cl-repository-client/quickload
                 #:add-registry #:ensure-system-dependencies #:ensure-systems)
   (:import-from :cl-repository-client/asd-rewrite #:asd-defsystem-depends-on)
+  (:import-from :cl-oci-client/conditions #:registry-error #:not-found-error #:auth-error)
+  (:import-from :cl-oci-client/pin #:with-loaded-systems-pinned)
   (:import-from :cl-repository-client/dep-satisfy #:system-satisfied-p)
   (:import-from :cl-repository-client/version-utils #:version<)
   (:import-from :cl-repository-client/asdf-integration
                 #:configure-asdf-source-registry)
-  (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*)
+  (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*
+                #:system-install-path #:extract-layer)
   (:import-from :cl-repository-client/qlot-integration
                 #:read-qlfile #:read-qlfile-lock
                 #:qlot-entry-kind #:qlot-entry-name #:qlot-entry-ref)
@@ -53,7 +56,10 @@
   (add-registry *default-registry* :namespace *default-namespace* :priority :append))
 
 (defun source-registry-form (directories)
+  ;; A checkout's leftover qlot tree (.qlot/ → Quicklisp releases) would make
+  ;; every dependency resolve to a Quicklisp copy, which the walk rejects.
   `(:source-registry
+    (:also-exclude ".qlot")
     ,@(mapcar (lambda (dir)
                 (list :tree (namestring (uiop:ensure-directory-pathname dir))))
               directories)
@@ -159,18 +165,54 @@
     (unwind-protect
          (progn
            (asdf:initialize-source-registry (source-registry-form (list tree)))
-           (asdf:load-system "cl-repository-packager")
-           (asdf:load-system "cl-repository-ql-exporter"))
+           (with-loaded-systems-pinned ()
+             (asdf:load-system "cl-repository-packager")
+             (asdf:load-system "cl-repository-ql-exporter")))
       (when saved
         (asdf:initialize-source-registry saved)))))
 
+(defvar *installed-locally* nil
+  "Set by a publish that could not push and installed the source locally.")
+
+(defun note-installed-locally (name version dir)
+  (setf *installed-locally* t)
+  (msg "~&; cl-repo: WARNING: no write access to ~a/~a; installed ~a ~a locally (~a), ~
+        unpublished. Publish it through cl-stack-systems imports to share it.~%"
+       *default-registry* *default-namespace* name version (namestring dir)))
+
+(defun install-release-locally (project version archive)
+  "Unpack a downloaded Quicklisp release (tar.gz octets) into the install tree."
+  (let ((dir (system-install-path project version)))
+    (ensure-directories-exist dir)
+    (extract-layer archive dir)
+    (note-installed-locally project version dir)
+    dir))
+
+(defun copy-source-tree (from to)
+  "Copy the files under FROM into TO, skipping VCS and cl-repo state."
+  (let ((from (uiop:ensure-directory-pathname from))
+        (to (uiop:ensure-directory-pathname to)))
+    (ensure-directories-exist to)
+    (dolist (f (uiop:directory-files from))
+      (uiop:copy-file f (merge-pathnames (file-namestring f) to)))
+    (dolist (d (uiop:subdirectories from))
+      (let ((name (car (last (pathname-directory d)))))
+        (unless (member name '(".git" ".cl-repository" ".qlot") :test #'string=)
+          (copy-source-tree d (merge-pathnames (format nil "~a/" name) to)))))))
+
 (defun publish-ql-system (name dist-url)
   (ensure-publish-tools)
-  (uiop:symbol-call :cl-repository-ql-exporter/exporter :export-dist
-                    dist-url *default-registry*
-                    :namespace *default-namespace*
-                    :filter name
-                    :incremental t))
+  (handler-bind ((auth-error
+                   (lambda (c)
+                     (declare (ignore c))
+                     (let ((r (find-restart (find-symbol "INSTALL-LOCALLY"
+                                                         :cl-repository-ql-exporter/exporter))))
+                       (when r (invoke-restart r #'install-release-locally))))))
+    (uiop:symbol-call :cl-repository-ql-exporter/exporter :export-dist
+                      dist-url *default-registry*
+                      :namespace *default-namespace*
+                      :filter name
+                      :incremental t)))
 
 (defun publish-source-dir (source-dir &key source-url revision ref)
   (ensure-publish-tools)
@@ -182,20 +224,49 @@
                             spec)
                    ref
                    "latest")))
-      (uiop:symbol-call :cl-repository-packager/publisher :publish-package
-                        *default-registry* *default-namespace* tag result spec)
-      (funcall (find-symbol "PACKAGE-SPEC-NAME" :cl-repository-packager/build-matrix) spec))))
+      (let ((name (funcall (find-symbol "PACKAGE-SPEC-NAME" :cl-repository-packager/build-matrix)
+                           spec)))
+        (handler-case
+            (uiop:symbol-call :cl-repository-packager/publisher :publish-package
+                              *default-registry* *default-namespace* tag result spec)
+          (auth-error ()
+            (let ((dir (system-install-path name tag)))
+              (copy-source-tree source-dir dir)
+              (note-installed-locally name tag dir))))
+        name))))
 
 (defun install-or-publish (reference publish)
-  "Install REFERENCE. When that fails, call PUBLISH and install the bare name."
-  (handler-case
-      (progn (cmd-install reference :registry-url *default-registry*
-                          :namespace *default-namespace*)
-             t)
-    (error ()
+  "Install REFERENCE. When the registry has no such package, call PUBLISH and
+   install the bare name. Absent = 404, or the 401/403 GHCR gives an anonymous
+   pull of a repository that does not exist. Any other failure (network, TLS,
+   a broken layer) propagates: publishing would not fix it."
+  (when (handler-case
+            (progn (cmd-install reference :registry-url *default-registry*
+                                :namespace *default-namespace*)
+                   nil)
+          (registry-error (e)
+            (unless (typep e '(or not-found-error auth-error))
+              (error e))
+            (msg "~&; cl-repo: ~a is not in ~a/~a; publishing it~%"
+                 reference *default-registry* *default-namespace*)
+            t))
+    (let ((*installed-locally* nil))
       (funcall publish)
-      (let ((name (subseq reference 0 (or (position #\: reference) (length reference)))))
-        (cmd-install name :registry-url *default-registry* :namespace *default-namespace*)))))
+      (if *installed-locally*
+          (configure-asdf-source-registry)
+          (let ((name (subseq reference 0 (or (position #\: reference) (length reference)))))
+            (cmd-install name :registry-url *default-registry* :namespace *default-namespace*)))))
+  t)
+
+(defun ql-entry-reference (name ref)
+  "OCI reference for a qlfile `ql NAME` entry. A qlot lock records the
+   Quicklisp dist date (\"ql-2025-06-22\"), never an OCI tag: packages are
+   tagged with their .asd version, so a dist ref installs the latest."
+  (if (or (null ref)
+          (string-equal ref "latest")
+          (and (> (length ref) 3) (string-equal "ql-" ref :end2 3)))
+      name
+      (format nil "~a:~a" name ref)))
 
 (defun repo-system-name (repo)
   (let ((slash (position #\/ repo :from-end t)))
@@ -233,10 +304,7 @@
     (:dist nil)
     (:ql
      (let* ((name (qlot-entry-name entry))
-            (ref (qlot-entry-ref entry))
-            (reference (if (and ref (not (string-equal ref "latest")))
-                           (format nil "~a:~a" name ref)
-                           name)))
+            (reference (ql-entry-reference name (qlot-entry-ref entry))))
        (install-or-publish reference
                            (lambda () (publish-ql-system name dist-url)))))
     ((:github :git)

@@ -45,3 +45,11 @@ cffi cffi-toolchain.asd cffi-toolchain cffi")
     (ok (string= (ql-system-system-name (second systems)) "cffi"))
     (ok (= (length (ql-system-dependencies (second systems))) 3))
     (ok (string= (first (ql-system-dependencies (second systems))) "alexandria"))))
+
+(deftest version-from-prefix-keeps-hyphenated-project-names
+  (let ((f (fdefinition (find-symbol "VERSION-FROM-PREFIX" :cl-repository-ql-exporter/exporter))))
+    (ok (string= "20260101-git" (funcall f "cl-who-20260101-git" "cl-who")))
+    (ok (string= "20260101-git" (funcall f "cl-who-20260101-git")))
+    (ok (string= "20260101-git" (funcall f "alexandria-20260101-git" "alexandria")))
+    (ok (string= "2.1.2" (funcall f "cl-ppcre-2.1.2")))
+    (ok (string= "nodate" (funcall f "nodate")))))

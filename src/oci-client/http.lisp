@@ -18,6 +18,7 @@
                 #:response-headers
                 #:response-body)
   (:import-from :http #:request)
+  (:import-from :cl-oci-client/pin #:with-loaded-systems-pinned)
   (:export #:ensure-http-backend
            #:http-backend-kind
            #:http-exchange
@@ -98,18 +99,21 @@ CL_REPO_HTTP_BACKEND=async)."
    (including 4xx/5xx) — call sites decide whether to challenge/auth or error.
    This matches Dexador's multi-value shape while using httpx-style non-raising
    defaults (:raise-for-status nil)."
-  (ensure-http-backend)
-  (let* ((client (make-http-client *http-backend* :verify verify))
-         (res (request method url
-                       :client client
-                       :headers headers
-                       :content content
-                       :force-binary force-binary
-                       :decompress decompress
-                       :raise-for-status nil)))
-    (values (response-body res)
-            (response-status res)
-            (response-headers res))))
+  ;; Pinned: a request may load a Content-Encoding backend, and must not
+  ;; reload the client's own http-protocol from the install tree.
+  (with-loaded-systems-pinned ()
+    (ensure-http-backend)
+    (let* ((client (make-http-client *http-backend* :verify verify))
+           (res (request method url
+                         :client client
+                         :headers headers
+                         :content content
+                         :force-binary force-binary
+                         :decompress decompress
+                         :raise-for-status nil)))
+      (values (response-body res)
+              (response-status res)
+              (response-headers res)))))
 
 ;;; Bind a default backend at load so package-inferred consumers don't need
 ;;; an explicit setup call before the first registry request.

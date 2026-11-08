@@ -18,7 +18,7 @@
                 #:lockfile-entry-index-digest)
   (:import-from :cl-repository-client/constraint-builder #:scan-installed-systems)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
-  (:import-from :cl-repository-client/quickload #:*registries*)
+  (:import-from :cl-repository-client/quickload #:*registries* #:find-system-in-registry)
   (:import-from :cl-repository-client/source-policy
                 #:system-denied-p #:registry-allowed-p
                 #:call-with-policy-overrides)
@@ -75,9 +75,25 @@
              (error "System ~a is denied by source policy" sys-name))
            (when (and reg-url (not (registry-allowed-p sys-name reg-url)))
              (error "System ~a is not allowed from registry ~a" sys-name reg-url))
-           (install-system reg-url full-repo tag)
+           (install-system reg-url full-repo
+                           (if (or host (explicit-tag-p ref))
+                               tag
+                               (resolve-default-tag reg-url
+                                                    (or namespace *default-namespace*)
+                                                    sys-name)))
            (unless *dry-run*
              (configure-asdf-source-registry))))))))
+
+(defun explicit-tag-p (reference)
+  "True when REFERENCE names a tag or digest after its last path segment."
+  (let ((tail (subseq reference (1+ (or (position #\/ reference :from-end t) -1)))))
+    (or (find #\: tail) (find #\@ tail))))
+
+(defun resolve-default-tag (registry-url namespace system-name)
+  "Tag a bare NAME installs: the preferred published version, else \"latest\".
+   Packages need not carry a latest tag (ql imports are tagged 0.8.3, ...)."
+  (or (nth-value 1 (find-system-in-registry registry-url namespace system-name))
+      "latest"))
 
 (defun with-entry-reference (entry)
   "Turn a :with entry (string or (name :version v)) into an install reference."

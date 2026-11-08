@@ -45,6 +45,7 @@
   (:import-from :babel #:octets-to-string)
   (:export #:*registries*
            #:add-registry
+           #:find-system-in-registry
            #:ensure-systems
            #:ensure-system-dependencies
            #:installed-system-version
@@ -323,6 +324,21 @@
            (uiop:ensure-list with))
    :test #'string=))
 
+(defun satisfied-or-definer (name minimum)
+  "SYSTEM-SATISFIED-P for NAME, except when reading NAME's .asd stops on a
+   system ASDF needs while defining it (:defsystem-depends-on). Then the second
+   value is that system's name, which must be installed before NAME can be read."
+  (block check
+    (handler-bind ((asdf:missing-dependency
+                     (lambda (c)
+                       ;; required-by NIL = signalled while parsing the defsystem form.
+                       (when (and (asdf/find-component:missing-requires c)
+                                  (null (asdf/find-component:missing-required-by c)))
+                         (return-from check
+                           (values nil (string-downcase
+                                        (string (asdf/find-component:missing-requires c)))))))))
+      (values (system-satisfied-p name minimum) nil))))
+
 (defun collect-missing-asdf-deps (local-roots &optional extras)
   "Walk ASDF :depends-on from LOCAL-ROOTS. Return names that are not satisfied.
    A system is unsatisfied when it is missing, older than its :version minimum,
@@ -345,10 +361,15 @@
                      ((local-p n)
                       (let ((sys (asdf:find-system n nil)))
                         (when sys (walk-specs sys))))
-                     ((system-satisfied-p n minimum)
-                      (walk-specs n))
                      (t
-                      (pushnew n missing :test #'string=)))))))
+                      (multiple-value-bind (satisfied definer) (satisfied-or-definer n minimum)
+                        (cond (definer
+                               ;; N's .asd needs DEFINER to be read at all (a
+                               ;; :defsystem-depends-on published metadata omits).
+                               ;; Install it; the next pass reads N again.
+                               (pushnew definer missing :test #'string=))
+                              (satisfied (walk-specs n))
+                              (t (pushnew n missing :test #'string=))))))))))
       (dolist (r local) (walk r nil))
       (dolist (e (extra-with-install-names extras))
         (walk e nil))

@@ -17,6 +17,7 @@
   :depends-on ("cl-oci-client" "rove")
   :serial t
   :components ((:file "registry-test")
+               (:file "pin-test")
                (:file "all"))
   :perform (test-op (o c)
             (symbol-call :rove :run c)))
