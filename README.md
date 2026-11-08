@@ -151,7 +151,9 @@ jobs:
 
 Ubuntu jobs in `test-system.yml` / `publish-source.yml` run in
 `ghcr.io/egao1980/cl-repository/ci-base` (Roswell + SBCL + client already
-installed). That is `jobs.<id>.container` — not a Docker container action.
+installed). That is `jobs.<id>.container` — not a Docker container action. The image is
+rebuilt after every client release, with that version baked in and tagged `client-<version>`.
+See [docker/ci-base](docker/ci-base/README.md) for its tags and local builds.
 macOS / Windows cannot use a job container; they install on the VM (cached).
 
 Other implementations (ECL / CCL / ABCL) use `test-system-impl.yml` — same

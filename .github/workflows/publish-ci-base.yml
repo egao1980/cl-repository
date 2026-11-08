@@ -14,10 +14,21 @@ on:
       - docker/ci-base/**
       - .github/actions/setup-client/setup-client.sh
       - .github/workflows/publish-ci-base.yml
+  # Every client release: bake the version just published. Without this the
+  # image kept 0.23.2 through 0.24–0.26, so Ubuntu jobs ran a client that
+  # could not install :defsystem-depends-on.
+  workflow_run:
+    workflows: ["Publish to GHCR"]
+    types: [completed]
   schedule:
-    # Pick up cl-repository-client :latest
+    # Pick up cl-repository-client :latest (and base-image security updates)
     - cron: "17 4 * * 1"
   workflow_dispatch:
+    inputs:
+      client-version:
+        description: "cl-repository-client version to bake (empty → latest)"
+        required: false
+        default: ""
 
 env:
   IMAGE: ghcr.io/egao1980/cl-repository/ci-base
@@ -27,12 +38,26 @@ env:
 
 jobs:
   build:
+    # A failed client publish leaves nothing new to bake.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v5
+
+      - name: Client version
+        id: client
+        env:
+          INPUT: ${{ inputs.client-version }}
+          RUN_REF: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          # workflow_run of a tag push: head_branch is the tag (v0.26.0).
+          v="${INPUT:-}"
+          if [ -z "$v" ] && [ "${GITHUB_EVENT_NAME}" = workflow_run ]; then v="${RUN_REF#v}"; fi
+          echo "version=${v:-latest}" >> "$GITHUB_OUTPUT"
+          echo "baking cl-repository-client ${v:-latest}"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -54,7 +79,7 @@ jobs:
           build-args: |
             SBCL_VERSION=${{ env.SBCL_VERSION }}
             ROSWELL_VERSION=${{ env.ROSWELL_VERSION }}
-            CLIENT_VERSION=latest
+            CLIENT_VERSION=${{ steps.client.outputs.version }}
             ORAS_VERSION=${{ env.ORAS_VERSION }}
 
       - name: Smoke
@@ -69,11 +94,19 @@ jobs:
             test -f "${CL_REPOSITORY_CLIENT_DIR}/cl-repository-client.asd"
             echo "ok sbcl=${CL_CI_SBCL_VERSION} client=${CL_REPOSITORY_CLIENT_VERSION}"
           '
+          baked=$(docker run --rm "${IMAGE}:local" bash -lc '. /opt/cl-ci/image.env; echo "$CL_REPOSITORY_CLIENT_VERSION"')
+          want="${{ steps.client.outputs.version }}"
+          if [ "$want" != latest ] && [ "$baked" != "$want" ]; then
+            echo "::error::baked client $baked, expected $want"; exit 1
+          fi
+          echo "CLIENT_BAKED=$baked" >> "$GITHUB_ENV"
 
       - name: Push
         if: github.event_name != 'pull_request'
         run: |
           docker tag "${IMAGE}:local" "${IMAGE}:latest"
           docker tag "${IMAGE}:local" "${IMAGE}:sbcl-${SBCL_VERSION}"
+          docker tag "${IMAGE}:local" "${IMAGE}:client-${CLIENT_BAKED}"
           docker push "${IMAGE}:latest"
           docker push "${IMAGE}:sbcl-${SBCL_VERSION}"
+          docker push "${IMAGE}:client-${CLIENT_BAKED}"
