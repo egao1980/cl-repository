@@ -8,6 +8,9 @@ env:
   REGISTRY: ghcr.io
   NAMESPACE: ${{ github.repository }}
   SBCL_VERSION: 2.6.7
+  # qlot install and release downloads authenticate: GitHub throttles
+  # unauthenticated requests first (api.github.com 503 failed v0.27.0).
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   publish:
@@ -56,8 +59,35 @@ jobs:
 
           qlot exec ros -l /tmp/publish.lisp
 
-      - name: Install ORAS
+      # setup-oras downloads from GitHub releases on every call (no cache
+      # lookup); 504s there failed whole matrices (2026-11-08). Keep the
+      # verified binary per version and only call setup-oras on a miss.
+      - name: Cache oras
+        id: oras-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/cl-repo-ci/oras/1.2.3
+          key: ${{ runner.os }}-${{ runner.arch }}-oras-bin-1.2.3
+
+      - name: Install oras
+        if: steps.oras-cache.outputs.cache-hit != 'true'
         uses: oras-project/setup-oras@v2
+        with:
+          version: 1.2.3
+
+      - name: Put cached oras on PATH
+        shell: bash
+        env:
+          ORAS_DIR_VERSION: 1.2.3
+          ORAS_CACHE_HIT: ${{ steps.oras-cache.outputs.cache-hit }}
+        run: |
+          d="${HOME}/.cache/cl-repo-ci/oras/${ORAS_DIR_VERSION}"
+          if [[ "${ORAS_CACHE_HIT}" != "true" ]]; then
+            mkdir -p "${d}"
+            cp "$(command -v oras)" "${d}/"
+          fi
+          command -v cygpath >/dev/null 2>&1 && d="$(cygpath -w "${d}")"
+          echo "${d}" >> "$GITHUB_PATH"
 
       - name: Verify published artifacts
         run: |

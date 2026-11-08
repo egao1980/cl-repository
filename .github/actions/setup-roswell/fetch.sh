@@ -16,8 +16,15 @@ fetch() {
     echo "fetch: ${name} from cache" >&2
   else
     echo "fetch: ${url}" >&2
+    # GitHub throttles unauthenticated traffic first (2026-11-08 incident:
+    # "timeouts for some unauthenticated users"). Send the job token to
+    # github.com only; curl drops it on the redirect to the asset CDN.
+    local -a auth=()
+    if [[ -n "${GITHUB_TOKEN:-}" && "${url}" == https://github.com/* ]]; then
+      auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+    fi
     curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 --retry-max-time 900 \
-         --connect-timeout 30 -o "${dest}.part" "${url}"
+         --connect-timeout 30 ${auth[@]+"${auth[@]}"} -o "${dest}.part" "${url}"
     mv -f "${dest}.part" "${dest}"
   fi
   printf '%s\n' "${dest}"
