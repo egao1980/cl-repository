@@ -5,8 +5,9 @@
 ;;;; Backend: the cl-stack async backend on libuv (http-backend-async +
 ;;;; event-backend-libuv, TLS through cl-stack-ssl) whenever it loads;
 ;;;; http-backend-dexador otherwise. CL_REPO_HTTP_BACKEND=async|dexador forces one.
-;;;; Dexador stays a declared dependency until setup-client can install the
-;;;; libuv overlay the async stack needs on CI runners. cl-stack-ssl is a dependency
+;;;; The client package ships the async stack (qlfile seeds for setup-client,
+;;;; which pulls the libuv overlay per platform). Dexador stays as the fallback
+;;;; for platforms without that overlay. cl-stack-ssl is a dependency
 ;;;; and loads first, so cl+ssl uses its OpenSSL whichever backend runs.
 
 (defpackage :cl-oci-client/http
@@ -38,16 +39,22 @@
           (t (error "CL_REPO_HTTP_BACKEND must be async, dexador or auto, not ~S" v)))))
 
 (defun %backend-load-failure-p (condition)
-  "Failures that mean the async stack is not usable here (missing system,
-missing native library), as opposed to bugs."
+  "Failures that mean the async stack cannot be loaded here (missing system,
+missing native library, a grovel or compile step that cannot run, e.g. a git
+checkout of event-backend-libuv without its grovel cache or headers), as
+opposed to bugs in it at run time."
   (or (typep condition 'asdf:missing-component)
       (typep condition 'asdf:missing-dependency)
+      (typep condition 'asdf:load-system-definition-error)
+      (typep condition 'uiop:compile-file-error)
+      (typep condition 'uiop:compile-warned-error)
       (flet ((named-type-p (package name)
                (let ((type (and (find-package package) (find-symbol name package))))
                  (and type (typep condition type)))))
         (or (named-type-p "CFFI" "LOAD-FOREIGN-LIBRARY-ERROR")
             ;; event-backend-libuv's (:native-library "uv") with no libuv anywhere
-            (named-type-p "ASDF-NATIVE" "NATIVE-LIBRARY-NOT-FOUND")))))
+            (named-type-p "ASDF-NATIVE" "NATIVE-LIBRARY-NOT-FOUND")
+            (named-type-p "CFFI-GROVEL" "GROVEL-ERROR")))))
 
 (defun %make-async-backend ()
   ;; cl-stack-ssl first: it pins cl+ssl to its own OpenSSL when present
