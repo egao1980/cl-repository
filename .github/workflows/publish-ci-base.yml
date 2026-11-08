@@ -76,6 +76,9 @@ jobs:
           file: docker/ci-base/Dockerfile
           load: true
           tags: ${{ env.IMAGE }}:local
+          # Authenticated release downloads + GHCR pulls inside the build.
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
           build-args: |
             SBCL_VERSION=${{ env.SBCL_VERSION }}
             ROSWELL_VERSION=${{ env.ROSWELL_VERSION }}
