@@ -20,3 +20,18 @@ macOS: Homebrew `roswell` + `sbcl`, then pin `sbcl-bin/system` (PATH SBCL). Do *
 Prefer `test-system.yml` for the 90% case. ECL/CCL jobs: `install-sbcl: "false"`, then `ros install ecl` / `ccl-bin` as today.
 
 Native `publish-oci.yml` uses setup-client + setup-roswell + `ci` (`phase: install`), not a second QL bootstrap.
+
+## Caching
+
+Release assets (the Roswell tarball / zip) are fetched by `fetch.sh` with
+retries into `~/.cache/cl-repo-ci/downloads`, which is cached per Roswell
+version. `~/.roswell` (SBCL impls, Quicklisp, qlot) is cached too unless
+`cache: false` (setup-lisp caches it itself). A warm job downloads nothing from
+GitHub releases; an installed `sbcl-bin/<version>` is reused without asking for
+`sbcl-bin_uri.tsv`. Other steps can reuse the helper:
+
+```bash
+source .github/actions/setup-roswell/fetch.sh
+deb="$(fetch "$url" "name.deb")"
+```
+
