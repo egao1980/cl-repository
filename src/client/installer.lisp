@@ -20,6 +20,7 @@
   (:import-from :yason)
   (:import-from :cl-repository-client/platform-resolver #:resolve-manifests)
   (:import-from :cl-repository-client/integrity #:record-file-manifest)
+  (:import-from :cl-repository-client/atomic-file #:with-atomic-output-file)
   (:export #:install-system
            #:install-result
            #:make-install-result
@@ -378,6 +379,26 @@
              never (string= name ".." :start1 start :end1 end)
              until (>= end (length name)))))
 
+(defun file-has-octets-p (path content)
+  "True when PATH holds exactly CONTENT."
+  (with-open-file (in path :element-type '(unsigned-byte 8) :if-does-not-exist nil)
+    (and in
+         (= (file-length in) (length content))
+         (let ((buf (make-array (length content) :element-type '(unsigned-byte 8))))
+           (and (= (read-sequence buf in) (length content))
+                (equalp buf content))))))
+
+(defun install-file-octets (path content)
+  "Write CONTENT to PATH without touching a file another process (or this
+   one) has open. Identical content is left alone; anything else goes to a
+   temp file renamed over PATH. Writing in place (:supersede truncates the
+   same inode) rewrote the code pages of a shared library this image had
+   mapped: a sync that re-extracted cl-stack-brotli after the HTTP layer had
+   loaded libbrotli corrupted the process (MEMORY-FAULT in dlopen)."
+  (unless (file-has-octets-p path content)
+    (with-atomic-output-file (out path :element-type '(unsigned-byte 8))
+      (write-sequence content out))))
+
 (defun extract-tar-stream (stream target-dir &key strip-prefix)
   "Extract tar entries from STREAM to TARGET-DIR.
    When STRIP-PREFIX is given, remove that prefix from each entry name.
@@ -417,9 +438,7 @@
                      (let ((pad (make-array (- 512 remainder) :element-type '(unsigned-byte 8))))
                        (read-sequence pad stream))))
                  (ensure-directories-exist path)
-                 (with-open-file (out path :direction :output :element-type '(unsigned-byte 8)
-                                           :if-exists :supersede)
-                   (write-sequence content out))))
+                 (install-file-octets path content)))
               (t
                (skip-tar-data stream size))))))))
 
