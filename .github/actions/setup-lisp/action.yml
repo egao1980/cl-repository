@@ -118,6 +118,8 @@ runs:
         sbcl-version: ${{ inputs.sbcl-version }}
         roswell-version: ${{ inputs.roswell-version }}
         install-sbcl: ${{ inputs.install-sbcl }}
+        # ~/.roswell is cached above with the client tree's key.
+        cache: "false"
 
     - name: Setup Roswell
       if: steps.image.outputs.image != 'true' && steps.ros-src.outputs.local != 'true'
@@ -126,6 +128,8 @@ runs:
         sbcl-version: ${{ inputs.sbcl-version }}
         roswell-version: ${{ inputs.roswell-version }}
         install-sbcl: ${{ inputs.install-sbcl }}
+        # ~/.roswell is cached above with the client tree's key.
+        cache: "false"
 
     - name: Restore cached client
       if: steps.image.outputs.image != 'true' && steps.client-cache.outputs.cache-hit == 'true'

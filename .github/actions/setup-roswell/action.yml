@@ -1,7 +1,11 @@
 name: Setup Roswell + SBCL
 description: >-
-  Install Roswell (Unix script / Windows zip) and optionally sbcl-bin.
+  Install Roswell (pinned release tarball / Windows zip) and optionally sbcl-bin.
   Shared by consumer test.yml and native publish-oci.yml after setup-client.
+  Release assets are fetched with retries into a cached download directory, and
+  ~/.roswell is cached, so a warm job downloads nothing from GitHub releases
+  (2026-11-08: release downloads returned 504 for over an hour and took out every
+  uncached job).
 
 inputs:
   sbcl-version:
@@ -9,17 +13,42 @@ inputs:
     required: false
     default: "2.6.7"
   roswell-version:
-    description: Windows Roswell zip tag (Unix uses install-for-ci.sh).
+    description: Roswell release (Linux tarball and Windows zip).
     required: false
     default: "26.02.116"
   install-sbcl:
     description: If true, ros install sbcl-bin/$sbcl-version and ros use it.
     required: false
     default: "true"
+  cache:
+    description: >-
+      Cache ~/.roswell here. setup-lisp passes false: it caches ~/.roswell
+      itself. The download cache is always on.
+    required: false
+    default: "true"
 
 runs:
   using: composite
   steps:
+    - name: Prepare download cache
+      shell: bash
+      run: mkdir -p "${HOME}/.cache/cl-repo-ci/downloads"
+
+    - name: Cache release downloads
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/cl-repo-ci/downloads
+        key: ${{ runner.os }}-${{ runner.arch }}-cl-repo-ci-downloads-roswell-${{ inputs.roswell-version }}
+
+    - name: Cache Roswell home
+      if: inputs.cache == 'true' && runner.os != 'macOS'
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.roswell
+          C:\roswell
+        key: ${{ runner.os }}-${{ runner.arch }}-setup-roswell-${{ inputs.roswell-version }}-sbcl-${{ inputs.install-sbcl }}-${{ inputs.sbcl-version }}
+
     # macOS: Homebrew ros + PATH sbcl. Never ros install sbcl-bin here —
     # cached ~/.roswell marks a pin "already installed" then ros use dies.
     - name: Install Roswell (macOS)
@@ -35,8 +64,21 @@ runs:
     - name: Install Roswell (Linux)
       if: runner.os == 'Linux'
       shell: bash
+      env:
+        ROSWELL_VERSION: ${{ inputs.roswell-version }}
       run: |
-        curl -fsSL --retry 5 --retry-all-errors https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
+        set -euo pipefail
+        source "${GITHUB_ACTION_PATH}/fetch.sh"
+        if ! command -v ros >/dev/null 2>&1; then
+          arch="$(uname -m | sed s/aarch64/arm64/)"
+          file="roswell-${ROSWELL_VERSION}-linux-${arch}.tar.bz2"
+          tarball="$(fetch "https://github.com/roswell/roswell/releases/download/v${ROSWELL_VERSION}/${file}" "${file}")"
+          rm -rf /tmp/roswell && mkdir -p /tmp/roswell
+          tar -C /tmp/roswell --strip-components=1 -xjf "${tarball}"
+          SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO=sudo
+          ${SUDO} make -C /tmp/roswell install >/dev/null
+        fi
+        ros version | head -1
         echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
 
     - name: Install Roswell (Windows)
@@ -45,11 +87,14 @@ runs:
       env:
         ROSWELL_VERSION: ${{ inputs.roswell-version }}
       run: |
-        VER="${ROSWELL_VERSION:-26.02.116}"
-        curl -fsSL --retry 5 --retry-all-errors "https://github.com/roswell/roswell/releases/download/v${VER}/roswell_${VER}_amd64.zip" \
-          -o /tmp/roswell.zip
-        rm -rf /c/roswell && mkdir -p /c/roswell
-        unzip -qo /tmp/roswell.zip -d /c/roswell
+        set -euo pipefail
+        source "${GITHUB_ACTION_PATH}/fetch.sh"
+        if [[ ! -x /c/roswell/roswell/ros.exe ]]; then
+          file="roswell_${ROSWELL_VERSION}_amd64.zip"
+          zip="$(fetch "https://github.com/roswell/roswell/releases/download/v${ROSWELL_VERSION}/${file}" "${file}")"
+          rm -rf /c/roswell && mkdir -p /c/roswell
+          unzip -qo "${zip}" -d /c/roswell
+        fi
         echo "/c/roswell/roswell" >> "$GITHUB_PATH"
         echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
 
@@ -83,6 +128,13 @@ runs:
         probe() {
           ros -e '(quit)' -q
         }
+        # A cached ~/.roswell already holds the pin: use it without asking
+        # GitHub releases for sbcl-bin_uri.tsv again.
+        if compgen -G "${HOME}/.roswell/impls/*/*/sbcl-bin/${VER}" >/dev/null \
+           && ros use "sbcl-bin/${VER}" && probe; then
+          echo "sbcl-bin/${VER} from cache"
+          exit 0
+        fi
         use_pin() {
           ros install "sbcl-bin/${VER}" && ros use "sbcl-bin/${VER}" && probe
         }
@@ -90,14 +142,14 @@ runs:
           rm -rf "${HOME}/.roswell/impls/"*/*/sbcl-bin/"${VER}"
         }
         ok=0
-        for attempt in 1 2 3 4; do
+        for attempt in 1 2 3 4 5 6; do
           if use_pin; then
             ok=1
             break
           fi
           echo "sbcl-bin/${VER} failed (attempt ${attempt}); wiping impl dir and retrying..."
           wipe_pin
-          sleep $((2 ** attempt))
+          sleep $((5 * 2 ** attempt))
         done
         if [[ "$ok" -ne 1 ]]; then
           echo "ros install sbcl-bin/${VER} failed after retries" >&2
