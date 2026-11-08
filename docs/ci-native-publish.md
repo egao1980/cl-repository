@@ -60,7 +60,7 @@ jobs:
     uses: egao1980/cl-repository/.github/workflows/publish-native-package.yml@main
     with:
       package-name: my-lib
-      version: ${{ inputs.version || github.ref_name }}  # strip v* in a prior step if needed
+      version: ${{ inputs.version }}   # empty → v* tag, else .asd :version
       packager-tag: "latest"
       source-paths: |
         my-lib.asd
@@ -70,19 +70,21 @@ jobs:
     secrets: inherit
 ```
 
-Declare `:cffi-libraries` / `:overlays` / `:provides` under `:properties (:cl-repo …)` in `my-lib.asd`. Overlay relative paths in the `.asd` are inventory for docs/consumers; CI replaces them with absolute artifact paths at publish time.
+Declare the libraries as asdf-native `(:native-library "name")` components: each platform's overlay is then the artifact directory (checked to hold every non-optional library), and `:cffi-libraries` defaults to the component names. Write `:overlays` under `:properties (:cl-repo …)` only for extras (headers, data files, named flavours, other platforms); they fold into the artifact overlays. Systems without `:native-library` components declare `:cffi-libraries` / `:overlays` by hand, as before ([native-deps.md](native-deps.md)).
+
+**Version.** The `version` input, else the `v*` tag being built, else the `.asd` `:version`. A given version is written into the staged `.asd` with `cl-repo version`, so the published source matches its OCI tag: no per-repo version-sync script. The workflow outputs the published `version`.
 
 ## Inputs (summary)
 
 | Input | Required | Notes |
 |-------|----------|-------|
 | `package-name` | yes | OCI repo + ASDF name |
-| `version` | yes | tag (overrides `.asd` `:version` when set) |
+| `version` | no | empty → `v*` tag, else `.asd` `:version`; when set, written into the published `.asd` |
 | `source-paths` | yes | Lisp-only files/dirs (natives stay in artifacts) |
 | `depends-on` / `cffi-libraries` / `provides` / `description` / `license` | no | optional overrides; prefer `.asd` |
 | `namespace` | no | default `<owner>/cl-systems` |
 | `packager-tag` | no | default `latest` — `cl-repo:ensure-systems` (not raw oras) |
-| `source-overlay-artifact` | no | unpack over workspace after checkout (e.g. version-synced `.asd`) |
+| `source-overlay-artifact` | no | unpack over workspace after checkout (generated sources) |
 | `skip-catalog` | no | default `true` |
 | `client-version` / `sbcl-version` / `roswell-version` / `ci-image` | no | same defaults as `publish-source.yml` |
 | `sbcl-dynamic-space-mb` | no | `ros dynamic-space-size=` for overlay gzip (default `8192`). CUDA-sized `.so`s OOM the default ~1GB heap. |

@@ -8,7 +8,7 @@
 #     uses: egao1980/cl-repository/.github/workflows/publish-native-package.yml@<ref>
 #     with:
 #       package-name: cl-stack-ssl
-#       version: 3.4.1
+#       version: ${{ inputs.version }}   # optional; empty → v* tag, else .asd :version
 #       # depends-on / cffi-libraries / provides optional — prefer .asd :cl-repo
 #       source-paths: |
 #         cl-stack-ssl.asd
@@ -36,9 +36,12 @@ on:
         required: true
         type: string
       version:
-        description: Package version tag
-        required: true
+        description: >-
+          Package version. Empty → the v* tag being built, else the .asd
+          :version. A given version is written into the published .asd.
+        required: false
         type: string
+        default: ""
       registry:
         description: OCI registry host
         required: false
@@ -121,6 +124,10 @@ on:
         required: false
         type: number
         default: 8192
+    outputs:
+      version:
+        description: The version published
+        value: ${{ jobs.publish.outputs.version }}
     secrets:
       # Optional override; prefer secrets: inherit (uses github.token)
       PUBLISH_TOKEN:
@@ -133,6 +140,8 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     # Image string or null. No `secrets` in this expression (reusable-workflow parse).
     container: ${{ inputs.ci-image != '' && inputs.ci-image || fromJSON('null') }}
     defaults:
@@ -208,11 +217,45 @@ jobs:
         with:
           version: 1.2.3
 
+      # Input, else the v* tag, else the .asd :version. cl-repo version writes
+      # a given version into the staged .asd, so the published source carries
+      # the version of its OCI tag (no per-repo sync script).
+      - name: Resolve package version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          PKG_NAME: ${{ inputs.package-name }}
+        run: |
+          V="$INPUT_VERSION"
+          if [ -z "$V" ] && [ "$GITHUB_REF_TYPE" = tag ] && [[ "$GITHUB_REF_NAME" == v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          # Script path from the client dir (expanded before the prefix applies);
+          # source registry from CL_REPOSITORY_DEST, where its deps live.
+          cl_repo() {
+            CL_REPOSITORY_CLIENT_DIR="$CL_REPOSITORY_DEST" \
+              ros -Q -- "${CL_REPOSITORY_CLIENT_DIR%/}/roswell/cl-repo.ros" "$@"
+          }
+          cd "$STAGING"
+          if [ -n "$V" ]; then
+            cl_repo version "$V" --system "$PKG_NAME" > /tmp/cl-repo-version.log 2>&1 \
+              || { cat /tmp/cl-repo-version.log; exit 1; }
+          fi
+          # Last token only: a first load may print compile notes on stdout.
+          GOT="$(cl_repo version --system "$PKG_NAME" 2>/dev/null \
+                 | grep -oE '[0-9]+(\.[0-9]+)*$' | tail -n 1)"
+          [ -n "$GOT" ] || { echo "no :version in ${PKG_NAME}.asd and none given" >&2; exit 1; }
+          if [ -n "$V" ] && [ "$GOT" != "$V" ]; then
+            echo "staged .asd says $GOT, expected $V" >&2; exit 1
+          fi
+          echo "version=$GOT" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${PKG_NAME} ${GOT}"
+
       - name: Publish package + overlays
         env:
           GITHUB_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
           PKG_NAME: ${{ inputs.package-name }}
-          PKG_VERSION: ${{ inputs.version }}
+          PKG_VERSION: ${{ steps.version.outputs.version }}
           PKG_DESCRIPTION: ${{ inputs.description }}
           PKG_LICENSE: ${{ inputs.license }}
           PKG_DEPENDS_ON: ${{ inputs.depends-on }}
@@ -254,7 +297,7 @@ jobs:
 
           echo "REGISTRY=$REGISTRY" >> "$GITHUB_ENV"
           echo "NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
-          echo "PUBLISH_VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+          echo "PUBLISH_VERSION=${{ steps.version.outputs.version }}" >> "$GITHUB_ENV"
           echo "PRIMARY_OCI_NAME=$PRIMARY_OCI_NAME" >> "$GITHUB_ENV"
 
       - name: Verify published index

@@ -16,10 +16,19 @@ exec ros -Q -- $0 "$@"
                    parent))
                (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST")
                (error "cl-repo: cannot find cl-repository-client. Install it or set CL_REPOSITORY_DEST."))))
-    (let ((tree (client-tree)))
+    ;; CL_REPOSITORY_CLIENT_DIR may name the client alone (setup-client exports
+    ;; it so); its dependencies sit under CL_REPOSITORY_DEST.
+    (let ((trees (remove-duplicates
+                  (remove nil (list (client-tree)
+                                    (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST")))
+                  :test #'uiop:pathname-equal)))
       (asdf:initialize-source-registry
-       `(:source-registry (:tree ,(namestring tree)) :ignore-inherited-configuration))
-      (asdf:load-system "cl-repository-client"))))
+       `(:source-registry ,@(mapcar (lambda (tree) `(:tree ,(namestring tree))) trees)
+                          :ignore-inherited-configuration))
+      ;; Load chatter (cl-unicode prints at load) goes to stderr: stdout is
+      ;; for command output such as V=$(cl-repo version).
+      (let ((*standard-output* *error-output*))
+        (asdf:load-system "cl-repository-client")))))
 
 (defpackage :ros.script.cl-repo
   (:use :cl)

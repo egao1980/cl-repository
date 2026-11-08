@@ -6,6 +6,8 @@
 
 Caller собирает native-артефакты `native-<os>-<arch>` → reusable workflow раскладывает `lib/<os>-<arch>/`, грузит packager через `setup-lisp` + `cl-repo:ensure-systems` (как `publish-source.yml`; без QL / apt SBCL / raw `oras pull`) и публикует пакет в `ghcr.io/<owner>/cl-systems/<package>:<version>`. Бинарники — overlay, Lisp — обычный `ros -l`.
 
+Версия: вход `version`, иначе собираемый тег `v*`, иначе `:version` из `.asd`. Заданная версия записывается в staged `.asd` через `cl-repo version` — отдельный скрипт синхронизации версии в репозитории не нужен.
+
 ## Раскладки артефактов
 
 | Раскладка | Содержимое `native-<os>-<arch>/` | Результат |

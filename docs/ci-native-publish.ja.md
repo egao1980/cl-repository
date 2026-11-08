@@ -6,6 +6,8 @@
 
 Caller が `native-<os>-<arch>` をビルド → reusable workflow が `lib/<os>-<arch>/` を整え、`setup-lisp` + `cl-repo:ensure-systems` で packager をロードし（`publish-source.yml` と同じ。QL / apt SBCL / raw `oras pull` は使わない）、`ghcr.io/<owner>/cl-systems/<package>:<version>` へ公開。バイナリは overlay、Lisp は普通の `ros -l`。
 
+バージョン: `version` 入力 → ビルド中の `v*` タグ → `.asd` の `:version` の順。指定したバージョンは `cl-repo version` でステージした `.asd` に書き込まれる（リポジトリごとの同期スクリプトは不要）。
+
 ## アーティファクト配置
 
 | 配置 | `native-<os>-<arch>/` の中身 | 結果 |
