@@ -152,7 +152,8 @@
     (ok (search "cl-repo:ensure-systems" ensure))
     (ok (search "setup-lisp@main" workflow))
     (ok (search "job.workflow_sha" workflow))
-    (ok (not (search "github.workflow_sha" workflow)))
+    ;; the comment beside it names github.workflow_sha; the expression must not appear
+    (ok (not (search "${{ github.workflow_sha" workflow)))
     (ok (not (search "apt-get install -y sbcl" workflow)))
     (ok (not (search "quicklisp.lisp" workflow)))))
 

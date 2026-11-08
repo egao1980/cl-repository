@@ -76,7 +76,7 @@ async stack cannot load here (restart USE-DEXADOR, taken automatically unless
 CL_REPO_HTTP_BACKEND=async)."
   (or *http-backend*
       (progn
-        ;; Load CE backend before first SEND so ASDF doesn't recurse mid-load.
+        ;; Load CE backend before first SEND so a request never loads one mid-plan.
         (asdf:load-system "http-encoding-chipz")
         (let ((choice (%env-backend)))
           (setf *http-backend*
@@ -92,6 +92,12 @@ CL_REPO_HTTP_BACKEND=async)."
                         :report "Use the dexador HTTP backend"
                         (setf *http-backend-kind* :dexador)
                         (%make-dexador-backend)))))))))
+
+(defun %registry-http-version ()
+  "HTTP/2 only when http2 is already loaded in this image. The client package
+   does not ship http2: offering h2 without it made GHCR pick h2 and every
+   request fail (http-backend-async 0.2.14 on the 0.27.5 ci-base image)."
+  (if (find-package "HTTP2/CLIENT") :auto :http/1.1))
 
 (defun response-header-value (headers name)
   "Lookup NAME in a response header hash-table (lowercase EQUAL keys)."
@@ -110,7 +116,8 @@ CL_REPO_HTTP_BACKEND=async)."
   ;; reload the client's own http-protocol from the install tree.
   (with-loaded-systems-pinned ()
     (ensure-http-backend)
-    (let* ((client (make-http-client *http-backend* :verify verify))
+    (let* ((client (make-http-client *http-backend* :verify verify
+                                                    :http-version (%registry-http-version)))
            (res (request method url
                          :client client
                          :headers headers
@@ -122,6 +129,8 @@ CL_REPO_HTTP_BACKEND=async)."
               (response-status res)
               (response-headers res)))))
 
-;;; Bind a default backend at load so package-inferred consumers don't need
-;;; an explicit setup call before the first registry request.
-(ensure-http-backend)
+;;; No backend is chosen at load time: choosing one loads systems, and doing
+;;; that while ASDF is still loading this file is a recursive OPERATE ("Deprecated
+;;; recursive use of ASDF/OPERATE:OPERATE"). The first HTTP-EXCHANGE binds it.
+;;; Entry points (roswell/cl-repo.ros) call ENSURE-HTTP-BACKEND after loading
+;;; the client, outside any ASDF operation.

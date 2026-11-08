@@ -10,11 +10,17 @@
    partial writes. The rename gives PATH a new inode: a process that has the
    old file open or mapped (a loaded shared library) keeps its contents."
   (let* ((path (pathname path))
-         (temp (merge-pathnames (format nil "~a.tmp-~d-~d"
-                                        (file-namestring path)
-                                        (get-universal-time)
-                                        (random 1000000 (make-random-state t)))
-                                path)))
+         ;; The temp keeps PATH's type, the marker goes in the name. RENAME-FILE
+         ;; merges the new name with the old one, so a type-less target
+         ;; (LICENSE, VERSION) given a temp named LICENSE.tmp-N took the type
+         ;; "tmp-N": the rename went nowhere, the file was never written, and
+         ;; the temp stayed (cl-repo 0.27.4-0.27.5).
+         (temp (make-pathname :name (format nil ".~a.tmp-~d-~d"
+                                            (pathname-name path)
+                                            (get-universal-time)
+                                            (random 1000000 (make-random-state t)))
+                              :type (pathname-type path)
+                              :defaults path)))
     (with-open-file (s temp :direction :output :if-exists :supersede
                             :element-type element-type)
       (funcall thunk s))

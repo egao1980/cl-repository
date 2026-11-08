@@ -1,8 +1,11 @@
 #!/bin/sh
 #|-*- mode:lisp -*-|#
 #|
-exec ros -Q -- $0 "$@"
+exec ros +Q -- $0 "$@"
 |#
+;;; +Q: no Quicklisp. (-Q turns it ON, and Roswell applies this line even when
+;;; the caller ran `ros +Q -- cl-repo.ros`.) Quicklisp's searchers would answer
+;;; for systems cl-repo must install from OCI.
 
 (progn
   (ros:ensure-asdf)
@@ -28,7 +31,9 @@ exec ros -Q -- $0 "$@"
       ;; Load chatter (cl-unicode prints at load) goes to stderr: stdout is
       ;; for command output such as V=$(cl-repo version).
       (let ((*standard-output* *error-output*))
-        (asdf:load-system "cl-repository-client")))))
+        (asdf:load-system "cl-repository-client")
+        ;; Choose the HTTP backend now, outside ASDF's load of the client.
+        (uiop:symbol-call :cl-oci-client/http :ensure-http-backend)))))
 
 (defpackage :ros.script.cl-repo
   (:use :cl)
