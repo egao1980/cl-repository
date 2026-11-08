@@ -7,8 +7,11 @@ exec ros +Q -- $0 "$@"
 ;;; the caller ran `ros +Q -- cl-repo.ros`.) Quicklisp's searchers would answer
 ;;; for systems cl-repo must install from OCI.
 
+;;; Its own top-level form: under +Q ASDF/UIOP load here, and the form below
+;;; names uiop: symbols, which the reader needs before it runs.
+(ros:ensure-asdf)
+
 (progn
-  (ros:ensure-asdf)
   (flet ((client-tree ()
            (or (uiop:getenv-absolute-directory "CL_REPOSITORY_CLIENT_DIR")
                (let* ((script *load-pathname*)
