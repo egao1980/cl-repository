@@ -8,6 +8,9 @@ env:
   REGISTRY: ghcr.io
   NAMESPACE: ${{ github.repository }}
   SBCL_VERSION: 2.6.7
+  # qlot install and release downloads authenticate: GitHub throttles
+  # unauthenticated requests first (api.github.com 503 failed v0.27.0).
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   publish:
