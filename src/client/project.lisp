@@ -7,6 +7,8 @@
   (:import-from :cl-repository-client/quickload
                 #:add-registry #:ensure-system-dependencies #:ensure-systems)
   (:import-from :cl-repository-client/asd-rewrite #:asd-defsystem-depends-on)
+  (:import-from :cl-repository-client/dep-satisfy #:system-satisfied-p)
+  (:import-from :cl-repository-client/version-utils #:version<)
   (:import-from :cl-repository-client/asdf-integration
                 #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*)
@@ -287,17 +289,27 @@
 
 (defun ensure-defsystem-depends-on (directory)
   "Install the :defsystem-depends-on systems (asdf-native, cffi-grovel, ...) of
-the .asd files in DIRECTORY that ASDF can't find yet. ASDF loads them while
-reading the .asd, before any :depends-on walk can see them."
-  (let ((missing (remove-if (lambda (n) (asdf:find-system n nil))
-                            (remove-duplicates
-                             (loop for asd in (top-level-asds (uiop:ensure-directory-pathname directory))
-                                   append (asd-defsystem-depends-on asd))
-                             :test #'string=))))
-    (when missing
-      (msg "~&; cl-repo: installing :defsystem-depends-on ~{~a~^ ~}~%" missing)
-      (ensure-systems missing :default-source :oci))
-    missing))
+the .asd files in DIRECTORY that ASDF can't find, or finds older than a
+(:version name min) entry asks for. ASDF loads them while reading the .asd,
+before any :depends-on walk can see them. → the names installed."
+  (let ((wanted '()) (minimums '()))
+    (dolist (asd (top-level-asds (uiop:ensure-directory-pathname directory)))
+      (multiple-value-bind (names mins) (asd-defsystem-depends-on asd)
+        (dolist (n names) (pushnew n wanted :test #'string=))
+        (dolist (m mins)
+          (let ((prev (assoc (car m) minimums :test #'string=)))
+            (if prev
+                (when (version< (cdr prev) (cdr m)) (setf (cdr prev) (cdr m)))
+                (push m minimums))))))
+    (let ((missing (remove-if (lambda (n)
+                                (system-satisfied-p n (cdr (assoc n minimums :test #'string=))))
+                              (reverse wanted))))
+      (dolist (n missing)
+        (let ((min (cdr (assoc n minimums :test #'string=))))
+          (msg "~&; cl-repo: installing :defsystem-depends-on ~a~@[ (>= ~a)~]~%" n min)
+          (apply #'ensure-systems (list n) :default-source :oci
+                 (when min (list :minimum min)))))
+      missing)))
 
 (defun cmd-sync (&key (directory (uiop:getcwd)) system overlay locked)
   "Install what the .asd and qlfile ask for, and record the lock.
