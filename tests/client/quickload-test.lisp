@@ -231,7 +231,9 @@
            ;; Once the definer is installed, the next pass reads the package.
            (funcall write-asd "cl-dsd-definer" "(defsystem \"cl-dsd-definer\")")
            (asdf:clear-system "cl-dsd-pkg")
-           (ok (null (collect-missing-asdf-deps '("cl-dsd-root")))))
+           ;; fresh ASDF session: test-op's caches the missing definer
+           (ok (null (let ((asdf/session:*asdf-session* nil))
+                       (collect-missing-asdf-deps '("cl-dsd-root"))))))
       (setf asdf:*central-registry* (remove dir asdf:*central-registry* :test #'equal))
       (dolist (s '("cl-dsd-root" "cl-dsd-pkg" "cl-dsd-definer"))
         (asdf:clear-system s))

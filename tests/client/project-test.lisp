@@ -295,7 +295,10 @@
              (write-string "(defsystem \"cl-repo-rescan-demo\")" s))
            (ng (asdf:find-system "cl-repo-rescan-demo" nil))
            (cl-repository-client/asdf-integration:configure-asdf-source-registry)
-           (ok (asdf:find-system "cl-repo-rescan-demo" nil)))
+           ;; A fresh ASDF session, as the next cl-repo step has: test-op's own
+           ;; session caches the NG lookup above (ASDF 3.3.7 on CI).
+           (ok (let ((asdf/session:*asdf-session* nil))
+                 (asdf:find-system "cl-repo-rescan-demo" nil))))
       (asdf:clear-system "cl-repo-rescan-demo")
       (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
       (uiop:delete-directory-tree (uiop:pathname-parent-directory-pathname pkg)
