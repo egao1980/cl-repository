@@ -96,3 +96,47 @@
                  (ok (= (length payload) (read-sequence buf in)))
                  (ok (equalp buf payload))))))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(defun %scratch-dir (tag)
+  (let ((dir (uiop:ensure-directory-pathname
+              (merge-pathnames (format nil "cl-repo-~a-~a-~a/" tag (get-universal-time) (random 1000000))
+                               (uiop:temporary-directory)))))
+    (ensure-directories-exist dir)
+    dir))
+
+(defun %file-octets (path)
+  (with-open-file (in path :element-type '(unsigned-byte 8))
+    (read-all-octets in)))
+
+(deftest re-extract-leaves-an-open-file-intact
+  "A sync re-extracted cl-stack-brotli while this image had libbrotli mapped.
+   Writing in place (same inode) rewrote the live code pages and corrupted the
+   process. A replaced file must get a new inode; whoever holds the old one
+   keeps reading the old bytes."
+  (let* ((dir (%scratch-dir "reextract"))
+         (old (ascii-octets "old library bytes"))
+         (new (ascii-octets "new library bytes!")))
+    (unwind-protect
+         (progn
+           (extract-layer (gzip-stored (make-tar-bytes "lib.so" old)) dir)
+           (with-open-file (held (merge-pathnames "lib.so" dir) :element-type '(unsigned-byte 8))
+             (extract-layer (gzip-stored (make-tar-bytes "lib.so" new)) dir)
+             (ok (equalp (read-all-octets held) old))
+             (ok (equalp (%file-octets (merge-pathnames "lib.so" dir)) new))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+#+sbcl
+(deftest re-extract-of-identical-content-keeps-the-file
+  "A forced reinstall of the same version must not touch unchanged files:
+   no remapping, and no new mtimes that make ASDF recompile everything."
+  (let* ((dir (%scratch-dir "identical"))
+         (bytes (ascii-octets "unchanged"))
+         (path (merge-pathnames "same.so" dir)))
+    (unwind-protect
+         (progn
+           (extract-layer (gzip-stored (make-tar-bytes "same.so" bytes)) dir)
+           (let ((inode (sb-posix:stat-ino (sb-posix:stat path))))
+             (extract-layer (gzip-stored (make-tar-bytes "same.so" bytes)) dir)
+             (ok (= inode (sb-posix:stat-ino (sb-posix:stat path))))
+             (ok (equalp (%file-octets path) bytes))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

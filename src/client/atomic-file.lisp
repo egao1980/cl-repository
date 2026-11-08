@@ -4,23 +4,26 @@
            #:read-sexp-file))
 (in-package :cl-repository-client/atomic-file)
 
-(defun call-with-atomic-output-file (path thunk)
+(defun call-with-atomic-output-file (path thunk &key (element-type 'character))
   "Call THUNK with an output stream to a temp file, then rename onto PATH.
    Prevents concurrent writers from corrupting PATH and readers from seeing
-   partial writes."
+   partial writes. The rename gives PATH a new inode: a process that has the
+   old file open or mapped (a loaded shared library) keeps its contents."
   (let* ((path (pathname path))
          (temp (merge-pathnames (format nil "~a.tmp-~d-~d"
                                         (file-namestring path)
                                         (get-universal-time)
                                         (random 1000000 (make-random-state t)))
                                 path)))
-    (with-open-file (s temp :direction :output :if-exists :supersede)
+    (with-open-file (s temp :direction :output :if-exists :supersede
+                            :element-type element-type)
       (funcall thunk s))
     (uiop:rename-file-overwriting-target temp path)))
 
-(defmacro with-atomic-output-file ((stream path) &body body)
+(defmacro with-atomic-output-file ((stream path &key (element-type ''character)) &body body)
   "Like WITH-OPEN-FILE for output, but writes atomically via temp file + rename."
-  `(call-with-atomic-output-file ,path (lambda (,stream) ,@body)))
+  `(call-with-atomic-output-file ,path (lambda (,stream) ,@body)
+                                 :element-type ,element-type))
 
 (defun read-sexp-file (path)
   "READ the first form from PATH with *READ-EVAL* disabled.
