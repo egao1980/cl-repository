@@ -78,11 +78,17 @@
 (defun source-registry-form (directories &key locked)
   ;; A checkout's leftover qlot tree (.qlot/ → Quicklisp releases) would make
   ;; every dependency resolve to a Quicklisp copy, which the walk rejects.
+  ;; ASDF's :also-exclude matches directory names below each :tree root, so a
+  ;; systems root that itself lives in .cl-repository/ is still scanned.
   ;; The install tree is preceded by the one version each multi-version
   ;; system should resolve to (PREFERRED-INSTALL-TREES).
   (let ((root (ignore-errors (systems-root))))
     `(:source-registry
       (:also-exclude ".qlot")
+      ;; A package published before the packager dropped .cl-repository/
+      ;; (mcp-backend-streamable-http 0.2.0) carries a whole old client tree:
+      ;; its cl-oci 0.16.0 was recompiled over the running one.
+      (:also-exclude ".cl-repository")
       ,@(loop for dir in directories
               for tree = (uiop:ensure-directory-pathname dir)
               when (and root (uiop:pathname-equal tree root))
