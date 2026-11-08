@@ -21,3 +21,11 @@ github egao1980/http-protocol
 github egao1980/http-encoding-chipz
 github egao1980/http-backend-dexador
 github egao1980/cl-stack-ssl
+# cl-stack async HTTP: the client's default backend (http-backend-async on
+# event-backend-libuv). setup-client seeds these and pulls the libuv overlay.
+github egao1980/http-backend-async
+github egao1980/event-backend-libuv
+github egao1980/event-protocol
+github egao1980/ws-protocol
+github egao1980/cl-stack-executors
+github egao1980/asdf-native
