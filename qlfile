@@ -13,7 +13,7 @@ ql trivial-features
 ql blackbird
 ql cl-cookie
 ql trivial-gray-streams
-ql rove
+github egao1980/rove
 # cl-stack HTTP (wire protocol + dexador backend; replaces direct dexador in oci-client)
 github egao1980/encoding-protocol
 github egao1980/compression-protocol
