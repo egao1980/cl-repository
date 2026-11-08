@@ -117,3 +117,68 @@
            (ok cl-user::*cl-repo-pretest-ran*))
       (asdf:clear-system "cl-repo-pretest-demo")
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest ql-entry-reference-ignores-qlot-dist-dates
+  "A qlot qlfile.lock pins `ql yason` to the dist date ql-2025-06-22. That is not
+   an OCI tag; installing it 404'd and sync tried to republish yason."
+  (let ((ref (fdefinition 'cl-repository-client/project::ql-entry-reference)))
+    (ok (string= "yason" (funcall ref "yason" "ql-2025-06-22")))
+    (ok (string= "yason" (funcall ref "yason" nil)))
+    (ok (string= "yason" (funcall ref "yason" "latest")))
+    (ok (string= "yason:0.8.3" (funcall ref "yason" "0.8.3")))))
+
+(defmacro with-stubbed-install ((calls &key fail-on fail-with) &body body)
+  "Run BODY with cmd-install recording each reference in CALLS. A reference
+   equal to FAIL-ON signals the condition FAIL-WITH builds."
+  (let ((orig (gensym)) (sym ''cl-repository-client/commands::cmd-install))
+    `(let ((,orig (fdefinition ,sym)))
+       (unwind-protect
+            (progn
+              (setf (fdefinition ,sym)
+                    (lambda (reference &rest keys)
+                      (declare (ignore keys))
+                      (push reference ,calls)
+                      (when (equal reference ,fail-on)
+                        (error (funcall ,fail-with)))
+                      t))
+              ,@body)
+         (setf (fdefinition ,sym) ,orig)))))
+
+(deftest install-or-publish-publishes-only-absent-packages
+  (let ((iop (fdefinition 'cl-repository-client/project::install-or-publish)))
+    (dolist (absent (list (lambda () (make-condition 'cl-oci-client/conditions:not-found-error
+                                                     :status 404))
+                          (lambda () (make-condition 'cl-oci-client/conditions:auth-error
+                                                     :status 401))))
+      (let ((calls '()) (published nil))
+        (with-stubbed-install (calls :fail-on "foo:1.0" :fail-with absent)
+          (funcall iop "foo:1.0" (lambda () (setf published t))))
+        (ok published)
+        (ok (equal '("foo" "foo:1.0") calls))))
+    (testing "a registry outage is not a missing package"
+      (let ((calls '()) (published nil))
+        (ok (signals
+             (with-stubbed-install (calls :fail-on "foo:1.0"
+                                          :fail-with (lambda ()
+                                                       (make-condition
+                                                        'cl-oci-client/conditions:registry-error
+                                                        :status 503)))
+               (funcall iop "foo:1.0" (lambda () (setf published t))))
+             'cl-oci-client/conditions:registry-error))
+        (ng published)))
+    (testing "an unrelated error propagates"
+      (let ((calls '()) (published nil))
+        (ok (signals
+             (with-stubbed-install (calls :fail-on "foo"
+                                          :fail-with (lambda () (make-condition 'simple-error
+                                                                                :format-control "tls")))
+               (funcall iop "foo" (lambda () (setf published t))))
+             'simple-error))
+        (ng published)))))
+
+(deftest explicit-tag-p-reads-only-the-last-segment
+  (let ((f (fdefinition 'cl-repository-client/commands::explicit-tag-p)))
+    (ok (null (funcall f "yason")))
+    (ok (funcall f "yason:0.8.3"))
+    (ok (funcall f "ghcr.io/ns/yason@sha256:abc"))
+    (ok (null (funcall f "localhost:5050/ns/yason")))))

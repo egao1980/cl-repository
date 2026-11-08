@@ -1,6 +1,7 @@
 (defpackage :cl-oci-client/registry
   (:use :cl)
-  (:import-from :cl-oci-client/conditions #:registry-error #:auth-error)
+  (:import-from :cl-oci-client/conditions #:registry-error #:auth-error #:not-found-error)
+  (:import-from :babel #:octets-to-string)
   (:import-from :cl-oci-client/auth
                 #:auth-config #:auth-config-token #:make-auth-config
                 #:obtain-token #:make-auth-headers)
@@ -54,6 +55,22 @@
             (setf (registry-auth registry) (make-auth-config :token token)))
         t))))
 
+(defun error-body-text (body)
+  "BODY of a failed registry response as text. Registries answer errors with a
+   JSON document; a request that forces binary hands back octets."
+  (if (typep body '(vector (unsigned-byte 8)))
+      (octets-to-string body :encoding :utf-8 :errorp nil)
+      body))
+
+(defun signal-registry-error (status url body)
+  "Signal the REGISTRY-ERROR subtype for HTTP STATUS: AUTH-ERROR for 401/403,
+   NOT-FOUND-ERROR for 404, REGISTRY-ERROR otherwise."
+  (error (case status
+           ((401 403) 'auth-error)
+           (404 'not-found-error)
+           (t 'registry-error))
+         :status status :url url :body (error-body-text body)))
+
 (defun ping (registry)
   "Check if the registry supports OCI Distribution Spec (GET /v2/)."
   (let ((url (api-url registry "/v2/")))
@@ -67,7 +84,7 @@
         ((<= 200 status 299) t)
         ((= status 401)
          (handle-auth-challenge registry headers))
-        (t (error 'registry-error :status status :url url :body body))))))
+        (t (signal-registry-error status url body))))))
 
 (defun registry-request (registry method path &key content content-type headers
                                                  accept (handle-auth t))
@@ -97,10 +114,7 @@
          (registry-request registry method path
                            :content content :content-type content-type
                            :headers headers :accept accept :handle-auth nil))
-        (t (error 'registry-error
-                  :status status
-                  :url url
-                  :body body))))))
+        (t (signal-registry-error status url body))))))
 
 (defun parse-reference (reference)
   "Parse a reference like 'ghcr.io/namespace/name:tag' or 'registry/name@sha256:...'

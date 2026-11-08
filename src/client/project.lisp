@@ -7,6 +7,7 @@
   (:import-from :cl-repository-client/quickload
                 #:add-registry #:ensure-system-dependencies #:ensure-systems)
   (:import-from :cl-repository-client/asd-rewrite #:asd-defsystem-depends-on)
+  (:import-from :cl-oci-client/conditions #:registry-error #:not-found-error #:auth-error)
   (:import-from :cl-repository-client/dep-satisfy #:system-satisfied-p)
   (:import-from :cl-repository-client/version-utils #:version<)
   (:import-from :cl-repository-client/asdf-integration
@@ -187,15 +188,34 @@
       (funcall (find-symbol "PACKAGE-SPEC-NAME" :cl-repository-packager/build-matrix) spec))))
 
 (defun install-or-publish (reference publish)
-  "Install REFERENCE. When that fails, call PUBLISH and install the bare name."
-  (handler-case
-      (progn (cmd-install reference :registry-url *default-registry*
-                          :namespace *default-namespace*)
-             t)
-    (error ()
-      (funcall publish)
-      (let ((name (subseq reference 0 (or (position #\: reference) (length reference)))))
-        (cmd-install name :registry-url *default-registry* :namespace *default-namespace*)))))
+  "Install REFERENCE. When the registry has no such package, call PUBLISH and
+   install the bare name. Absent = 404, or the 401/403 GHCR gives an anonymous
+   pull of a repository that does not exist. Any other failure (network, TLS,
+   a broken layer) propagates: publishing would not fix it."
+  (when (handler-case
+            (progn (cmd-install reference :registry-url *default-registry*
+                                :namespace *default-namespace*)
+                   nil)
+          (registry-error (e)
+            (unless (typep e '(or not-found-error auth-error))
+              (error e))
+            (msg "~&; cl-repo: ~a is not in ~a/~a; publishing it~%"
+                 reference *default-registry* *default-namespace*)
+            t))
+    (funcall publish)
+    (let ((name (subseq reference 0 (or (position #\: reference) (length reference)))))
+      (cmd-install name :registry-url *default-registry* :namespace *default-namespace*)))
+  t)
+
+(defun ql-entry-reference (name ref)
+  "OCI reference for a qlfile `ql NAME` entry. A qlot lock records the
+   Quicklisp dist date (\"ql-2025-06-22\"), never an OCI tag: packages are
+   tagged with their .asd version, so a dist ref installs the latest."
+  (if (or (null ref)
+          (string-equal ref "latest")
+          (and (> (length ref) 3) (string-equal "ql-" ref :end2 3)))
+      name
+      (format nil "~a:~a" name ref)))
 
 (defun repo-system-name (repo)
   (let ((slash (position #\/ repo :from-end t)))
@@ -233,10 +253,7 @@
     (:dist nil)
     (:ql
      (let* ((name (qlot-entry-name entry))
-            (ref (qlot-entry-ref entry))
-            (reference (if (and ref (not (string-equal ref "latest")))
-                           (format nil "~a:~a" name ref)
-                           name)))
+            (reference (ql-entry-reference name (qlot-entry-ref entry))))
        (install-or-publish reference
                            (lambda () (publish-ql-system name dist-url)))))
     ((:github :git)

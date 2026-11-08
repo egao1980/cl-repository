@@ -208,3 +208,31 @@
       (ok (equal result '("0.1.0" "latest")))
       (ok (= calls 2))
       (ok (search "(attempt 1/3)" log)))))
+
+(deftest test-collect-missing-defsystem-depends-on-of-a-dependency
+  "http-backend-async#44: an installed cl-stack-brotli.asd names asdf-native in
+   :defsystem-depends-on, which its published metadata omits. Reading the .asd
+   must make asdf-native missing, not abort the install."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (uiop:ensure-pathname
+                (format nil "~a/cl-repo-dsd-~36r/" (uiop:temporary-directory) (random (expt 36 6))))))
+         (write-asd (lambda (name text)
+                      (with-open-file (out (merge-pathnames (format nil "~a.asd" name) dir)
+                                           :direction :output :if-exists :supersede)
+                        (write-string text out)))))
+    (ensure-directories-exist dir)
+    (funcall write-asd "cl-dsd-root" "(defsystem \"cl-dsd-root\" :depends-on (\"cl-dsd-pkg\"))")
+    (funcall write-asd "cl-dsd-pkg"
+             "(defsystem \"cl-dsd-pkg\" :defsystem-depends-on (\"cl-dsd-definer\") :depends-on ())")
+    (push dir asdf:*central-registry*)
+    (unwind-protect
+         (progn
+           (ok (equal '("cl-dsd-definer") (collect-missing-asdf-deps '("cl-dsd-root"))))
+           ;; Once the definer is installed, the next pass reads the package.
+           (funcall write-asd "cl-dsd-definer" "(defsystem \"cl-dsd-definer\")")
+           (asdf:clear-system "cl-dsd-pkg")
+           (ok (null (collect-missing-asdf-deps '("cl-dsd-root")))))
+      (setf asdf:*central-registry* (remove dir asdf:*central-registry* :test #'equal))
+      (dolist (s '("cl-dsd-root" "cl-dsd-pkg" "cl-dsd-definer"))
+        (asdf:clear-system s))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

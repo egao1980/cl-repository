@@ -60,10 +60,7 @@
                             :accept *default-accept*)
         (declare (ignore body))
         (values status headers))
-    (registry-error (e)
-      (if (eql (cl-oci-client/conditions:registry-error-status e) 404)
-          (values nil nil)
-          (error e)))))
+    (not-found-error () (values nil nil))))
 
 (defun head-blob (registry repository digest)
   "HEAD a blob. Returns (values status headers) or NIL if not found."
@@ -73,10 +70,7 @@
                             (format nil "/v2/~a/blobs/~a" repository digest))
         (declare (ignore body))
         (values status headers))
-    (registry-error (e)
-      (if (eql (cl-oci-client/conditions:registry-error-status e) 404)
-          (values nil nil)
-          (error e)))))
+    (not-found-error () (values nil nil))))
 
 (defun manifest-exists-p (registry repository reference)
   "Check if a manifest exists. Returns T or NIL."

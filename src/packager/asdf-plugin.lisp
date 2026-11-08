@@ -115,28 +115,41 @@
         (error () nil)))
     (nreverse names)))
 
-(defun same-source-tree-p (system root-dir)
-  (let ((d (ignore-errors (asdf:system-source-directory system))))
-    (and d root-dir
-         (or (uiop:pathname-equal d root-dir)
-             (uiop:subpathp d root-dir)))))
+(defun same-source-tree-p (system root-dir &optional root-name)
+  "True when SYSTEM belongs to the package rooted at ROOT-DIR (named ROOT-NAME).
+   A package-inferred child (rove/main) has no .asd of its own, so ASDF may give
+   it no source directory: a secondary of ROOT-NAME is in-tree by name, and the
+   component pathname stands in for the missing directory."
+  (or (and root-name
+           (string= (asdf:primary-system-name system) root-name))
+      (let ((d (or (asdf:system-source-directory system)
+                   (asdf:component-pathname system))))
+        (and d root-dir
+             (let ((d (uiop:ensure-directory-pathname (or (probe-file d) d)))
+                   (r (uiop:ensure-directory-pathname (or (probe-file root-dir) root-dir))))
+               (or (uiop:pathname-equal d r)
+                   (uiop:subpathp d r)))))))
 
 (defun collect-external-depends-on (system)
   "Walk SYSTEM and same-tree children (package-inferred). Return external deps.
-   Drops in-tree names (rove/main) so OCI annotations list real packages (dissect)."
+   Drops in-tree names (rove/main) so OCI annotations list real packages (dissect).
+   :defsystem-depends-on counts: a consumer cannot even read the .asd without it
+   (cl-stack-brotli → asdf-native)."
   (let* ((root (asdf:system-source-directory system))
+         (root-name (asdf:primary-system-name system))
          (seen (make-hash-table :test #'equal))
          (external '()))
     (labels ((walk (sys)
                (let ((n (string-downcase (asdf:component-name sys))))
                  (unless (gethash n seen)
                    (setf (gethash n seen) t)
-                   (dolist (raw (asdf:system-depends-on sys))
+                   (dolist (raw (append (asdf:system-defsystem-depends-on sys)
+                                        (asdf:system-depends-on sys)))
                      (let* ((dep (normalize-dep raw))
                             (name (if (consp dep) (car dep) dep)))
                        (when name
                          (let ((child (asdf:find-system name nil)))
-                           (if (and child (same-source-tree-p child root))
+                           (if (and child (same-source-tree-p child root root-name))
                                (walk child)
                                (pushnew dep external :test #'equal))))))))))
       (walk system)
