@@ -36,19 +36,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Roswell
-        run: |
-          curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
-          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
-
-      - name: Install SBCL
-        run: |
-          ros install "sbcl-bin/$SBCL_VERSION"
-          ros use "sbcl-bin/$SBCL_VERSION"
+      # Cached Roswell + SBCL + qlot; release assets only on a cold cache.
+      - uses: ./.github/actions/setup-roswell
+        with:
+          sbcl-version: ${{ env.SBCL_VERSION }}
 
       - name: Install dependencies
         run: |
-          ros install qlot
+          command -v qlot >/dev/null || ros install qlot
           qlot install
 
       - name: Test ${{ matrix.system }}
@@ -66,19 +61,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Roswell
-        run: |
-          curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
-          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
-
-      - name: Install SBCL
-        run: |
-          ros install "sbcl-bin/$SBCL_VERSION"
-          ros use "sbcl-bin/$SBCL_VERSION"
+      # Cached Roswell + SBCL + qlot; release assets only on a cold cache.
+      - uses: ./.github/actions/setup-roswell
+        with:
+          sbcl-version: ${{ env.SBCL_VERSION }}
 
       - name: Install dependencies
         run: |
-          ros install qlot
+          command -v qlot >/dev/null || ros install qlot
           qlot install
 
       - name: Run integration tests
@@ -91,26 +81,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Roswell
-        run: |
-          curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
-          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
-
-      - name: Install SBCL
-        run: |
-          ros install "sbcl-bin/$SBCL_VERSION"
-          ros use "sbcl-bin/$SBCL_VERSION"
+      # Cached Roswell + SBCL + qlot; release assets only on a cold cache.
+      - uses: ./.github/actions/setup-roswell
+        with:
+          sbcl-version: ${{ env.SBCL_VERSION }}
 
       - name: Install dependencies
         run: |
-          ros install qlot
+          command -v qlot >/dev/null || ros install qlot
           qlot install
 
       - name: Install OCICL
         run: |
-          OCICL_VERSION=$(curl -sI https://github.com/ocicl/ocicl/releases/latest | grep -i ^location: | sed 's|.*/v||;s/\r//')
-          curl -sL "https://github.com/ocicl/ocicl/releases/download/v${OCICL_VERSION}/ocicl_${OCICL_VERSION}-1_amd64.deb" -o /tmp/ocicl.deb
-          sudo dpkg -i /tmp/ocicl.deb
+          set -euo pipefail
+          source .github/actions/setup-roswell/fetch.sh
+          OCICL_VERSION=$(curl -fsSI --retry 5 --retry-all-errors https://github.com/ocicl/ocicl/releases/latest \
+                          | grep -i ^location: | sed 's|.*/v||;s/\r//')
+          deb="$(fetch "https://github.com/ocicl/ocicl/releases/download/v${OCICL_VERSION}/ocicl_${OCICL_VERSION}-1_amd64.deb" \
+                       "ocicl_${OCICL_VERSION}-1_amd64.deb")"
+          sudo dpkg -i "${deb}"
           ocicl version
 
       - name: Run OCICL compatibility test
