@@ -116,3 +116,25 @@
            (ok (null (cl-repository-client/asd-rewrite:asd-defsystem-depends-on evil))
                "#. is not evaluated; the file is skipped"))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest asd-defsystem-depends-on-survives-read-eval-elsewhere
+  ;; cl-stack-icu / event-backend-libuv pick a grovel layout with #. — the whole
+  ;; file can't be read with *read-eval* nil, but its :defsystem-depends-on can.
+  (let* ((dir (uiop:ensure-directory-pathname
+               (merge-pathnames (format nil "cl-repo-dsd2-~a/" (random 1000000))
+                                (uiop:temporary-directory))))
+         (asd (merge-pathnames "demo.asd" dir)))
+    (ensure-directories-exist dir)
+    (unwind-protect
+         (progn
+           (with-open-file (out asd :direction :output :if-exists :supersede)
+             (write-string "#.(progn (error \"must not be evaluated\") nil)
+(defsystem \"demo\"
+  :defsystem-depends-on (\"cffi-grovel\" (:version \"asdf-native\" \"0.3.0\"))
+  :components #.(if (probe-file \"grovel.cache\") '((:file \"cached\")) '((:file \"grovel\"))))
+" out))
+           (multiple-value-bind (names minimums)
+               (cl-repository-client/asd-rewrite:asd-defsystem-depends-on asd)
+             (ok (equal names '("cffi-grovel" "asdf-native")) "found despite #. elsewhere")
+             (ok (equal minimums '(("asdf-native" . "0.3.0"))) "(:version …) minimum returned")))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

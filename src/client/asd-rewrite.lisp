@@ -3,7 +3,7 @@
   (:import-from :cl-repository-client/platform-resolver
                 #:detect-local-platform #:overlay-key)
   (:import-from :cl-repository-client/asd-text
-                #:find-defsystem-span #:plist-value-span #:splice #:print-value-at #:line-column)
+                #:defsystem-spans #:find-defsystem-span #:plist-value-span #:splice #:print-value-at #:line-column)
   (:export #:cmd-add-overlay
            #:asd-defsystem-depends-on
            #:read-system-overlays
@@ -37,21 +37,42 @@
          (%dep-name (if (string-equal (first dep) :feature) (third dep) (second dep))))
         (t nil)))
 
+(defun %dep-minimum (dep)
+  "Minimum version of a (:version name \"1.2\") entry, or NIL."
+  (when (and (consp dep) (string-equal (first dep) :version) (stringp (third dep)))
+    (third dep)))
+
+(defun %dsd-lists-from-text (path)
+  "The :DEFSYSTEM-DEPENDS-ON value of each defsystem, read on its own: for an
+.asd the reader can't take whole with *READ-EVAL* NIL (a #. elsewhere picks a
+grovel layout, defines a stub package, …)."
+  (let ((text (uiop:read-file-string path)))
+    (loop for (start end) in (defsystem-spans text)
+          for v-start = (plist-value-span text start end ":defsystem-depends-on" :skip 2)
+          when v-start
+            collect (multiple-value-bind (vs ve) (plist-value-span text start end ":defsystem-depends-on" :skip 2)
+                      (handler-case (let ((*read-eval* nil)) (read-from-string text t nil :start vs :end ve))
+                        ((or reader-error package-error end-of-file) () nil))))))
+
 (defun asd-defsystem-depends-on (path)
   "System names in every defsystem's :DEFSYSTEM-DEPENDS-ON in the .asd at PATH,
 read without evaluating it (*READ-EVAL* NIL). Those systems must be present
 before ASDF can load the file, so they can't come from walking a loaded
-system. NIL when the file can't be read statically (#. or an unknown package
-prefix): ASDF then reports what is missing."
-  (let ((forms (handler-case (read-lisp-forms path)
-                 (reader-error () nil)
-                 (package-error () nil))))
-    (remove-duplicates
-     (loop for form in forms
-           when (defsystem-form-p form)
-             append (remove nil (mapcar #'%dep-name
-                                        (getf (cddr form) :defsystem-depends-on))))
-     :test #'string=)))
+system. When the whole file can't be read that way (#., an unknown package
+prefix), each :defsystem-depends-on value is located in the text and read
+alone. Second value: alist (name . minimum) for (:version name min) entries."
+  (let* ((forms (handler-case (read-lisp-forms path)
+                  ((or reader-error package-error) () :unreadable)))
+         (lists (if (eq forms :unreadable)
+                    (%dsd-lists-from-text path)
+                    (loop for form in forms
+                          when (defsystem-form-p form)
+                            collect (getf (cddr form) :defsystem-depends-on))))
+         (deps (loop for l in lists append (if (listp l) l (list l)))))
+    (values (remove-duplicates (remove nil (mapcar #'%dep-name deps)) :test #'string= :from-end t)
+            (loop for d in deps
+                  for min = (%dep-minimum d)
+                  when min collect (cons (%dep-name d) min)))))
 
 (defun plist-put (plist key value)
   (if (and plist (nth-value 1 (get-properties plist (list key))))

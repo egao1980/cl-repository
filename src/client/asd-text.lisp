@@ -1,6 +1,7 @@
 (defpackage :cl-repository-client/asd-text
   (:use :cl)
   (:export #:asd-edit-error
+           #:defsystem-spans
            #:find-defsystem-span
            #:plist-value-span
            #:splice
@@ -81,6 +82,23 @@ any ' ` #' , ,@ prefixes."
 
 (defun %name-token (token)
   (string-downcase (string-trim "\"" (subseq token (1+ (or (position #\: token :from-end t) -1))))))
+
+(defun defsystem-spans (text)
+  "→ list of (start end name-end) for every top-level defsystem form in TEXT."
+  (let ((i 0) (spans '()))
+    (loop
+      (setf i (%skip text i))
+      (when (>= i (length text)) (return (nreverse spans)))
+      (if (char/= (char text i) #\()
+          (setf i (max (1+ i) (%element-end text i)))
+          (let* ((end (%form-end text i))
+                 (head-start (%skip text (1+ i)))
+                 (head-end (%token-end text head-start))
+                 (head (string-downcase (subseq text head-start head-end))))
+            (when (member head '("defsystem" "asdf:defsystem" "asdf/defsystem:defsystem")
+                          :test #'string=)
+              (push (list i end (%element-end text (%skip text head-end))) spans))
+            (setf i end))))))
 
 (defun find-defsystem-span (text name)
   "→ (values start end name-end) of the top-level (defsystem NAME ...) form
