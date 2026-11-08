@@ -100,7 +100,7 @@ jobs:
 
       # ros install ecl builds from source (~6 min); keep the impl tree.
       - name: Cache Roswell impl
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.roswell/impls/*/*/${{ inputs.lisp }}
           key: ${{ runner.os }}-${{ runner.arch }}-ros-impl-${{ inputs.lisp }}-${{ env.LISP_IMPL_VERSION || 'default' }}-v1
@@ -109,9 +109,23 @@ jobs:
         run: |
           set -euo pipefail
           spec="${LISP_IMPL}${LISP_IMPL_VERSION:+/${LISP_IMPL_VERSION}}"
+          # ros install asks GitHub (releases.atom, release assets) before it
+          # downloads; one failed request used to fail the job. Retry with
+          # backoff and wipe a half-installed tree between attempts.
           if ! ros use "$spec" 2>/dev/null; then
-            ros install "$spec"
-            ros use "$spec"
+            ok=0
+            for attempt in 1 2 3 4 5 6; do
+              if ros install "$spec" && ros use "$spec"; then
+                ok=1
+                break
+              fi
+              echo "ros install $spec failed (attempt $attempt); retrying..."
+              if [[ -n "${LISP_IMPL_VERSION:-}" ]]; then
+                rm -rf "$HOME/.roswell/impls/"*/*/"${LISP_IMPL}/${LISP_IMPL_VERSION}"
+              fi
+              sleep $((5 * 2 ** attempt))
+            done
+            [[ "$ok" -eq 1 ]] || { echo "ros install $spec failed after retries" >&2; exit 1; }
           fi
           ros -e '(format t "~&lisp ~A ~A~%" (lisp-implementation-type) (lisp-implementation-version))' -q
 
@@ -120,9 +134,9 @@ jobs:
         run: |
           JNA_VER=5.14.0
           mkdir -p "$HOME/jna"
-          curl -fsSL -o "$HOME/jna/jna-${JNA_VER}.jar" \
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$HOME/jna/jna-${JNA_VER}.jar" \
             "https://repo1.maven.org/maven2/net/java/dev/jna/jna/${JNA_VER}/jna-${JNA_VER}.jar"
-          curl -fsSL -o "$HOME/jna/jna-platform-${JNA_VER}.jar" \
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$HOME/jna/jna-platform-${JNA_VER}.jar" \
             "https://repo1.maven.org/maven2/net/java/dev/jna/jna-platform/${JNA_VER}/jna-platform-${JNA_VER}.jar"
           {
             echo "CLASSPATH=$HOME/jna/jna-${JNA_VER}.jar:$HOME/jna/jna-platform-${JNA_VER}.jar${CLASSPATH:+:$CLASSPATH}"
