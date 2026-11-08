@@ -273,7 +273,7 @@
        (ensure-snapshot)
        (load-digest-cache)
        (let ((plan (compute-install-plan system-list :version version :force force
-                                                     :with with)))
+                                                     :with with :minimum minimum)))
          (dolist (entry plan)
            (let* ((name (car entry))
                   (ver (if minimum nil (cdr entry))))
@@ -517,17 +517,19 @@
      plan)
     (t plan)))
 
-(defun %resolve-one-into-plan (name version plan &key force with-p)
+(defun %resolve-one-into-plan (name version plan &key force with-p minimum)
   "Resolve NAME into PLAN / *missing-deps-accumulator*. Returns updated PLAN.
-   Slash secondaries (`foo/bar`) install the primary package `foo`."
+   Slash secondaries (`foo/bar`) install the primary package `foo`.
+   A findable NAME older than MINIMUM is resolved again, not kept."
   (cond
     ((system-denied-p name)
      (msg "~&; cl-repo: skipping denied system ~a~%" name)
      plan)
-    ((and (not force) (or (let ((found (asdf:find-system name nil)))
-                            ;; a Quicklisp dist copy (Quicklisp loaded in this
-                            ;; image) is not an install: resolve from OCI
-                            (and found (not (quicklisp-source-p found))))
+    ((and (not force) (or ;; findable, new enough, and not a Quicklisp dist
+                          ;; copy (Quicklisp loaded in this image): lisp-mcp
+                          ;; needs mcp-protocol 0.3.0, an installed 0.2.0 is
+                          ;; not "already available"
+                          (system-satisfied-p name minimum)
                           (system-protected-p name)
                           (implementation-system-p name)))
      (msg "~&; cl-repo: ~a already available via ASDF~%" name)
@@ -568,11 +570,12 @@
                   plan
                   (progn (push (cons pkg version) plan) plan))))))))))
 
-(defun compute-install-plan (system-names &key version force with)
+(defun compute-install-plan (system-names &key version force with minimum)
   "Use SAT solver to compute full transitive install plan.
    Pins already-installed systems unless FORCE is true.
    Skips systems that are protected (see SYSTEM-PROTECTED-P).
    WITH: extra systems to resolve alongside (separate SAT passes).
+   MINIMUM: lowest acceptable version of SYSTEM-NAMES (an older install is re-resolved).
    Sets *missing-deps-accumulator* as a side-effect.
 
    Source policy:
@@ -583,7 +586,7 @@
     (setf *missing-deps-accumulator* nil)
     (dolist (name-raw system-names)
       (let ((name (string-downcase (string name-raw))))
-        (setf plan (%resolve-one-into-plan name version plan :force force))))
+        (setf plan (%resolve-one-into-plan name version plan :force force :minimum minimum))))
     (dolist (extra-raw (or with nil))
       (multiple-value-bind (extra-name extra-version)
           (if (consp extra-raw)
