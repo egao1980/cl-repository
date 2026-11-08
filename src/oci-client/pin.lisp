@@ -35,14 +35,30 @@
                          (uiop:ensure-directory-pathname (or (probe-file dir) dir))))
         directories))
 
+(defun defined-system-names (directories)
+  "Primary names of the .asd files under DIRECTORIES (a project checkout),
+   skipping the install trees and qlot trees a checkout may hold."
+  (let ((names (make-hash-table :test #'equal)))
+    (dolist (dir directories names)
+      (dolist (asd (ignore-errors
+                    (directory (merge-pathnames "**/*.asd" (uiop:ensure-directory-pathname dir)))))
+        (let ((path (namestring asd)))
+          (unless (or (search "/.cl-repository/" path) (search "/.qlot/" path))
+            (setf (gethash (string-downcase (pathname-name asd)) names) t)))))))
+
 (defun loaded-system-files (&key except)
   "Hash table of every loaded system's name → the .asd it was loaded from,
-   leaving out systems whose .asd lies under one of the EXCEPT directories."
-  (let ((table (make-hash-table :test #'equal)))
+   leaving out systems whose .asd lies under one of the EXCEPT directories and
+   systems those directories define: testing a checkout of a system the client
+   itself runs (http-backend-async) must load the checkout, not the client's copy."
+  (let ((table (make-hash-table :test #'equal))
+        (defined (defined-system-names except)))
     (dolist (name (asdf:already-loaded-systems) table)
       (let* ((sys (asdf:registered-system name))
              (file (and sys (asdf:system-source-file sys))))
-        (when (and file (not (under-any-p file except)))
+        (when (and file
+                   (not (under-any-p file except))
+                   (not (gethash (asdf:primary-system-name name) defined)))
           (setf (gethash name table) file))))))
 
 (defvar *checked* nil

@@ -137,3 +137,24 @@
   (testing "same or older versions in the registry are quiet"
     (ok (null (%shadow-warnings "1.0.0" "1.0.0")))
     (ok (null (%shadow-warnings "2.0.0" "1.0.0")))))
+
+(deftest-unpinned pinning-skips-systems-the-checkout-defines
+  "A checkout of a system the client runs (http-backend-async) is tested from
+   the checkout: its systems are not pinned to the client's loaded copy."
+  (let ((client (%tmp-tree "cl-copy")) (checkout (%tmp-tree "co-def"))
+        (saved asdf:*source-registry-parameter*))
+    (%write-system client "1.0.0")
+    (%write-system checkout "2.0.0")
+    (unwind-protect
+         (progn
+           (asdf:initialize-source-registry `(:source-registry (:directory ,client) :ignore-inherited-configuration))
+           (%load "pin-demo")
+           (asdf:initialize-source-registry
+            `(:source-registry (:directory ,checkout) (:directory ,client) :ignore-inherited-configuration))
+           (with-loaded-systems-pinned (:except (list checkout))
+             (ok (equal "2.0.0" (asdf:component-version (%find "pin-demo"))))))
+      (asdf:clear-system "pin-demo")
+      (when (find-package "PIN-DEMO") (delete-package "PIN-DEMO"))
+      (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+      (uiop:delete-directory-tree client :validate t :if-does-not-exist :ignore)
+      (uiop:delete-directory-tree checkout :validate t :if-does-not-exist :ignore))))
