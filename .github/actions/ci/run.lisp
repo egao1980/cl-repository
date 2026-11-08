@@ -84,7 +84,13 @@
     (when client
       (format t "~&; ci: load client from ~a~%" client)
       (asdf:initialize-source-registry (%registry-form (list client))))
-    (%ci-muffle (lambda () (asdf:load-system "cl-repository-client")))
+    (%ci-muffle (lambda ()
+                  (asdf:load-system "cl-repository-client")
+                  ;; Choose the HTTP backend while only the client tree is on
+                  ;; the registry, outside ASDF's load of the client.
+                  (let ((ensure (and (find-package "CL-OCI-CLIENT/HTTP")
+                                     (find-symbol "ENSURE-HTTP-BACKEND" "CL-OCI-CLIENT/HTTP"))))
+                    (when (and ensure (fboundp ensure)) (funcall ensure)))))
     (when client
       (asdf:initialize-source-registry
        (%registry-form (list (uiop:getcwd) client)))

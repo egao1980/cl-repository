@@ -76,7 +76,7 @@ async stack cannot load here (restart USE-DEXADOR, taken automatically unless
 CL_REPO_HTTP_BACKEND=async)."
   (or *http-backend*
       (progn
-        ;; Load CE backend before first SEND so ASDF doesn't recurse mid-load.
+        ;; Load CE backend before first SEND so a request never loads one mid-plan.
         (asdf:load-system "http-encoding-chipz")
         (let ((choice (%env-backend)))
           (setf *http-backend*
@@ -122,6 +122,8 @@ CL_REPO_HTTP_BACKEND=async)."
               (response-status res)
               (response-headers res)))))
 
-;;; Bind a default backend at load so package-inferred consumers don't need
-;;; an explicit setup call before the first registry request.
-(ensure-http-backend)
+;;; No backend is chosen at load time: choosing one loads systems, and doing
+;;; that while ASDF is still loading this file is a recursive OPERATE ("Deprecated
+;;; recursive use of ASDF/OPERATE:OPERATE"). The first HTTP-EXCHANGE binds it.
+;;; Entry points (roswell/cl-repo.ros) call ENSURE-HTTP-BACKEND after loading
+;;; the client, outside any ASDF operation.
