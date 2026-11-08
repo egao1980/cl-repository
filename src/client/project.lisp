@@ -22,6 +22,7 @@
                 #:choose-overlay-plists #:detect-local-platform #:overlay-key)
   (:import-from :cl-repository-client/asd-rewrite #:read-system-overlays)
   (:export #:client-source-tree
+           #:*sync-with*
            #:ensure-default-registry
            #:register-project
            #:project-registry-directories
@@ -379,6 +380,11 @@ before any :depends-on walk can see them. → the names installed."
                  (when min (list :minimum min)))))
       missing)))
 
+(defvar *sync-with* nil
+  "Extra install roots for CMD-SYNC beyond the .asd :ci :with list: the CI
+   action's `with:` input and what pre-install hooks push onto
+   cl-repository-ci-lib:*extra-with* (an event backend chosen by env).")
+
 (defun cmd-sync (&key (directory (uiop:getcwd)) system overlay locked)
   "Install what the .asd and qlfile ask for, and record the lock.
    OVERLAY names an opt-in overlay such as cuda, installed on top of the automatic stack.
@@ -387,26 +393,30 @@ before any :depends-on walk can see them. → the names installed."
         (*requested-overlay* (overlay-request overlay)))
     (when (member (namestring dir) *sync-stack* :test #'equal)
       (return-from cmd-sync nil))
-    (let ((*sync-stack* (cons (namestring dir) *sync-stack*)))
-      (ensure-default-registry)
-      (register-project dir)
-      (clear-project-systems dir)
-      (if locked
-          (cmd-restore :registry-url *default-registry* :namespace *default-namespace*)
-          (progn
-            (sync-qlfile dir)
-            (register-project dir)
-            (let ((name (or system (discover-project-system dir))))
-              (when name
-                (ensure-defsystem-depends-on dir)
-                (asdf:find-system name nil)
-                (multiple-value-bind (env-install env-load)
-                    (expand-ci-env (getf (ci-plist name) :env))
-                  (declare (ignore env-load))
-                  (ensure-system-dependencies
-                   name
-                   :with (append (project-with name) env-install)
-                   :also-tests (getf (ci-plist name) :also-tests t))))))))))
+    ;; Pinned from the start: the walk's FIND-SYSTEM under the project registry
+    ;; would otherwise re-register a system this image runs (cl+ssl) from the
+    ;; install tree, and a later load would load it, and its library, again.
+    (with-loaded-systems-pinned (:except (list dir))
+      (let ((*sync-stack* (cons (namestring dir) *sync-stack*)))
+        (ensure-default-registry)
+        (register-project dir)
+        (clear-project-systems dir)
+        (if locked
+            (cmd-restore :registry-url *default-registry* :namespace *default-namespace*)
+            (progn
+              (sync-qlfile dir)
+              (register-project dir)
+              (let ((name (or system (discover-project-system dir))))
+                (when name
+                  (ensure-defsystem-depends-on dir)
+                  (asdf:find-system name nil)
+                  (multiple-value-bind (env-install env-load)
+                      (expand-ci-env (getf (ci-plist name) :env))
+                    (declare (ignore env-load))
+                    (ensure-system-dependencies
+                     name
+                     :with (append (project-with name) env-install *sync-with*)
+                     :also-tests (getf (ci-plist name) :also-tests t)))))))))))
 
 (defun prepare-test (&key (directory (uiop:getcwd)) system)
   "Make the project's install tree visible to ASDF, load init files and the
@@ -428,13 +438,19 @@ before any :depends-on walk can see them. → the names installed."
   "Sync, then asdf:test-system. A system with no test-op still exits 0.
    PRE-TEST, a function of no arguments, runs once the install tree is on the
    registry and before the system loads (CI pre-test hooks)."
-  (when sync
-    (cmd-sync :directory directory :system system :overlay overlay))
-  (let ((name (prepare-test :directory directory :system system)))
-    (when pre-test
-      (funcall pre-test))
-    (asdf:load-system name)
-    (asdf:test-system name)))
+  ;; Systems this image already runs (the client's cl+ssl, cl-stack-ssl, ...)
+  ;; stay where they were loaded from: a second copy from the install tree
+  ;; re-ran cl+ssl's reload.lisp, which unloads the live libcrypto, and SBCL
+  ;; crashed re-linking foreign symbols (http-backend-async#44 on ci-base).
+  ;; The checkout itself is never pinned: its code is what is under test.
+  (with-loaded-systems-pinned (:except (list (uiop:ensure-directory-pathname directory)))
+    (when sync
+      (cmd-sync :directory directory :system system :overlay overlay))
+    (let ((name (prepare-test :directory directory :system system)))
+      (when pre-test
+        (funcall pre-test))
+      (asdf:load-system name)
+      (asdf:test-system name))))
 
 (defun lisp-startup (program form rest)
   (cond

@@ -43,6 +43,7 @@
                 #:source-for #:ql-allowed-p #:oci-allowed-p #:system-denied-p)
   (:import-from :cl-oci/system-names #:oci-package-name #:asdf-primary-system-name)
   (:import-from :babel #:octets-to-string)
+  (:import-from :cl-oci-client/pin #:pinned-system-p)
   (:export #:*registries*
            #:add-registry
            #:find-system-in-registry
@@ -424,8 +425,12 @@
                       :sources sources :deny deny :allow allow
                       :default-source default-source
                       :config-path config-path)
+      ;; Clearing drops a Quicklisp dummy so the OCI copy is found. A system
+      ;; this image already runs (cl-stack-ssl) stays: clearing it would load
+      ;; it, and its native library, a second time.
       (dolist (e extras)
-        (ignore-errors (asdf:clear-system e))))
+        (unless (pinned-system-p e)
+          (ignore-errors (asdf:clear-system e)))))
     ;; One pass only sees the SUT asd. After installing a package-inferred
     ;; system (rove → rove/core/assertion → dissect), re-walk until fixpoint.
     (let ((prev nil))
