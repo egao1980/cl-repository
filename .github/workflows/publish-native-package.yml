@@ -212,10 +212,35 @@ jobs:
           sbcl-version: ${{ env.SBCL_VERSION }}
           roswell-version: ${{ env.ROSWELL_VERSION }}
 
+      # setup-oras downloads from GitHub releases on every call (no cache
+      # lookup); 504s there failed whole matrices (2026-11-08). Keep the
+      # verified binary per version and only call setup-oras on a miss.
+      - name: Cache oras
+        id: oras-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/cl-repo-ci/oras/1.2.3
+          key: ${{ runner.os }}-${{ runner.arch }}-oras-bin-1.2.3
+
       - name: Install oras
+        if: steps.oras-cache.outputs.cache-hit != 'true'
         uses: oras-project/setup-oras@v2
         with:
           version: 1.2.3
+
+      - name: Put cached oras on PATH
+        shell: bash
+        env:
+          ORAS_DIR_VERSION: 1.2.3
+          ORAS_CACHE_HIT: ${{ steps.oras-cache.outputs.cache-hit }}
+        run: |
+          d="${HOME}/.cache/cl-repo-ci/oras/${ORAS_DIR_VERSION}"
+          if [[ "${ORAS_CACHE_HIT}" != "true" ]]; then
+            mkdir -p "${d}"
+            cp "$(command -v oras)" "${d}/"
+          fi
+          command -v cygpath >/dev/null 2>&1 && d="$(cygpath -w "${d}")"
+          echo "${d}" >> "$GITHUB_PATH"
 
       # Input, else the v* tag, else the .asd :version. cl-repo version writes
       # a given version into the staged .asd, so the published source carries
