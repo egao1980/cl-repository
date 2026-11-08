@@ -182,3 +182,23 @@
     (ok (funcall f "yason:0.8.3"))
     (ok (funcall f "ghcr.io/ns/yason@sha256:abc"))
     (ok (null (funcall f "localhost:5050/ns/yason")))))
+
+(deftest install-or-publish-skips-oci-install-after-a-local-install
+  "Without write access a publish installs the source locally; the bare-name
+   OCI install after it would 404 again."
+  (let ((iop (fdefinition 'cl-repository-client/project::install-or-publish))
+        (calls '()))
+    (with-stubbed-install (calls :fail-on "foo"
+                                 :fail-with (lambda () (make-condition
+                                                        'cl-oci-client/conditions:not-found-error
+                                                        :status 404)))
+      (let ((sym 'cl-repository-client/asdf-integration:configure-asdf-source-registry))
+        (let ((orig (fdefinition sym)))
+          (unwind-protect
+               (progn
+                 (setf (fdefinition sym) (lambda () nil))
+                 (funcall iop "foo"
+                          (lambda ()
+                            (setf cl-repository-client/project::*installed-locally* t))))
+            (setf (fdefinition sym) orig)))))
+    (ok (equal '("foo") calls))))

@@ -8,6 +8,7 @@
   (:import-from :cl-oci-client/http
                 #:http-exchange #:response-header-value)
   (:export #:registry
+           #:signal-registry-error
            #:registry-url
            #:registry-auth
            #:registry-insecure-p

@@ -20,7 +20,9 @@
                 #:repackage-result-blobs)
   (:import-from :cl-repository-ql-exporter/incremental #:manifest-exists-in-registry-p)
   (:export #:export-dist
-           #:export-project-to-registry))
+           #:export-project-to-registry
+           #:version-from-prefix
+           #:install-locally))
 (in-package :cl-repository-ql-exporter/exporter)
 
 (defun download-archive (url &key expected-md5)
@@ -41,10 +43,21 @@
           (error "MD5 mismatch for ~a: expected ~a, got ~a" url expected-md5 actual))))
     data))
 
-(defun version-from-prefix (prefix)
-  "Extract a version tag from a QL release prefix like 'alexandria-20260101-git'."
-  (let ((pos (position #\- prefix)))
-    (if pos (subseq prefix (1+ pos)) prefix)))
+(defun version-from-prefix (prefix &optional project)
+  "Version tag of a QL release PREFIX such as 'alexandria-20260101-git'.
+   PROJECT, when given, is stripped as a whole: 'cl-who-20260101-git' →
+   '20260101-git' (splitting at the first hyphen gave 'who-20260101-git').
+   Without it the version starts at the first hyphen followed by a digit."
+  (let ((head (and project (format nil "~a-" project))))
+    (cond ((and head (> (length prefix) (length head))
+                (string= head prefix :end2 (length head)))
+           (subseq prefix (length head)))
+          (t
+           (let ((pos (loop for i from 0 below (1- (length prefix))
+                            when (and (char= (char prefix i) #\-)
+                                      (digit-char-p (char prefix (1+ i))))
+                              return i)))
+             (if pos (subseq prefix (1+ pos)) prefix))))))
 
 (defun systems-for-project (all-systems project-name)
   "Filter systems list for a specific project."
@@ -54,7 +67,7 @@
   "Export a single project to the registry. Returns T on success."
   (let* ((project-name (ql-release-project release))
          (archive-url (ql-release-url release))
-         (ver (or version (version-from-prefix (ql-release-prefix release)))))
+         (ver (or version (version-from-prefix (ql-release-prefix release) project-name))))
     (msg "~&  Downloading ~a..." project-name)
     (force-output)
     (let ((archive-data (handler-case
@@ -64,19 +77,26 @@
                             (msg " FAILED: ~a~%" e)
                             (return-from export-project-to-registry nil)))))
       (msg " ~d bytes~%" (length archive-data))
-      (let ((result (repackage-project archive-data release systems :version ver)))
-        (dolist (blob-pair (repackage-result-blobs result))
-          (push-blob-check-and-push registry repository
-                                    (cdr blob-pair) (car blob-pair)))
-        (push-manifest registry repository
-                       (repackage-result-manifest-digest result)
-                       (repackage-result-manifest-json result)
-                       :content-type +oci-image-manifest-v1+)
-        (push-manifest registry repository ver
-                       (repackage-result-index-json result)
-                       :content-type +oci-image-index-v1+)
-        (msg "~&  Pushed ~a:~a~%" repository ver)
-        t))))
+      (restart-case
+          (let ((result (repackage-project archive-data release systems :version ver)))
+            (dolist (blob-pair (repackage-result-blobs result))
+              (push-blob-check-and-push registry repository
+                                        (cdr blob-pair) (car blob-pair)))
+            (push-manifest registry repository
+                           (repackage-result-manifest-digest result)
+                           (repackage-result-manifest-json result)
+                           :content-type +oci-image-manifest-v1+)
+            (push-manifest registry repository ver
+                           (repackage-result-index-json result)
+                           :content-type +oci-image-index-v1+)
+            (msg "~&  Pushed ~a:~a~%" repository ver)
+            t)
+        (install-locally (installer)
+          :report (lambda (s) (format s "Install ~a ~a locally instead of publishing it"
+                                      project-name ver))
+          ;; INSTALLER: (project version tar-gz-octets) → unpacks the release.
+          (funcall installer project-name ver archive-data)
+          t)))))
 
 (defun export-dist (dist-url target-registry-url
                     &key (namespace "cl-systems")
@@ -105,7 +125,7 @@
         (dolist (release releases)
           (let* ((project-name (ql-release-project release))
                  (repository (format nil "~a/~a" namespace project-name))
-                 (ver (version-from-prefix (ql-release-prefix release))))
+                 (ver (version-from-prefix (ql-release-prefix release) project-name)))
             (cond
               ((and filter-fn (not (funcall filter-fn project-name)))
                (incf skipped))
