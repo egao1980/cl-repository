@@ -93,6 +93,12 @@ CL_REPO_HTTP_BACKEND=async)."
                         (setf *http-backend-kind* :dexador)
                         (%make-dexador-backend)))))))))
 
+(defun %registry-http-version ()
+  "HTTP/2 only when http2 is already loaded in this image. The client package
+   does not ship http2: offering h2 without it made GHCR pick h2 and every
+   request fail (http-backend-async 0.2.14 on the 0.27.5 ci-base image)."
+  (if (find-package "HTTP2/CLIENT") :auto :http/1.1))
+
 (defun response-header-value (headers name)
   "Lookup NAME in a response header hash-table (lowercase EQUAL keys)."
   (when headers
@@ -110,7 +116,8 @@ CL_REPO_HTTP_BACKEND=async)."
   ;; reload the client's own http-protocol from the install tree.
   (with-loaded-systems-pinned ()
     (ensure-http-backend)
-    (let* ((client (make-http-client *http-backend* :verify verify))
+    (let* ((client (make-http-client *http-backend* :verify verify
+                                                    :http-version (%registry-http-version)))
            (res (request method url
                          :client client
                          :headers headers
