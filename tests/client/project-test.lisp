@@ -202,3 +202,44 @@
                             (setf cl-repository-client/project::*installed-locally* t))))
             (setf (fdefinition sym) orig)))))
     (ok (equal '("foo") calls))))
+
+(deftest configure-registry-keeps-the-checkout-first
+  "prepare-test re-prepended the install tree after register-project, so
+   cl-repo test in http-protocol compiled an installed http-protocol 0.3.0
+   instead of the checkout."
+  (let* ((saved asdf:*source-registry-parameter*)
+         (dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-order-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (root (cl-repository-client/installer:systems-root)))
+    (ensure-directories-exist dir)
+    (ensure-directories-exist root)
+    (unwind-protect
+         (progn
+           (cl-repository-client/project::register-project dir)
+           (let ((before asdf:*source-registry-parameter*))
+             (cl-repository-client/asdf-integration:configure-asdf-source-registry)
+             (ok (equal before asdf:*source-registry-parameter*))
+             (ok (uiop:pathname-equal
+                  dir (uiop:ensure-directory-pathname
+                       (second (find :tree (rest asdf:*source-registry-parameter*)
+                                     :key (lambda (e) (and (consp e) (car e))))))))))
+      (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest project-registry-skips-leftover-qlot-trees
+  "http-protocol's leftover .qlot/ made vom, cl-ppcre, ... resolve to Quicklisp
+   copies, so cl-repo test reported them missing."
+  (let* ((saved asdf:*source-registry-parameter*)
+         (dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-qlot-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (hidden (merge-pathnames ".qlot/dists/x/" dir)))
+    (ensure-directories-exist hidden)
+    (with-open-file (s (merge-pathnames "cl-repo-qlot-only.asd" hidden) :direction :output)
+      (write-string "(defsystem \"cl-repo-qlot-only\")" s))
+    (unwind-protect
+         (progn
+           (cl-repository-client/project::register-project dir)
+           (ok (null (asdf:find-system "cl-repo-qlot-only" nil))))
+      (asdf:clear-system "cl-repo-qlot-only")
+      (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

@@ -56,7 +56,10 @@
   (add-registry *default-registry* :namespace *default-namespace* :priority :append))
 
 (defun source-registry-form (directories)
+  ;; A checkout's leftover qlot tree (.qlot/ → Quicklisp releases) would make
+  ;; every dependency resolve to a Quicklisp copy, which the walk rejects.
   `(:source-registry
+    (:also-exclude ".qlot")
     ,@(mapcar (lambda (dir)
                 (list :tree (namestring (uiop:ensure-directory-pathname dir))))
               directories)
