@@ -48,7 +48,11 @@ jobs:
 
       - name: Test ${{ matrix.system }}
         run: |
-          qlot exec ros -e '(asdf:test-system "${{ matrix.system }}")'
+          # An error (a test file that does not read, a failing suite: the
+          # test-op signals) must exit nonzero, not drop into the debugger,
+          # whose REPL reads EOF and exits 0.
+          qlot exec ros -e '(setf *debugger-hook* (lambda (c h) (declare (ignore h)) (format *error-output* "~&UNHANDLED: ~A~%" c) (uiop:quit 1)))' \
+            -e '(asdf:test-system "${{ matrix.system }}")' -q
 
   integration:
     runs-on: ubuntu-latest
@@ -73,7 +77,11 @@ jobs:
 
       - name: Run integration tests
         run: |
-          qlot exec ros -e '(asdf:test-system "cl-repository-integration-tests")'
+          # An error (a test file that does not read, a failing suite: the
+          # test-op signals) must exit nonzero, not drop into the debugger,
+          # whose REPL reads EOF and exits 0.
+          qlot exec ros -e '(setf *debugger-hook* (lambda (c h) (declare (ignore h)) (format *error-output* "~&UNHANDLED: ~A~%" c) (uiop:quit 1)))' \
+            -e '(asdf:test-system "cl-repository-integration-tests")' -q
 
   ocicl-compat:
     runs-on: ubuntu-latest

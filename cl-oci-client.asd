@@ -20,7 +20,8 @@
                (:file "pin-test")
                (:file "all"))
   :perform (test-op (o c)
-            (symbol-call :rove :run c)))
+            (unless (symbol-call :rove :run c)
+              (error "Tests failed: ~A" (component-name c)))))
 
 (register-system-packages "http-protocol" '(:http-protocol :http))
 (register-system-packages "http-backend-dexador" '(:http-backend-dexador))

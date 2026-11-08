@@ -259,7 +259,7 @@ jobs:
           # source registry from CL_REPOSITORY_DEST, where its deps live.
           cl_repo() {
             CL_REPOSITORY_CLIENT_DIR="$CL_REPOSITORY_DEST" \
-              ros -Q -- "${CL_REPOSITORY_CLIENT_DIR%/}/roswell/cl-repo.ros" "$@"
+              ros +Q -- "${CL_REPOSITORY_CLIENT_DIR%/}/roswell/cl-repo.ros" "$@"
           }
           cd "$STAGING"
           if [ -n "$V" ]; then

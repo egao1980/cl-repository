@@ -27,7 +27,8 @@
                 #:list-tags/retry)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version #:version<)
   (:import-from :cl-repository-client/dep-satisfy
-                #:system-direct-dep-specs #:system-satisfied-p #:note-minimum)
+                #:system-direct-dep-specs #:system-satisfied-p #:note-minimum
+                #:quicklisp-source-p)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/lockfile
                 #:lockfile-entry #:add-lockfile-entry)
@@ -523,7 +524,10 @@
     ((system-denied-p name)
      (msg "~&; cl-repo: skipping denied system ~a~%" name)
      plan)
-    ((and (not force) (or (asdf:find-system name nil)
+    ((and (not force) (or (let ((found (asdf:find-system name nil)))
+                            ;; a Quicklisp dist copy (Quicklisp loaded in this
+                            ;; image) is not an install: resolve from OCI
+                            (and found (not (quicklisp-source-p found))))
                           (system-protected-p name)
                           (implementation-system-p name)))
      (msg "~&; cl-repo: ~a already available via ASDF~%" name)

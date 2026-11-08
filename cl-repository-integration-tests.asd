@@ -22,4 +22,5 @@
                (:file "overlay-test")
                (:file "all"))
   :perform (test-op (o c)
-            (symbol-call :rove :run c)))
+            (unless (symbol-call :rove :run c)
+              (error "Tests failed: ~A" (component-name c)))))

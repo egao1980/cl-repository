@@ -33,9 +33,10 @@
            (write-asd dir "main-system-tests")
            (write-asd dir "main-system-utils")
            (let ((systems (discover-provided-systems dir)))
-             (ok (= (length systems) 3))
+             ;; test systems are not provides (TEST-SYSTEM-NAME-P)
+             (ok (= (length systems) 2))
              (ok (member "main-system" systems :test #'string=))
-             (ok (member "main-system-tests" systems :test #'string=))
+             (ok (not (member "main-system-tests" systems :test #'string=)))
              (ok (member "main-system-utils" systems :test #'string=))))
       (uiop:delete-directory-tree dir :validate t))))
 

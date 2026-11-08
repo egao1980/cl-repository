@@ -1,8 +1,11 @@
 #!/bin/sh
 #|-*- mode:lisp -*-|#
 #|
-exec ros -Q -- $0 "$@"
+exec ros +Q -- $0 "$@"
 |#
+;;; +Q: no Quicklisp. (-Q turns it ON, and Roswell applies this line even when
+;;; the caller ran `ros +Q -- cl-repo.ros`.) Quicklisp's searchers would answer
+;;; for systems cl-repo must install from OCI.
 
 (progn
   (ros:ensure-asdf)

@@ -118,7 +118,7 @@
   (with-project (dir :properties '(:overlays ((:name "cuda" :platform (:os "linux" :arch "amd64")
                                                :native-paths ("lib/linux-amd64-cuda/libggml-cuda.so"))
                                               (:platform (:os "freebsd" :arch "amd64")
-                                               :native-paths ("bsd/libfoo.so")))))
+                                               :native-paths ("bsd/libfoo.so"))))
                      :files '("lib/linux-amd64/libfoo.so"))
     (ok (= 3 (length (package-spec-overlays (auto-package-spec "nat-demo"))))
         "a named flavour and another platform are their own overlays")))
@@ -133,6 +133,6 @@
         "lib-prefixed Windows variant accepted; optional gpu may be missing")))
 
 (deftest no-components-no-derivation
-  (with-project (dir :components ''((:file "x")) :files '("lib/linux-amd64/libfoo.so" "x.lisp"))
+  (with-project (dir :components '((:file "x")) :files '("lib/linux-amd64/libfoo.so" "x.lisp"))
     (ok (null (package-spec-overlays (auto-package-spec "nat-demo")))
         "a source-only system with a stray lib/ gets no overlays")))
