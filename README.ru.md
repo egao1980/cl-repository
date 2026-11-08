@@ -139,7 +139,7 @@ jobs:
 Ubuntu-джобы в `test-system.yml` / `publish-source.yml` идут в
 `ghcr.io/egao1980/cl-repository/ci-base` (Roswell + SBCL + клиент уже стоят).
 Это `jobs.<id>.container`, не Docker container action.
-macOS / Windows job container не поддерживают — ставят тулчейн на VM (с кэшем).
+macOS / Windows job container не поддерживают — ставят тулчейн на VM (с кэшем). Образ пересобирается после каждого релиза клиента с этой версией внутри и тегом `client-<version>` (теги и локальная сборка — [docker/ci-base](docker/ci-base/README.md)).
 
 Другие реализации (ECL / CCL / ABCL) — через `test-system-impl.yml`: те же
 фазы install/test на VM, реализацию ставит и кэширует Roswell. ECL по умолчанию

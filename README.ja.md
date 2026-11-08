@@ -139,7 +139,7 @@ jobs:
 `test-system.yml` / `publish-source.yml` の Ubuntu job は
 `ghcr.io/egao1980/cl-repository/ci-base`（Roswell + SBCL + クライアント済み）で走ります。
 これは `jobs.<id>.container` であり Docker コンテナアクションではありません。
-macOS / Windows は job container 非対応なので VM 上でインストールします（キャッシュあり）。
+macOS / Windows は job container 非対応なので VM 上でインストールします（キャッシュあり）。 クライアントのリリースごとにそのバージョンで再ビルドされ、`client-<version>` タグが付く（タグとローカルビルドは [docker/ci-base](docker/ci-base/README.md)）。
 
 他の処理系（ECL / CCL / ABCL）は `test-system-impl.yml` を使います。同じ
 install/test フェーズを VM 上で実行し、処理系は Roswell がインストール・キャッシュします。
