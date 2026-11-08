@@ -118,6 +118,35 @@
       (asdf:clear-system "cl-repo-pretest-demo")
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
+(deftest checkout-shadows-installed-copy
+  "PREPARE-TEST finds the project's systems in the checkout, not in an
+   installed copy of the same system in the store (a stale store copy ran its
+   own tests/ — or failed to find them — instead of the checkout's)."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (merge-pathnames (format nil "cl-repo-shadow-~D/" (random 1000000 (make-random-state t)))
+                                (uiop:temporary-directory))))
+         (project (merge-pathnames "project/" dir))
+         (store (merge-pathnames "systems/" dir))
+         (installed (merge-pathnames "cl-repo-shadow-demo/1.0/" store))
+         (saved asdf:*source-registry-parameter*))
+    (flet ((asd (where version)
+             (ensure-directories-exist where)
+             (with-open-file (o (merge-pathnames "cl-repo-shadow-demo.asd" where) :direction :output)
+               (format o "(defsystem \"cl-repo-shadow-demo\" :version ~S)" version))))
+      (unwind-protect
+           (progn
+             (asd project "2.0")
+             (asd installed "1.0")
+             (let ((cl-repository-client/installer::*systems-root* store))
+               (cl-repository-client/project::prepare-test
+                :directory project :system "cl-repo-shadow-demo"))
+             (let ((system (asdf:find-system "cl-repo-shadow-demo")))
+               (ok (equal "2.0" (asdf:component-version system)))
+               (ok (uiop:subpathp (asdf:system-source-file system) project))))
+        (asdf:clear-system "cl-repo-shadow-demo")
+        (asdf:initialize-source-registry saved)
+        (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
+
 (deftest ql-entry-reference-ignores-qlot-dist-dates
   "A qlot qlfile.lock pins `ql yason` to the dist date ql-2025-06-22. That is not
    an OCI tag; installing it 404'd and sync tried to republish yason."

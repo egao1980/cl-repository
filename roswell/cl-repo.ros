@@ -16,10 +16,19 @@ exec ros -Q -- $0 "$@"
                    parent))
                (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST")
                (error "cl-repo: cannot find cl-repository-client. Install it or set CL_REPOSITORY_DEST."))))
-    (let ((tree (client-tree)))
+    ;; CL_REPOSITORY_CLIENT_DIR may name the client alone (setup-client exports
+    ;; it so); its dependencies sit under CL_REPOSITORY_DEST.
+    (let ((trees (remove-duplicates
+                  (remove nil (list (client-tree)
+                                    (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST")))
+                  :test #'uiop:pathname-equal)))
       (asdf:initialize-source-registry
-       `(:source-registry (:tree ,(namestring tree)) :ignore-inherited-configuration))
-      (asdf:load-system "cl-repository-client"))))
+       `(:source-registry ,@(mapcar (lambda (tree) `(:tree ,(namestring tree))) trees)
+                          :ignore-inherited-configuration))
+      ;; Load chatter (cl-unicode prints at load) goes to stderr: stdout is
+      ;; for command output such as V=$(cl-repo version).
+      (let ((*standard-output* *error-output*))
+        (asdf:load-system "cl-repository-client")))))
 
 (defpackage :ros.script.cl-repo
   (:use :cl)
@@ -30,7 +39,8 @@ exec ros -Q -- $0 "$@"
                 #:*default-registry* #:*default-namespace*)
   (:import-from :cl-repository-client/project
                 #:cmd-sync #:cmd-test #:cmd-run #:cmd-grovel #:client-source-tree
-                #:ensure-default-registry #:discover-project-system)
+                #:ensure-default-registry #:discover-project-system
+                #:register-project #:ensure-defsystem-depends-on)
   (:import-from :cl-repository-client/asd-rewrite #:cmd-add-overlay)
   (:import-from :cl-repository-client/asd-version #:cmd-version)
   (:import-from :cl-repository-client/platform-resolver
@@ -206,6 +216,10 @@ exec ros -Q -- $0 "$@"
 
 (defun publish-project (cmd-args opts registry-url namespace)
   (ensure-packager)
+  ;; As sync/test: the checkout and the store on the source registry, and
+  ;; the :defsystem-depends-on (asdf-native) installed before the .asd is read.
+  (register-project (uiop:getcwd))
+  (ensure-defsystem-depends-on (uiop:getcwd))
   (let* ((system-name (or (first cmd-args) (getf opts :system) (discover-project-system)))
          (spec (funcall (psym :cl-repository-packager/asdf-plugin "AUTO-PACKAGE-SPEC") system-name))
          (reg (or registry-url *default-registry*))
