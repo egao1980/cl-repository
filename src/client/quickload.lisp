@@ -485,6 +485,14 @@
      (lambda ()
        (let ((*quiet* (or *quiet* silent)))
          (dolist (sys system-list)
+           ;; The installed package's own :depends-on may need newer versions
+           ;; than the tree holds (lisp-mcp 0.2.1 wants lisp-source-protocol
+           ;; 0.2.1, 0.2.0 was installed): walk them like sync does.
+           (when (asdf:find-system sys nil)
+             (ensure-system-dependencies sys :also-tests nil :silent silent :force force
+                                             :sources sources :deny deny :allow allow
+                                             :default-source default-source
+                                             :config-path config-path))
            (msg "~&; cl-repo: loading ~a~%" sys)
            (handler-case (asdf:load-system sys)
              (error (e)
