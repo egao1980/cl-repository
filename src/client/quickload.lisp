@@ -101,10 +101,23 @@
           (when real-dir
             (let ((subdirs (uiop:subdirectories real-dir)))
               (when subdirs
-                (car (last (pathname-directory (first (last subdirs)))))))))
+                ;; the newest, not the last in path order (0.9.0 after 0.10.0)
+                (select-preferred-version
+                 (mapcar (lambda (d) (car (last (pathname-directory d)))) subdirs))))))
       (error () nil))))
 
 ;;; Lockfile integration
+
+(defun prefer-installed-version (name version)
+  "Make the registry resolve NAME to its installed VERSION. The preference
+   follows *LOCKED-VERSIONS*, read from cl-repo.lock when the project was
+   registered; a version installed (or found new enough) since must replace
+   the locked one, or the rescan keeps resolving the old copy."
+  (when (and name version)
+    (setf cl-repository-client/asdf-integration:*locked-versions*
+          (acons name (princ-to-string version)
+                 (remove name cl-repository-client/asdf-integration:*locked-versions*
+                         :key #'car :test #'string-equal)))))
 
 (defun record-lockfile-entry (result)
   "Create a lockfile entry from an INSTALL-RESULT and append it to cl-repo.lock."
@@ -119,7 +132,11 @@
                         :source-digest (install-result-source-digest result)
                         :overlay-digest (install-result-overlay-digest result)
                         :overlay-digests (install-result-overlay-digests result)
-                        :registry (or (install-result-registry-url result) ""))))
+                        :registry (or (install-result-registry-url result) "")))
+        ;; The registry prefers locked versions; the lock read when the
+        ;; project was registered still named the old ones, so a version
+        ;; installed now must replace them or the rescan keeps the old copy.
+        (prefer-installed-version (install-result-name result) (install-result-version result)))
     (error (e)
       (msg "~&; cl-repo: warning: could not update lockfile: ~a~%" e))))
 
@@ -277,6 +294,11 @@
          (dolist (entry plan)
            (let* ((name (car entry))
                   (ver (if minimum nil (cdr entry))))
+             (when (and minimum (not force) (system-already-installed-p name)
+                        (installed-new-enough-p name nil minimum))
+               ;; installed and new enough, but maybe not what the registry
+               ;; resolves (an older locked copy): prefer it
+               (prefer-installed-version name (installed-system-version name)))
              (unless (or (system-denied-p name)
                          (and (not force)
                               (system-already-installed-p name)

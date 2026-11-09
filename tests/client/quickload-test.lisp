@@ -289,3 +289,13 @@
       (setf asdf:*central-registry* (remove dir asdf:*central-registry*))
       (asdf:clear-system "cl-min-demo")
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest installed-version-is-the-newest-not-the-last-in-path-order
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "~a/cl-repo-iv-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (cl-repository-client/installer::*systems-root* root))
+    (dolist (v '("0.9.0" "0.10.0" "0.2.1"))
+      (ensure-directories-exist (merge-pathnames (format nil "cl-iv-demo/~a/" v) root)))
+    (unwind-protect
+         (ok (equal "0.10.0" (cl-repository-client/quickload:installed-system-version "cl-iv-demo")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))
