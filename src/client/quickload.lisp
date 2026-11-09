@@ -517,10 +517,20 @@
      plan)
     (t plan)))
 
+(defun found-version-is-p (name version)
+  "True unless VERSION names an exact tag that the findable NAME is not:
+   load-system \"lisp-mcp\" :version \"0.2.1\" kept an installed 0.2.0."
+  (or (null version)
+      (member version '(:latest "latest") :test #'equal)
+      (let ((sys (asdf:find-system name nil)))
+        (and sys (equal (princ-to-string version)
+                        (princ-to-string (asdf:component-version sys)))))))
+
 (defun %resolve-one-into-plan (name version plan &key force with-p minimum)
   "Resolve NAME into PLAN / *missing-deps-accumulator*. Returns updated PLAN.
    Slash secondaries (`foo/bar`) install the primary package `foo`.
-   A findable NAME older than MINIMUM is resolved again, not kept."
+   A findable NAME older than MINIMUM, or not the exact VERSION asked for, is
+   resolved again, not kept."
   (cond
     ((system-denied-p name)
      (msg "~&; cl-repo: skipping denied system ~a~%" name)
@@ -529,7 +539,8 @@
                           ;; copy (Quicklisp loaded in this image): lisp-mcp
                           ;; needs mcp-protocol 0.3.0, an installed 0.2.0 is
                           ;; not "already available"
-                          (system-satisfied-p name minimum)
+                          (and (system-satisfied-p name minimum)
+                               (found-version-is-p name version))
                           (system-protected-p name)
                           (implementation-system-p name)))
      (msg "~&; cl-repo: ~a already available via ASDF~%" name)

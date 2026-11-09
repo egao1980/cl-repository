@@ -268,7 +268,14 @@
                         (cl-repository-client/quickload::%resolve-one-into-plan
                          "cl-min-demo" nil nil :minimum "0.3.0"))
                  "too old: resolved from the registry")
-             (ok (equal '("cl-min-demo") calls))))
+             (ok (equal '("cl-min-demo") calls))
+             (ok (equal '(("cl-min-demo" . "0.3.1"))
+                        (cl-repository-client/quickload::%resolve-one-into-plan
+                         "cl-min-demo" "0.3.1" nil))
+                 "an exact version other than the installed one is resolved")
+             (ok (null (cl-repository-client/quickload::%resolve-one-into-plan
+                        "cl-min-demo" "0.2.0" nil))
+                 "the installed exact version is kept")))
       (setf (fdefinition sym) orig)
       (setf asdf:*central-registry* (remove dir asdf:*central-registry*))
       (asdf:clear-system "cl-min-demo")
