@@ -126,3 +126,27 @@
           (*loaded-systems-snapshot* nil))
       (ensure-snapshot)
       (ok (null *loaded-systems-snapshot*)))))
+
+(deftest found-but-not-loaded-is-not-protected
+  "Finding an installed system (a dependency walk reading its .asd) must not
+   protect it from an upgrade; loading it does."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-protect-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (*protect-loaded-systems* t)
+         (*loaded-systems-snapshot* nil))
+    (ensure-directories-exist dir)
+    (dolist (name '("cl-repo-found-only" "cl-repo-loaded"))
+      (with-open-file (s (merge-pathnames (format nil "~a.asd" name) dir) :direction :output)
+        (format s "(defsystem ~s)" name)))
+    (push dir asdf:*central-registry*)
+    (unwind-protect
+         (progn
+           (asdf:find-system "cl-repo-found-only")
+           (asdf:load-system "cl-repo-loaded")
+           (snapshot-loaded-systems)
+           (ng (system-protected-p "cl-repo-found-only") "found by ASDF, not loaded")
+           (ok (system-protected-p "cl-repo-loaded") "loaded in this image"))
+      (setf asdf:*central-registry* (remove dir asdf:*central-registry*))
+      (asdf:clear-system "cl-repo-found-only")
+      (asdf:clear-system "cl-repo-loaded")
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

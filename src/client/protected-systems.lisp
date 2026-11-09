@@ -23,10 +23,14 @@
    NIL means snapshot not yet taken.")
 
 (defun snapshot-loaded-systems ()
-  "Capture all currently registered ASDF systems into *LOADED-SYSTEMS-SNAPSHOT*.
-   Typically called once on first use of load-system or cmd-update."
+  "Capture the systems this image has LOADED into *LOADED-SYSTEMS-SNAPSHOT*.
+   Typically called once on first use of load-system or cmd-update.
+   Not ASDF:REGISTERED-SYSTEMS: that also lists every system FIND-SYSTEM has
+   merely read, so a dependency walk that had just found an installed
+   lisp-source-protocol 0.2.0 made it 'protected' and it was never upgraded
+   to the 0.2.1 lisp-mcp requires."
   (let ((ht (make-hash-table :test 'equal)))
-    (dolist (sys (asdf:registered-systems))
+    (dolist (sys (asdf:already-loaded-systems))
       (setf (gethash (string-downcase sys) ht) t))
     (setf *loaded-systems-snapshot* ht)))
 
