@@ -264,6 +264,15 @@
              (ok (null (cl-repository-client/quickload::%resolve-one-into-plan
                         "cl-min-demo" nil nil :minimum "0.1.0"))
                  "new enough: kept")
+             ;; the SAT plan pins installed versions: an empty plan for a
+             ;; stale install still plans the package itself
+             (let ((stub (fdefinition sym)))
+               (setf (fdefinition sym) (lambda (&rest args) (declare (ignore args)) (values nil nil)))
+               (ok (equal '(("cl-min-demo"))
+                          (cl-repository-client/quickload::%resolve-one-into-plan
+                           "cl-min-demo" nil nil :minimum "0.3.0"))
+                   "planned although the SAT plan pinned the install")
+               (setf (fdefinition sym) stub))
              (ok (equal '(("cl-min-demo" . "0.3.0"))
                         (cl-repository-client/quickload::%resolve-one-into-plan
                          "cl-min-demo" nil nil :minimum "0.3.0"))
