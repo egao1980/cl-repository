@@ -576,6 +576,14 @@
               (multiple-value-bind (resolved missing)
                   (build-install-plan pkg (or version :latest) *registries* :force force)
                 (setf plan (%merge-plan-entries plan resolved))
+                ;; The SAT plan pins what is installed, so a package re-resolved
+                ;; because its install is too old (or not the exact VERSION)
+                ;; came back without it: nothing was fetched and sync failed
+                ;; with "not in the registry". Plan it here; the install step
+                ;; picks the newest tag that satisfies MINIMUM.
+                (when (and (asdf:find-system name nil)
+                           (not (find pkg plan :key #'car :test #'string=)))
+                  (push (cons pkg version) plan))
                 (dolist (m missing)
                   (pushnew m *missing-deps-accumulator* :test #'string=))
                 plan)
@@ -585,7 +593,8 @@
             (error (e)
               (msg "~&; cl-repo: SAT resolution unavailable for ~a (~a), trying direct~%"
                    pkg e)
-              (if (system-already-installed-p pkg)
+              ;; installed and findable here means installed but stale
+              (if (and (system-already-installed-p pkg) (not (asdf:find-system name nil)))
                   plan
                   (progn (push (cons pkg version) plan) plan))))))))))
 
