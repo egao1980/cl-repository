@@ -319,7 +319,7 @@
     (flet ((resolved (locked)
              (asdf:initialize-source-registry
               `(:source-registry
-                ,@(cl-repository-client/project::preferred-install-trees root locked)
+                ,@(cl-repository-client/asdf-integration:preferred-install-trees root locked)
                 (:tree ,(namestring root))
                 :ignore-inherited-configuration))
              (asdf:clear-system "cl-repo-multi-demo")
@@ -331,5 +331,35 @@
              (ok (equal "0.2.0" (resolved '(("cl-repo-multi-demo" . "0.2.0")))) "the locked version")
              (ok (equal "0.10.1" (resolved '(("cl-repo-multi-demo" . "9.9.9")))) "a lock naming no installed version"))
         (asdf:clear-system "cl-repo-multi-demo")
+        (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+        (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))))
+
+(deftest rescan-prefers-a-version-installed-later
+  "The lisp-mcp launcher registers (:tree systems) itself; after lisp-source-protocol
+   0.2.1 was installed next to 0.2.0, the rescan kept resolving 0.2.0."
+  (let* ((saved asdf:*source-registry-parameter*)
+         (root (uiop:ensure-directory-pathname
+                (format nil "~a/cl-repo-rescan-pref-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (cl-repository-client/installer::*systems-root* root)
+         (cl-repository-client/asdf-integration:*locked-versions* nil))
+    (flet ((install (v)
+             (let ((dir (merge-pathnames (format nil "cl-repo-pref-demo/~a/" v) root)))
+               (ensure-directories-exist dir)
+               (with-open-file (s (merge-pathnames "cl-repo-pref-demo.asd" dir) :direction :output)
+                 (format s "(defsystem \"cl-repo-pref-demo\" :version ~s)" v))))
+           (resolved ()
+             (asdf:clear-system "cl-repo-pref-demo")
+             (let ((asdf/session:*asdf-session* nil))
+               (asdf:component-version (asdf:find-system "cl-repo-pref-demo")))))
+      (unwind-protect
+           (progn
+             (install "0.2.0")
+             (asdf:initialize-source-registry
+              `(:source-registry (:tree ,(namestring root)) :ignore-inherited-configuration))
+             (ok (equal "0.2.0" (resolved)))
+             (install "0.2.1")
+             (cl-repository-client/asdf-integration:configure-asdf-source-registry)
+             (ok (equal "0.2.1" (resolved)) "the newer install wins after the rescan"))
+        (asdf:clear-system "cl-repo-pref-demo")
         (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
         (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))))

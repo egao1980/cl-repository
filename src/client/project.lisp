@@ -58,23 +58,6 @@
 (defun ensure-default-registry ()
   (add-registry *default-registry* :namespace *default-namespace* :priority :append))
 
-(defun dir-leaf (dir)
-  (car (last (pathname-directory dir))))
-
-(defun preferred-install-trees (root &optional locked)
-  "A (:tree DIR) per installed system under ROOT with several versions: the
-   version LOCKED (alist system → version) names, else the newest. ASDF takes
-   the first .asd it meets in a :tree, in path order, so an installed 0.2.0
-   would shadow 0.2.2 (mime-protocol then failed on serdes-protocol 0.2.0)."
-  (loop for sys-dir in (ignore-errors (uiop:subdirectories root))
-        for versions = (mapcar #'dir-leaf (uiop:subdirectories sys-dir))
-        when (cdr versions)
-          collect (let* ((locked-version (cdr (assoc (dir-leaf sys-dir) locked :test #'string-equal)))
-                         (want (if (member locked-version versions :test #'equal)
-                                   locked-version
-                                   (select-preferred-version versions))))
-                    (list :tree (namestring (merge-pathnames (format nil "~a/" want) sys-dir))))))
-
 (defun source-registry-form (directories &key locked)
   ;; A checkout's leftover qlot tree (.qlot/ → Quicklisp releases) would make
   ;; every dependency resolve to a Quicklisp copy, which the walk rejects.
@@ -92,7 +75,7 @@
       ,@(loop for dir in directories
               for tree = (uiop:ensure-directory-pathname dir)
               when (and root (uiop:pathname-equal tree root))
-                append (preferred-install-trees tree locked)
+                append (cl-repository-client/asdf-integration:preferred-install-trees tree locked)
               collect (list :tree (namestring tree)))
       :ignore-inherited-configuration)))
 
@@ -125,9 +108,10 @@
 (defun register-project (directory)
   "Register the project, the installed systems, and the client trees.
    Does not export CL_SOURCE_REGISTRY and does not inherit it."
+  (setf cl-repository-client/asdf-integration:*locked-versions* (locked-versions directory))
   (asdf:initialize-source-registry
    (source-registry-form (project-registry-directories directory)
-                         :locked (locked-versions directory))))
+                         :locked cl-repository-client/asdf-integration:*locked-versions*)))
 
 (defun top-level-asds (directory)
   (directory (merge-pathnames "*.asd" (uiop:ensure-directory-pathname directory))))
