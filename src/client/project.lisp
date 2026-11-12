@@ -508,7 +508,7 @@ before any :depends-on walk can see them. → the names installed."
     (when (and runtime core (probe-file runtime) (probe-file core)
                (not (uiop:pathname-equal (truename runtime) (truename core))))
       (list (uiop:native-namestring runtime)
-            "--core" (uiop:native-namestring core)
+            "--core" (uiop:native-namestring core) "--noinform"
             "--dynamic-space-size"
             (format nil "~DMB" (floor (sb-ext:dynamic-space-size) (* 1024 1024)))
             "--non-interactive" "--no-sysinit" "--no-userinit")))
