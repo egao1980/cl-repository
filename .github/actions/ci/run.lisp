@@ -181,7 +181,7 @@
            (%call-with-sync-extras
             (lambda ()
               (cl-repo:cmd-test :directory (uiop:getcwd) :system system
-                                :pre-test (lambda () (%maybe-load-hook "pre-test")))))))
+                                :pre-test (lambda () (%maybe-load-hook "pre-test"))))))))
       (t
         (%maybe-load-hook "pre-test")
         (%ci-muffle

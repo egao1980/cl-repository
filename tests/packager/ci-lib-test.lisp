@@ -174,3 +174,20 @@
     (ok (null (cl-repository-ci-lib:classpath-entries nil)))
     (ok (null (cl-repository-ci-lib:classpath-entries "" nil)))
     (uiop:delete-directory-tree dir :validate t)))
+
+(deftest ci-action-files-read-balanced
+  "Every .lisp file of the canned CI action reads to the end. This suite never
+   loads run.lisp, so an unbalanced edit (#84) broke every repo's CI first.
+   *READ-SUPPRESS* reads the structure without needing the packages."
+  (let ((dir (merge-pathnames ".github/actions/ci/"
+                              (uiop:pathname-directory-pathname
+                               (asdf:system-source-file "cl-repository-packager")))))
+    (dolist (file (directory (merge-pathnames "*.lisp" dir)))
+      (ok (handler-case
+              (with-open-file (in file)
+                (let ((*read-suppress* t) (*read-eval* nil))
+                  (loop until (eq (read in nil in) in))
+                  t))
+            (end-of-file () nil)
+            (reader-error () nil))
+          (format nil "~a reads to the end" (file-namestring file))))))
