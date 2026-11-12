@@ -19,7 +19,7 @@
                 #:system-install-path #:extract-layer)
   (:import-from :cl-repository-client/qlot-integration
                 #:read-qlfile #:read-qlfile-lock
-                #:qlot-entry-kind #:qlot-entry-name #:qlot-entry-ref)
+                #:qlot-entry-kind #:qlot-entry-name #:qlot-entry-ref #:qlot-entry-snapshot)
   (:import-from :cl-repository-client/platform-resolver
                 #:choose-overlay-plists #:detect-local-platform #:overlay-key)
   (:import-from :cl-repository-client/asd-rewrite #:read-system-overlays)
@@ -34,6 +34,8 @@
            #:cmd-sync
            #:cmd-test
            #:prepare-test
+           #:*test-in-subprocess*
+           #:tests-failed
            #:cmd-run
            #:cmd-grovel
            #:*default-ql-dist*))
@@ -238,11 +240,12 @@
                       :filter name
                       :incremental t)))
 
-(defun publish-source-dir (source-dir &key source-url revision ref)
+(defun publish-source-dir (source-dir &key system-name source-url revision ref)
   (ensure-publish-tools)
   (multiple-value-bind (spec result)
       (uiop:symbol-call :cl-repository-packager/source-adapter :build-package-from-source
-                        source-dir :source-url source-url :revision revision :version ref)
+                        source-dir :system-name system-name :source-url source-url
+                        :revision revision :version ref)
     (let ((tag (or (funcall (find-symbol "PACKAGE-SPEC-VERSION"
                                          :cl-repository-packager/build-matrix)
                             spec)
@@ -296,12 +299,29 @@
   (let ((slash (position #\/ repo :from-end t)))
     (if slash (subseq repo (1+ slash)) repo)))
 
+(defun install-or-latest (reference name)
+  "Install REFERENCE, or the latest NAME when the registry has no such tag."
+  (handler-case (cmd-install reference :registry-url *default-registry*
+                                       :namespace *default-namespace*)
+    (registry-error (e)
+      (unless (typep e '(or not-found-error auth-error))
+        (error e))
+      (msg "~&; cl-repo: ~a has no OCI tag (a qlot lock commit); installing the latest ~a~%"
+           reference name)
+      (cmd-install name :registry-url *default-registry* :namespace *default-namespace*)))
+  t)
+
 (defun sync-github-entry (entry directory)
   (declare (ignore directory))
   (let* ((repo (qlot-entry-name entry))
          (ref (qlot-entry-ref entry))
          (system (repo-system-name repo))
          (reference (if ref (format nil "~a:~a" system ref) system)))
+    ;; A commit qlot only recorded is not a pin the qlfile asked for, and OCI
+    ;; packages are tagged with their .asd version: publishing every locked
+    ;; commit of a first-party repo would push a sha tag per dependency.
+    (when (qlot-entry-snapshot entry)
+      (return-from sync-github-entry (install-or-latest reference system)))
     (install-or-publish
      reference
      (lambda ()
@@ -317,6 +337,7 @@
                 (when (probe-file (merge-pathnames "qlfile" source-dir))
                   (cmd-sync :directory source-dir :overlay *requested-overlay*))
                 (publish-source-dir source-dir
+                                    :system-name system
                                     :source-url (if (search "://" repo) repo
                                                     (format nil "https://github.com/~a" repo))
                                     :revision revision
@@ -441,10 +462,9 @@ before any :depends-on walk can see them. → the names installed."
                      :with (append (project-with name) env-install *sync-with*)
                      :also-tests (getf (ci-plist name) :also-tests t)))))))))))
 
-(defun prepare-test (&key (directory (uiop:getcwd)) system)
-  "Make the project's install tree visible to ASDF, load init files and the
-   :load-before-test systems. Returns the system name. After this, everything
-   cl-repo sync installed (including :ci :with extras) can be loaded."
+(defun test-setup (directory system)
+  "Put the project's install tree on the registry. Returns the system name and
+   the systems to load before it (:load-before-test, :ci :env loads)."
   (let ((name (or system (discover-project-system directory))))
     (unless name
       (error "cl-repo: no system to test in ~a" directory))
@@ -453,27 +473,122 @@ before any :depends-on walk can see them. → the names installed."
     (multiple-value-bind (env-install env-load)
         (expand-ci-env (getf (ci-plist name) :env))
       (declare (ignore env-install))
-      (dolist (extra (append (project-load-before-test name) env-load))
-        (asdf:load-system extra)))
+      (values name (append (project-load-before-test name) env-load)))))
+
+(defun prepare-test (&key (directory (uiop:getcwd)) system)
+  "Make the project's install tree visible to ASDF, load init files and the
+   :load-before-test systems. Returns the system name. After this, everything
+   cl-repo sync installed (including :ci :with extras) can be loaded."
+  (multiple-value-bind (name extras) (test-setup directory system)
+    (dolist (extra extras)
+      (asdf:load-system extra))
     name))
 
-(defun cmd-test (&key (directory (uiop:getcwd)) system overlay (sync t) pre-test)
+(defvar *test-in-subprocess*
+  (not (member (uiop:getenv "CL_REPO_TEST_IN_PROCESS") '("1" "true" "yes") :test #'equal))
+  "When true, CMD-TEST runs the suite in a fresh image of this Lisp that only
+   gets the source registry. The client's own systems (dexador, cl+ssl and
+   the OpenSSL it opened) then never meet the code under test.
+   CL_REPO_TEST_IN_PROCESS=1 sets it to NIL.")
+
+(define-condition tests-failed (error)
+  ((system :initarg :system :reader tests-failed-system)
+   (exit-code :initarg :exit-code :reader tests-failed-exit-code))
+  (:report (lambda (c s)
+             (format s "cl-repo: testing ~a failed (exit code ~d)"
+                     (tests-failed-system c) (tests-failed-exit-code c)))))
+
+(defun test-image-command ()
+  "Program and options that start a fresh image of the running SBCL, or NIL
+   (another Lisp, or an executable with its core embedded: such a binary
+   ignores --core and would start the client again)."
+  #+sbcl
+  (let ((runtime sb-ext:*runtime-pathname*)
+        (core sb-ext:*core-pathname*))
+    (when (and runtime core (probe-file runtime) (probe-file core)
+               (not (uiop:pathname-equal (truename runtime) (truename core))))
+      (list (uiop:native-namestring runtime)
+            "--core" (uiop:native-namestring core)
+            "--dynamic-space-size"
+            (format nil "~DMB" (floor (sb-ext:dynamic-space-size) (* 1024 1024)))
+            "--non-interactive" "--no-sysinit" "--no-userinit")))
+  #-sbcl nil)
+
+(defun asdf-require-form ()
+  "Load ASDF in the test image from this SBCL's contrib, as the client did."
+  (let* ((home-fn (find-symbol "SBCL-HOMEDIR-PATHNAME" "SB-INT"))
+         (home (and home-fn (ignore-errors (funcall home-fn))))
+         (fasl (and home (probe-file (merge-pathnames "contrib/asdf.fasl" home)))))
+    (if fasl
+        (format nil "(load ~S)" (uiop:native-namestring fasl))
+        "(require :asdf)")))
+
+(defun namestrings (form)
+  "FORM with each pathname replaced by its namestring, so it prints readably."
+  (cond ((pathnamep form) (namestring form))
+        ((consp form) (cons (namestrings (car form)) (namestrings (cdr form))))
+        (t form)))
+
+(defun test-image-forms (name extras pre-test-file)
+  "The --eval forms of the test image, as strings. Each is read only when the
+   one before has run, so the ASDF package exists by the second."
+  (with-standard-io-syntax
+    (remove nil
+            (list (asdf-require-form)
+                  (format nil "(asdf:initialize-source-registry '~S)"
+                          (namestrings asdf/source-registry:*source-registry-parameter*))
+                  (when extras
+                    (format nil "(dolist (s '~S) (asdf:load-system s))" extras))
+                  (when pre-test-file
+                    (format nil "(load ~S)" (uiop:native-namestring pre-test-file)))
+                  (format nil "(asdf:load-system ~S)" name)
+                  (format nil "(asdf:test-system ~S)" name)))))
+
+(defun run-test-image (command name extras pre-test-file)
+  (msg "~&; cl-repo: testing ~a in a fresh image~%" name)
+  (let ((code (nth-value 2 (uiop:run-program
+                            (append command
+                                    (loop for form in (test-image-forms name extras pre-test-file)
+                                          append (list "--eval" form)))
+                            :ignore-error-status t
+                            :output :interactive
+                            :error-output :interactive
+                            :input :interactive))))
+    (unless (zerop code)
+      (error 'tests-failed :system name :exit-code code))
+    name))
+
+(defun cmd-test (&key (directory (uiop:getcwd)) system overlay (sync t) pre-test pre-test-file)
   "Sync, then asdf:test-system. A system with no test-op still exits 0.
-   PRE-TEST, a function of no arguments, runs once the install tree is on the
-   registry and before the system loads (CI pre-test hooks)."
-  ;; Systems this image already runs (the client's cl+ssl, cl-stack-ssl, ...)
-  ;; stay where they were loaded from: a second copy from the install tree
-  ;; re-ran cl+ssl's reload.lisp, which unloads the live libcrypto, and SBCL
-  ;; crashed re-linking foreign symbols (http-backend-async#44 on ci-base).
-  ;; The checkout itself is never pinned: its code is what is under test.
-  (with-loaded-systems-pinned (:except (list (uiop:ensure-directory-pathname directory)))
-    (when sync
-      (cmd-sync :directory directory :system system :overlay overlay))
-    (let ((name (prepare-test :directory directory :system system)))
-      (when pre-test
-        (funcall pre-test))
-      (asdf:load-system name)
-      (asdf:test-system name))))
+   The suite runs in a fresh image (*TEST-IN-SUBPROCESS*); a failure signals
+   TESTS-FAILED. PRE-TEST-FILE is loaded there once the install tree is on
+   the registry and before the system loads (CI pre-test hooks). PRE-TEST, a
+   function of no arguments, runs at that point too, but a function cannot
+   cross into another image: passing one runs the suite in this image."
+  (let ((command (and *test-in-subprocess* (not pre-test) (test-image-command)))
+        (checkout (list (uiop:ensure-directory-pathname directory))))
+    (if command
+        (progn
+          (when sync
+            (with-loaded-systems-pinned (:except checkout)
+              (cmd-sync :directory directory :system system :overlay overlay)))
+          (multiple-value-bind (name extras) (test-setup directory system)
+            (run-test-image command name extras pre-test-file)))
+        ;; Systems this image already runs (the client's cl+ssl, cl-stack-ssl, ...)
+        ;; stay where they were loaded from: a second copy from the install tree
+        ;; re-ran cl+ssl's reload.lisp, which unloads the live libcrypto, and SBCL
+        ;; crashed re-linking foreign symbols (http-backend-async#44 on ci-base).
+        ;; The checkout itself is never pinned: its code is what is under test.
+        (with-loaded-systems-pinned (:except checkout)
+          (when sync
+            (cmd-sync :directory directory :system system :overlay overlay))
+          (let ((name (prepare-test :directory directory :system system)))
+            (when pre-test
+              (funcall pre-test))
+            (when pre-test-file
+              (load pre-test-file))
+            (asdf:load-system name)
+            (asdf:test-system name))))))
 
 (defun lisp-startup (program form rest)
   (cond

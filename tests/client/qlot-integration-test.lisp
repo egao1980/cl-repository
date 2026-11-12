@@ -2,7 +2,7 @@
   (:use :cl :rove)
   (:import-from :cl-repository-client/qlot-integration
                 #:parse-qlot-line #:read-qlfile #:read-qlfile-lock #:build-qlot-sync-plan
-                #:qlot-entry-kind #:qlot-entry-name #:qlot-entry-ref
+                #:qlot-entry-kind #:qlot-entry-name #:qlot-entry-ref #:qlot-entry-snapshot
                 #:read-qlfile-with-path #:read-qlfile-lock-with-path)
   (:import-from :cl-repository-client/commands #:cmd-sync-qlot)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version))
@@ -104,7 +104,9 @@
              (ok (string= (qlot-entry-name (second entries)) "alexandria"))
              (ok (eq (qlot-entry-kind (third entries)) :github))
              (ok (string= (qlot-entry-name (third entries)) "egao1980/demo"))
-             (ok (string= (qlot-entry-ref (third entries)) "abc123"))))
+             (ok (string= (qlot-entry-ref (third entries)) "abc123"))
+             ;; the qlfile asked for no ref: abc123 is only qlot's snapshot
+             (ok (qlot-entry-snapshot (third entries)))))
       (when (probe-file path) (delete-file path)))))
 
 (deftest qlfile-path-inference-from-parent-directory
