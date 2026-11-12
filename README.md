@@ -53,6 +53,7 @@ cl-repo publish
 
 A stock `.asd` is enough. `qlfile` / `qlfile.lock` in the same directory are installed too.
 The registry defaults to `https://ghcr.io` / `egao1980/cl-systems`. No `CL_SOURCE_REGISTRY`.
+`cl-repo test` runs the suite in a fresh image of the same SBCL that only gets the source registry, so none of the client's own systems (dexador, cl+ssl, its OpenSSL) are loaded there. `CL_REPO_TEST_IN_PROCESS=1` runs it in the client's image instead.
 
 ### CLI
 

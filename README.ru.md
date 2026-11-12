@@ -53,6 +53,7 @@ cl-repo publish
 
 Обычного `.asd` достаточно. `qlfile` и `qlfile.lock` в том же каталоге ставятся вместе с ним.
 Реестр по умолчанию — `https://ghcr.io` / `egao1980/cl-systems`.
+`cl-repo test` запускает тесты в свежем образе того же SBCL, которому передаётся только source registry, поэтому собственные системы клиента (dexador, cl+ssl и его OpenSSL) там не загружены. `CL_REPO_TEST_IN_PROCESS=1` запускает их в образе клиента.
 
 ### CLI
 

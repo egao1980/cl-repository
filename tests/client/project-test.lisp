@@ -118,6 +118,54 @@
       (asdf:clear-system "cl-repo-pretest-demo")
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
+;;; A throwaway project in a temp directory whose test-op runs CHECK (a form
+;;; read in the test image); cmd-test runs it in a fresh image.
+(defun %fresh-image-test (name check &key pre-test)
+  (let* ((dir (uiop:ensure-directory-pathname
+               (merge-pathnames (format nil "~a-~D/" name (random 1000000 (make-random-state t)))
+                                (uiop:temporary-directory))))
+         (hook (merge-pathnames "pre-test.lisp" dir))
+         (cl-repository-client/project:*test-in-subprocess* t))
+    (ensure-directories-exist dir)
+    (unwind-protect
+         (progn
+           (with-open-file (o (merge-pathnames (format nil "~a.asd" name) dir) :direction :output)
+             (format o "(defsystem ~S :perform (test-op (o c) ~A))" name check))
+           (when pre-test
+             (with-open-file (o hook :direction :output)
+               (write-string pre-test o)))
+           (let ((cl-repository-client/installer::*systems-root* (merge-pathnames "systems/" dir)))
+             (ensure-directories-exist cl-repository-client/installer::*systems-root*)
+             (handler-case
+                 (progn (cl-repository-client/project:cmd-test
+                         :directory dir :system name :sync nil
+                         :pre-test-file (and pre-test hook))
+                        :passed)
+               (cl-repository-client/project:tests-failed (e)
+                 (cl-repository-client/project::tests-failed-exit-code e)))))
+      (asdf:clear-system name)
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest suite-runs-in-a-fresh-image
+  "cmd-test runs the suite in a new image: the client (and the cl+ssl/OpenSSL
+   it loaded) is absent there, and the pre-test file ran before the load."
+  #+sbcl
+  (ok (eq :passed
+          (%fresh-image-test
+           "cl-repo-fresh-demo"
+           "(progn (when (find-package \"CL-REPOSITORY-CLIENT\") (error \"client in the test image\"))
+                   (unless (boundp 'cl-user::*fresh-pre-test*) (error \"pre-test did not run\")))"
+           :pre-test "(defvar cl-user::*fresh-pre-test* t)")))
+  #-sbcl (skip "the test image needs SBCL"))
+
+(deftest failing-suite-signals-tests-failed
+  "A test-op that errors in the test image makes cmd-test signal TESTS-FAILED
+   with the image's non-zero exit code."
+  #+sbcl
+  (let ((result (%fresh-image-test "cl-repo-fresh-fail" "(error \"boom\")")))
+    (ok (and (integerp result) (plusp result))))
+  #-sbcl (skip "the test image needs SBCL"))
+
 (deftest checkout-shadows-installed-copy
   "PREPARE-TEST finds the project's systems in the checkout, not in an
    installed copy of the same system in the store (a stale store copy ran its

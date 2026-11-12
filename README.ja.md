@@ -53,6 +53,7 @@ cl-repo publish
 
 普通の `.asd` で足ります。同じディレクトリの `qlfile` / `qlfile.lock` も入ります。
 既定のレジストリは `https://ghcr.io` / `egao1980/cl-systems` です。
+`cl-repo test` は同じ SBCL の新しいイメージでテストを実行し、そこにはソースレジストリだけを渡す。クライアント自身のシステム（dexador、cl+ssl とその OpenSSL）はロードされない。`CL_REPO_TEST_IN_PROCESS=1` でクライアントのイメージ内で実行する。
 
 ### CLI
 

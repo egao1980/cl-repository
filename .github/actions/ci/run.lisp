@@ -163,20 +163,30 @@
   (let ((system (%resolve-system)))
     (format t "~&; ci: test ~a~%" system)
     ;; The pre-test hook needs the installed tree on the registry (its :ci :with
-    ;; extras). Clients with PREPARE-TEST run it inside CMD-TEST, after that
+    ;; extras). Clients with *TEST-IN-SUBPROCESS* load the hook file in the
+    ;; test image; clients with PREPARE-TEST run it inside CMD-TEST, after that
     ;; setup; older clients keep the hook-first order.
-    (if (find-symbol "PREPARE-TEST" :cl-repo)
+    (cond
+      ((find-symbol "*TEST-IN-SUBPROCESS*" :cl-repo)
+       (let ((hook (cl-repository-ci-lib:hook-file "pre-test")))
+         (%ci-muffle
+          (lambda ()
+            (%call-with-sync-extras
+             (lambda ()
+               (cl-repo:cmd-test :directory (uiop:getcwd) :system system
+                                 :pre-test-file (and (probe-file hook) hook))))))))
+      ((find-symbol "PREPARE-TEST" :cl-repo)
         (%ci-muffle
          (lambda ()
            (%call-with-sync-extras
             (lambda ()
               (cl-repo:cmd-test :directory (uiop:getcwd) :system system
                                 :pre-test (lambda () (%maybe-load-hook "pre-test")))))))
-        (progn
-          (%maybe-load-hook "pre-test")
-          (%ci-muffle
-           (lambda ()
-             (cl-repo:cmd-test :directory (uiop:getcwd) :system system)))))
+      (t
+        (%maybe-load-hook "pre-test")
+        (%ci-muffle
+         (lambda ()
+           (cl-repo:cmd-test :directory (uiop:getcwd) :system system)))))
     (%maybe-load-hook "post-test")
     (format t "~&; ci: tests ok~%")))
 

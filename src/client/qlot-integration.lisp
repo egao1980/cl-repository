@@ -5,6 +5,7 @@
            #:qlot-entry-name
            #:qlot-entry-ref
            #:qlot-entry-raw
+           #:qlot-entry-snapshot
            #:resolve-qlot-path
            #:read-qlfile-with-path
            #:read-qlfile-lock-with-path
@@ -16,11 +17,13 @@
 (in-package :cl-repository-client/qlot-integration)
 
 (defstruct qlot-entry
-  "Parsed qlot dependency entry."
+  "Parsed qlot dependency entry. SNAPSHOT is true when REF is the commit a
+   qlot lock recorded for an entry that asked for no ref, tag or branch."
   kind
   name
   ref
-  raw)
+  raw
+  snapshot)
 
 (defun whitespace-char-p (ch)
   (or (char= ch #\Space) (char= ch #\Tab)))
@@ -187,12 +190,14 @@ Otherwise infer by nearest-parent lookup from CWD."
       (t nil))))
 
 (defun github-lock-ref (version initargs)
-  (or (getf initargs :ref)
-      (getf initargs :tag)
-      (getf initargs :branch)
-      (when (and (stringp version) (> (length version) 7)
-                 (string-equal version "github-" :end1 7))
-        (subseq version 7))))
+  "The ref of a github lock entry; second value true when it is only the
+   commit qlot resolved (\"github-<sha>\"), not one the qlfile asked for."
+  (let ((asked (or (getf initargs :ref) (getf initargs :tag) (getf initargs :branch))))
+    (cond (asked (values asked nil))
+          ((and (stringp version) (> (length version) 7)
+                (string-equal version "github-" :end1 7))
+           (values (subseq version 7) t))
+          (t (values nil nil)))))
 
 (defun parse-qlot-lock-cons (form)
   "Parse one qlot qlfile.lock cons: (\"name\" :class source-ql :version ...)."
@@ -207,10 +212,13 @@ Otherwise infer by nearest-parent lookup from CWD."
                                 :name (or (getf init :distribution) project)
                                 :ref (getf init :distribution)
                                 :raw (prin1-to-string form)))
-        (:github (make-qlot-entry :kind :github
-                                  :name (or (getf init :repos) project)
-                                  :ref (github-lock-ref (and (stringp version) version) init)
-                                  :raw (prin1-to-string form)))
+        (:github (multiple-value-bind (ref snapshot)
+                     (github-lock-ref (and (stringp version) version) init)
+                   (make-qlot-entry :kind :github
+                                    :name (or (getf init :repos) project)
+                                    :ref ref
+                                    :snapshot snapshot
+                                    :raw (prin1-to-string form))))
         (:git (make-qlot-entry :kind :git
                                :name (or (getf init :url) (getf init :remote) project)
                                :ref (or (getf init :ref) (and (stringp version) version))
