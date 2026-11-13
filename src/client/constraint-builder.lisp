@@ -25,6 +25,7 @@
            #:list-tags/retry
            #:*tag-list-attempts*
            #:scan-installed-systems
+           #:installed-versions
            #:find-missing-deps
            #:dependency-resolution-error))
 (in-package :cl-repository-client/constraint-builder)
@@ -56,21 +57,26 @@
 
 ;;; Scanning installed systems
 
+(defun installed-versions (name)
+  "Version directories installed for system NAME."
+  (let ((dir (merge-pathnames (format nil "~a/" name) (systems-root))))
+    (mapcar (lambda (d) (car (last (pathname-directory d))))
+            (ignore-errors (uiop:subdirectories dir)))))
+
 (defun scan-installed-systems ()
-  "Return alist of (name . version) for locally installed systems."
+  "Alist (name . version) of the locally installed systems: per system the
+   version ASDF prefers (PREFERRED-INSTALL-TREES), the newest. It took the
+   first version directory, usually the oldest, so cl-repo lock pinned
+   repl-protocol 0.2.0 while 0.2.4 was installed."
   (let ((root (systems-root))
         (installed nil))
     (when (probe-file root)
       (dolist (sys-dir (uiop:subdirectories root))
-        (let ((name (car (last (pathname-directory sys-dir)))))
-          ;; Follow symlinks to canonical
-          (let ((real-dir (truename sys-dir)))
-            (declare (ignore real-dir))
-            (dolist (ver-dir (uiop:subdirectories sys-dir))
-              (let ((ver (car (last (pathname-directory ver-dir)))))
-                (pushnew (cons name ver) installed
-                         :test (lambda (a b) (string= (car a) (car b))))))))))
-    installed))
+        (let* ((name (car (last (pathname-directory sys-dir))))
+               (versions (installed-versions name)))
+          (when versions
+            (push (cons name (select-preferred-version versions)) installed)))))
+    (nreverse installed)))
 
 ;;; Registry queries (cached)
 
