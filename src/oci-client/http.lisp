@@ -33,15 +33,16 @@
 (defun http-backend-kind () *http-backend-kind*)
 
 (defun %default-backend-choice ()
-  "The backend when CL_REPO_HTTP_BACKEND is unset: dexador, for now.
-   CL_REPO_HTTP_BACKEND=auto (async, else dexador) or =async opts in.
-   - http-backend-async 0.2.14 (what the client package ships) hangs on a HEAD
-     response, so every blob push timed out; fixed in 0.2.15.
-   - On macOS and Windows cl+ssl can load the OpenSSL it finds before
-     cl-stack-ssl loads its own; the async TLS path then gives cl+ssl's global
-     SSL_CTX to the other library and the image faults (CI, SBCL 2.6.10).
-   Dexador is what 0.27.4 used everywhere."
-  :dexador)
+  "The backend when CL_REPO_HTTP_BACKEND is unset: :AUTO, the async backend on
+   libuv, or dexador when the async stack cannot load here.
+   CL_REPO_HTTP_BACKEND=dexador keeps 0.27.4's dexador everywhere.
+   0.27.6–0.27.12 defaulted to dexador: http-backend-async 0.2.14 hung on HEAD
+   responses (fixed in 0.2.15), and code under test shared the client's image,
+   where cl+ssl could open an OpenSSL other than cl-stack-ssl's (tests run in
+   a fresh image since 0.27.12; http-backend-async 0.2.16 loads cl-stack-ssl
+   before cl+ssl). The checkout-client-async CI job runs this default on
+   Linux, macOS and Windows."
+  :auto)
 
 (defun %env-backend ()
   (let ((v (uiop:getenv "CL_REPO_HTTP_BACKEND")))

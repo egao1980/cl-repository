@@ -402,6 +402,26 @@
                     when (gethash k mins)
                       collect (cons k (gethash k mins)))))))
 
+(defun test-op-delegates (system-name)
+  "Systems SYSTEM-NAME's TEST-OP runs through :in-order-to, transitively among
+   findable systems (\"http2\" → \"http2/test\"): the test system need not be
+   called <name>/tests."
+  (let ((seen '()) (queue (list (string-downcase system-name))))
+    (loop while queue
+          do (let ((sys (asdf:find-system (pop queue) nil)))
+               (when sys
+                 (loop for (op . deps) in (asdf/component:component-in-order-to sys)
+                       when (string= (symbol-name op) "TEST-OP")
+                         do (loop for (dep-op . comps) in deps
+                                  when (string= (symbol-name dep-op) "TEST-OP")
+                                    do (dolist (c comps)
+                                         (when (stringp c)
+                                           (let ((n (string-downcase c)))
+                                             (unless (member n seen :test #'string=)
+                                               (push n seen)
+                                               (push n queue))))))))))
+    (nreverse seen)))
+
 (defun ensure-system-dependencies (system-name &key (also-tests t) with silent version force
                                                     sources deny allow default-source
                                                     config-path)
@@ -412,7 +432,8 @@
    install so package-inferred children (rove/core/assertion → dissect) are seen.
    Does not install or ASDF-load SYSTEM-NAME itself.
 
-   ALSO-TESTS (default T): also walk SYSTEM-NAME/tests when that system exists.
+   ALSO-TESTS (default T): also walk SYSTEM-NAME/tests when that system exists,
+   and the systems its TEST-OP delegates to (TEST-OP-DELEGATES).
    WITH: extra CI-only systems not in the .asd (e.g. event-backend-libuv, cl-stack-ssl).
    Always installed from OCI even when ASDF already finds a QL dummy of the same name.
    Secondary systems of SYSTEM-NAME itself (\"foo/capability\" for \"foo\") are local
@@ -438,7 +459,11 @@
                     (string-downcase also-tests)
                     test-name)))
         (when (asdf:find-system ts nil)
-          (push ts local-roots))))
+          (push ts local-roots))
+        (dolist (d (test-op-delegates name))
+          (when (and (asdf:find-system d nil)
+                     (not (member d local-roots :test #'string=)))
+            (push d local-roots)))))
     ;; :with pins (mgl-pax / dref / autoload) must overlay QL dummies before the
     ;; missing-deps walk, or collect-missing treats extras as already present.
     (when extras

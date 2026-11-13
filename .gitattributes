@@ -1,0 +1,10 @@
+# LF everywhere: on Windows a CRLF checkout turned a format string's
+# line-ending ~ into "~<Return>", an unknown directive (pin.lisp).
+* text=auto eol=lf
+*.png binary
+*.gz binary
+*.tgz binary
+*.tar binary
+*.dll binary
+*.so binary
+*.dylib binary

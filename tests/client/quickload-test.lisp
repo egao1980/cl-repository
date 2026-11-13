@@ -299,3 +299,18 @@
     (unwind-protect
          (ok (equal "0.10.0" (cl-repository-client/quickload:installed-system-version "cl-iv-demo")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))
+
+(deftest test-op-delegates-follow-in-order-to
+  "A test-op that delegates to a system not named <name>/tests (http2 →
+   http2/test → http2/test-samples) has its test systems walked too: their
+   dependencies (fiasco) were never installed."
+  (unwind-protect
+       (progn
+         (eval '(asdf:defsystem "cl-repo-deleg" :in-order-to ((asdf:test-op (asdf:test-op "cl-repo-deleg/test") (asdf:load-op "cl-repo-deleg")))))
+         (eval '(asdf:defsystem "cl-repo-deleg/test" :in-order-to ((asdf:test-op (asdf:test-op "cl-repo-deleg/samples")))))
+         (eval '(asdf:defsystem "cl-repo-deleg/samples"))
+         (ok (equal '("cl-repo-deleg/test" "cl-repo-deleg/samples")
+                    (cl-repository-client/quickload::test-op-delegates "cl-repo-deleg")))
+         (ok (null (cl-repository-client/quickload::test-op-delegates "cl-repo-deleg/samples"))))
+    (dolist (s '("cl-repo-deleg/samples" "cl-repo-deleg/test" "cl-repo-deleg"))
+      (asdf:clear-system s))))
