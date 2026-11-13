@@ -143,6 +143,39 @@ jobs:
           echo "Resolved client ${CL_REPOSITORY_CLIENT_VERSION}"
           ros -e '(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:ensure-directory-pathname (uiop:getenv "CL_REPOSITORY_DEST"))) :ignore-inherited-configuration))' -e '(asdf:load-system "cl-repository-client")' -e '(format t "~&loaded cl-repository-client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' -q
 
+  checkout-client-async:
+    # This branch's client (not the published one) on every OS with the
+    # default HTTP backend: async over libuv + cl-stack-ssl, against GHCR.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-roswell
+
+      - name: Client dependencies from OCI
+        uses: ./.github/actions/setup-client
+
+      - name: Sync a project with the checkout's client
+        shell: bash
+        run: |
+          # setup-client points this at the published client; use the checkout's
+          unset CL_REPOSITORY_CLIENT_DIR CL_REPO_HTTP_BACKEND
+          work="$RUNNER_TEMP/async-probe"
+          mkdir -p "$work" && cd "$work"
+          printf '(defsystem "async-probe" :depends-on ("alexandria" "cl-ppcre" "split-sequence"))\n' > async-probe.asd
+          ros +Q -- "$GITHUB_WORKSPACE/roswell/cl-repo.ros" sync 2>&1 | tee sync.log
+          if grep -E "async HTTP backend unavailable|Memory fault|loaded before cl-stack-ssl" sync.log; then
+            echo "::error::the async backend did not run cleanly" >&2
+            exit 1
+          fi
+
   setup-lisp-action:
     strategy:
       fail-fast: false

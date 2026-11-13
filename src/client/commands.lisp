@@ -206,7 +206,13 @@
     (let* ((reg-url (or host registry-url *default-registry*))
            (full-repo (if host repo
                          (format nil "~a/~a" (or namespace *default-namespace*) repo)))
-           (reg (make-registry reg-url)))
+           (reg (make-registry reg-url))
+           ;; a bare name shows the version `install` would pick: packages need
+           ;; not carry a latest tag
+           (tag (if (or host (explicit-tag-p reference))
+                    tag
+                    (resolve-default-tag reg-url (or namespace *default-namespace*)
+                                         (subseq full-repo (1+ (or (position #\/ full-repo :from-end t) -1)))))))
       (handler-case
           (let ((obj (pull-manifest reg full-repo tag)))
             (etypecase obj

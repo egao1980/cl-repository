@@ -29,7 +29,10 @@ exec ros +Q -- $0 "$@"
                                     (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST")))
                   :test #'uiop:pathname-equal)))
       (asdf:initialize-source-registry
-       `(:source-registry ,@(mapcar (lambda (tree) `(:tree ,(namestring tree))) trees)
+       ;; A checkout's .qlot/ (old cl+ssl, quri, ...) and .cl-repository/
+       ;; trees would shadow the client's dependencies.
+       `(:source-registry (:also-exclude ".qlot" ".cl-repository")
+                          ,@(mapcar (lambda (tree) `(:tree ,(namestring tree))) trees)
                           :ignore-inherited-configuration))
       ;; Load chatter (cl-unicode prints at load) goes to stderr: stdout is
       ;; for command output such as V=$(cl-repo version).
