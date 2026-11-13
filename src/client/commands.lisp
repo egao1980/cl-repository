@@ -16,7 +16,8 @@
   (:import-from :cl-repository-client/lockfile #:lockfile-entry #:read-lockfile #:write-lockfile
                 #:lockfile-entry-system #:lockfile-entry-version #:lockfile-entry-registry
                 #:lockfile-entry-index-digest)
-  (:import-from :cl-repository-client/constraint-builder #:scan-installed-systems)
+  (:import-from :cl-repository-client/constraint-builder #:scan-installed-systems
+                #:installed-versions)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/quickload #:*registries* #:find-system-in-registry)
   (:import-from :cl-repository-client/source-policy
@@ -258,7 +259,10 @@
             (let* ((name (car pair))
                    (version (cdr pair))
                    (prev (find name existing :key #'lockfile-entry-system :test #'string=)))
-              (if (and prev (string= (lockfile-entry-version prev) version))
+              ;; a version the lock already pins stays while it is installed:
+              ;; it is the one the project registry loads (*LOCKED-VERSIONS*)
+              (if (and prev (member (lockfile-entry-version prev) (installed-versions name)
+                                    :test #'string=))
                   (push prev entries)
                   (let ((entry (resolve-lockfile-entry name version)))
                     (when entry (push entry entries))))))

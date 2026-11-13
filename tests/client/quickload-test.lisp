@@ -314,3 +314,19 @@
          (ok (null (cl-repository-client/quickload::test-op-delegates "cl-repo-deleg/samples"))))
     (dolist (s '("cl-repo-deleg/samples" "cl-repo-deleg/test" "cl-repo-deleg"))
       (asdf:clear-system s))))
+
+(deftest scan-installed-systems-takes-the-preferred-version
+  "With 0.2.0 and 0.2.4 installed, the scan reports 0.2.4 (what ASDF loads),
+   not the first directory listed: cl-repo lock pinned the oldest."
+  (let* ((root (uiop:ensure-directory-pathname
+                (merge-pathnames (format nil "cl-repo-scan-~D/" (random 1000000 (make-random-state t)))
+                                 (uiop:temporary-directory))))
+         (cl-repository-client/installer::*systems-root* root))
+    (unwind-protect
+         (progn
+           (dolist (v '("0.2.0" "0.2.4" "0.2.10"))
+             (ensure-directories-exist (merge-pathnames (format nil "demo-sys/~a/" v) root)))
+           (ok (equal '(("demo-sys" . "0.2.10"))
+                      (cl-repository-client/constraint-builder:scan-installed-systems)))
+           (ok (= 3 (length (cl-repository-client/constraint-builder:installed-versions "demo-sys")))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))
