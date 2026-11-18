@@ -30,4 +30,4 @@ while IFS= read -r p; do
 done <<< "$paths"
 
 echo "Staged into $STAGING:"
-find "$STAGING" -type f | head -80
+find "$STAGING" -type f | awk 'NR <= 80'
