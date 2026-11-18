@@ -348,6 +348,24 @@
            (uiop:ensure-list with))
    :test #'string=))
 
+(defun installed-satisfies-p (name minimum)
+  "True when a version of NAME installed under SYSTEMS-ROOT is at least MINIMUM."
+  (let ((dir (merge-pathnames (format nil "~a/" name) (systems-root))))
+    (some (lambda (d)
+            (let ((v (car (last (pathname-directory d)))))
+              (and (stringp v) (not (version< v (princ-to-string minimum))))))
+          (ignore-errors (uiop:subdirectories dir)))))
+
+(defun loaded-copy-satisfied-p (name minimum)
+  "NAME is loaded in this image (the client runs it: event-protocol under the
+   async backend) at a version below MINIMUM, but a new enough one is installed.
+   FIND-SYSTEM answers with the loaded copy, so without this the walk asked for
+   it again after installing it and failed (not in the registry). The project
+   is built in a fresh image, which finds the installed one."
+  (and minimum
+       (asdf:component-loaded-p name)
+       (installed-satisfies-p name minimum)))
+
 (defun satisfied-or-definer (name minimum)
   "SYSTEM-SATISFIED-P for NAME, except when reading NAME's .asd stops on a
    system ASDF needs while defining it (:defsystem-depends-on). Then the second
@@ -361,7 +379,9 @@
                          (return-from check
                            (values nil (string-downcase
                                         (string (asdf/find-component:missing-requires c)))))))))
-      (values (system-satisfied-p name minimum) nil))))
+      (values (or (system-satisfied-p name minimum)
+                  (loaded-copy-satisfied-p name minimum))
+              nil))))
 
 (defun collect-missing-asdf-deps (local-roots &optional extras)
   "Walk ASDF :depends-on from LOCAL-ROOTS. Return names that are not satisfied.
@@ -596,7 +616,12 @@
                           ;; not "already available"
                           (and (system-satisfied-p name minimum)
                                (found-version-is-p name version))
-                          (system-protected-p name)
+                          ;; protected (loaded in this image), unless the
+                          ;; project needs a newer one: that one is installed
+                          ;; beside it for the project's fresh image
+                          (and (system-protected-p name)
+                               (or (null minimum)
+                                   (loaded-copy-satisfied-p name minimum)))
                           (implementation-system-p name)))
      (msg "~&; cl-repo: ~a already available via ASDF~%" name)
      plan)
