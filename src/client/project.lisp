@@ -138,6 +138,34 @@
        (find dir-name names :test #'string-equal))
       (t (error "cl-repo: ambiguous systems ~s in ~a" names dir)))))
 
+(defun project-primary-systems (&optional (directory (uiop:getcwd)))
+  "Every primary system the top-level .asd files of DIRECTORY name, the one
+   matching the directory first. NIL for a qlfile-only project."
+  (let* ((dir (uiop:ensure-directory-pathname directory))
+         (names (sort (remove-if #'secondary-system-name-p
+                                 (mapcar #'pathname-name (top-level-asds dir)))
+                      #'string<))
+         (dir-name (car (last (pathname-directory dir))))
+         (main (and dir-name (find dir-name names :test #'string-equal))))
+    (if main
+        (cons main (remove main names :test #'string-equal))
+        names)))
+
+(defun project-secondary-systems (primary &optional (directory (uiop:getcwd)))
+  "The secondary systems (\"foo/agent\", \"foo/tests\") of PRIMARY that its
+   .asd in DIRECTORY defines, sorted. Call after ASDF has read that .asd."
+  (let ((dir (uiop:truename* (uiop:ensure-directory-pathname directory)))
+        (primary (string-downcase primary)))
+    (sort (loop for name in (asdf:registered-systems)
+                for system = (and (string/= name primary)
+                                  (string= (asdf:primary-system-name name) primary)
+                                  (asdf:registered-system name))
+                for file = (and system (asdf:system-source-file system))
+                when (and file
+                          (uiop:pathname-equal (uiop:truename* (uiop:pathname-directory-pathname file)) dir))
+                  collect name)
+          #'string<)))
+
 (defun system-properties (system)
   (slot-value system (find-symbol (string '#:properties) (find-package :asdf/component))))
 
@@ -431,6 +459,9 @@ before any :depends-on walk can see them. → the names installed."
 
 (defun cmd-sync (&key (directory (uiop:getcwd)) system overlay locked)
   "Install what the .asd and qlfile ask for, and record the lock.
+   Without SYSTEM, every system the project's top-level .asd files define:
+   each primary system, with its secondary systems (\"foo/agent\") as local
+   roots whose dependencies are walked too. SYSTEM limits the walk to it.
    OVERLAY names an opt-in overlay such as cuda, installed on top of the automatic stack.
    LOCKED installs cl-repo.lock."
   (let ((dir (uiop:ensure-directory-pathname directory))
@@ -450,16 +481,22 @@ before any :depends-on walk can see them. → the names installed."
             (progn
               (sync-qlfile dir)
               (register-project dir)
-              (let ((name (or system (discover-project-system dir))))
-                (when name
-                  (ensure-defsystem-depends-on dir)
+              (let ((names (cond (system (list system))
+                                 ((project-primary-systems dir))
+                                 ;; No .asd: NIL with a qlfile, an error without one.
+                                 (t (discover-project-system dir) nil))))
+                (when names
+                  (ensure-defsystem-depends-on dir))
+                (dolist (name names)
                   (asdf:find-system name nil)
                   (multiple-value-bind (env-install env-load)
                       (expand-ci-env (getf (ci-plist name) :env))
                     (declare (ignore env-load))
                     (ensure-system-dependencies
                      name
-                     :with (append (project-with name) env-install *sync-with*)
+                     :with (append (project-with name) env-install *sync-with*
+                                   (unless system
+                                     (project-secondary-systems name dir)))
                      :also-tests (getf (ci-plist name) :also-tests t)))))))))))
 
 (defun test-setup (directory system)
