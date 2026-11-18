@@ -45,6 +45,16 @@ If you're familiar with qlot, cl-repo shares the same per-project dependency phi
 
 ## Quick Start
 
+Install the `cl-repo` command. You need [Roswell](https://roswell.github.io/) with SBCL, [`oras`](https://oras.land/docs/installation) and python3:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/egao1980/cl-repository/main/install.sh | bash
+```
+
+The client goes to `~/.cl-repository-client` and the command to `~/.local/bin/cl-repo`. Run it again to upgrade.
+
+In a project directory:
+
 ```sh
 cl-repo sync
 cl-repo test
