@@ -330,3 +330,28 @@
                       (cl-repository-client/constraint-builder:scan-installed-systems)))
            (ok (= 3 (length (cl-repository-client/constraint-builder:installed-versions "demo-sys")))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))
+
+(deftest loaded-copy-below-minimum-is-satisfied-by-an-installed-newer-one
+  "A system loaded in the client image (event-protocol 0.2.1 under the async
+   backend) below a project's (:version ... \"0.2.2\") stays loaded; 0.2.2 is
+   installed beside it. The walk counts that as satisfied (it asked again and
+   failed: not in the registry), and protection does not stop the install."
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "~a/cl-repo-lc-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (cl-repository-client/installer::*systems-root* root))
+    (unwind-protect
+         (progn
+           (eval '(asdf:defsystem "cl-repo-lc-demo" :version "0.2.1"))
+           (asdf:load-system "cl-repo-lc-demo")
+           (ok (not (cl-repository-client/quickload::loaded-copy-satisfied-p
+                     "cl-repo-lc-demo" "0.2.2"))
+               "nothing new enough installed")
+           (ensure-directories-exist (merge-pathnames "cl-repo-lc-demo/0.2.2/" root))
+           (ok (cl-repository-client/quickload::loaded-copy-satisfied-p
+                "cl-repo-lc-demo" "0.2.2"))
+           (ok (cl-repository-client/quickload::satisfied-or-definer
+                "cl-repo-lc-demo" "0.2.2"))
+           (ok (not (cl-repository-client/quickload::loaded-copy-satisfied-p
+                     "cl-repo-lc-demo" "0.3.0"))))
+      (asdf:clear-system "cl-repo-lc-demo")
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))

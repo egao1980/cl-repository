@@ -59,3 +59,17 @@
   (%with-backend-env "bogus"
     (lambda ()
       (ok (signals (cl-oci-client/http:ensure-http-backend) 'error)))))
+
+(deftest http-exchange-reuses-its-client
+  ;; One client per (backend verify http-version): a run of pulls shares one
+  ;; client and its connection pool, not a client per request.
+  (%with-backend-env "dexador"
+    (lambda ()
+      (let ((cl-oci-client/http::*http-clients* '()))
+        (cl-oci-client/http:ensure-http-backend)
+        (let ((a (cl-oci-client/http::%http-client t))
+              (b (cl-oci-client/http::%http-client t))
+              (c (cl-oci-client/http::%http-client nil)))
+          (ok (eq a b))
+          (ok (not (eq a c)))
+          (ok (= 2 (length cl-oci-client/http::*http-clients*))))))))
