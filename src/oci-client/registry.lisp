@@ -15,7 +15,8 @@
            #:make-registry
            #:ping
            #:registry-request
-           #:parse-reference))
+           #:parse-reference
+           #:blob-timeout))
 (in-package :cl-oci-client/registry)
 
 (defclass registry ()
@@ -87,9 +88,21 @@
          (handle-auth-challenge registry headers))
         (t (signal-registry-error status url body))))))
 
+(defvar *blob-timeout* 3600
+  "Seconds a blob GET or PUT may take, body included; CL_REPO_BLOB_TIMEOUT
+   overrides it. http-backend-async times the whole exchange, so its 30 s default
+   fails a CUDA overlay layer (about 1 GB) even on a fast link.")
+
+(defun blob-timeout ()
+  "*BLOB-TIMEOUT*, or CL_REPO_BLOB_TIMEOUT when that is a positive integer."
+  (let* ((v (uiop:getenv "CL_REPO_BLOB_TIMEOUT"))
+         (n (and v (plusp (length v)) (parse-integer v :junk-allowed t))))
+    (if (and n (plusp n)) n *blob-timeout*)))
+
 (defun registry-request (registry method path &key content content-type headers
-                                                 accept (handle-auth t))
+                                  accept (handle-auth t) timeout)
   "Make an authenticated HTTP request to the registry.
+   TIMEOUT overrides the HTTP client's default (see BLOB-TIMEOUT).
    Returns (values body status response-headers)."
   (let* ((url (api-url registry path))
          (auth-hdrs (make-auth-headers (registry-auth registry)))
@@ -106,16 +119,18 @@
                        :force-binary t
                        :verify (%verify registry)
                        ;; Blobs/manifests are opaque octets — don't CE-decode.
-                       :decompress nil)
+                       :decompress nil
+                       :timeout timeout)
       (cond
-        ((<= 200 status 299)
-         (values body status resp-headers))
-        ((and handle-auth (= status 401))
-         (handle-auth-challenge registry resp-headers)
-         (registry-request registry method path
-                           :content content :content-type content-type
-                           :headers headers :accept accept :handle-auth nil))
-        (t (signal-registry-error status url body))))))
+       ((<= 200 status 299)
+        (values body status resp-headers))
+       ((and handle-auth (= status 401))
+        (handle-auth-challenge registry resp-headers)
+        (registry-request registry method path
+                          :content content :content-type content-type
+                          :headers headers :accept accept :handle-auth nil
+                          :timeout timeout))
+       (t (signal-registry-error status url body))))))
 
 (defun parse-reference (reference)
   "Parse a reference like 'ghcr.io/namespace/name:tag' or 'registry/name@sha256:...'
