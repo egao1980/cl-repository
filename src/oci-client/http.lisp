@@ -133,13 +133,17 @@ CL_REPO_HTTP_BACKEND=async)."
           client))))
 
 (defun http-exchange (method url &key headers content (force-binary t) (verify t)
-                                   (decompress t))
+                             (decompress t) timeout)
   "Perform METHOD on URL via http-protocol.
 
    Returns (values body status response-headers) on any completed response
    (including 4xx/5xx) — call sites decide whether to challenge/auth or error.
    This matches Dexador's multi-value shape while using httpx-style non-raising
-   defaults (:raise-for-status nil)."
+   defaults (:raise-for-status nil).
+
+   TIMEOUT (seconds, a plist or an HTTP-TIMEOUT) overrides the client's default
+   for this request; http-backend-async applies it to the whole exchange, body
+   included, so a large blob needs more than the 30 s default."
   ;; Pinned: a request may load a Content-Encoding backend, and must not
   ;; reload the client's own http-protocol from the install tree.
   (with-loaded-systems-pinned ()
@@ -151,6 +155,7 @@ CL_REPO_HTTP_BACKEND=async)."
                          :content content
                          :force-binary force-binary
                          :decompress decompress
+                         :timeout timeout
                          :raise-for-status nil)))
       (values (response-body res)
               (response-status res)

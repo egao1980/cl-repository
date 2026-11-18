@@ -47,9 +47,11 @@
          (from-json 'manifest json))))))
 
 (defun pull-blob (registry repository digest)
-  "Pull a blob by digest. Returns the blob as octets."
+  "Pull a blob by digest. Returns the blob as octets.
+   A layer can be gigabytes, so the GET gets BLOB-TIMEOUT, not the 30 s default."
   (registry-request registry :get
-                    (format nil "/v2/~a/blobs/~a" repository digest)))
+                    (format nil "/v2/~a/blobs/~a" repository digest)
+                    :timeout (cl-oci-client/registry:blob-timeout)))
 
 (defun head-manifest (registry repository reference)
   "HEAD a manifest. Returns (values status headers) or signals NOT-FOUND-ERROR."

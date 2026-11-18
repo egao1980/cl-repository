@@ -73,3 +73,45 @@
           (ok (eq a b))
           (ok (not (eq a c)))
           (ok (= 2 (length cl-oci-client/http::*http-clients*))))))))
+
+(deftest blob-timeout-reads-the-environment
+  (let ((old (uiop:getenv "CL_REPO_BLOB_TIMEOUT")))
+    (unwind-protect
+        (progn
+          (setf (uiop:getenv "CL_REPO_BLOB_TIMEOUT") "")
+          (ok (= cl-oci-client/registry::*blob-timeout*
+                 (cl-oci-client/registry:blob-timeout)))
+          (setf (uiop:getenv "CL_REPO_BLOB_TIMEOUT") "90")
+          (ok (= 90 (cl-oci-client/registry:blob-timeout)))
+          (setf (uiop:getenv "CL_REPO_BLOB_TIMEOUT") "soon")
+          (ok (= cl-oci-client/registry::*blob-timeout*
+                 (cl-oci-client/registry:blob-timeout))))
+      (setf (uiop:getenv "CL_REPO_BLOB_TIMEOUT") (or old "")))))
+
+(deftest blob-transfers-get-the-blob-timeout
+  ;; http-backend-async times the whole exchange: a blob PUT or GET with the
+  ;; 30 s default failed llama-cpp's 1 GB CUDA layer. The upload POST and
+  ;; other small requests keep the client default (NIL here).
+  (let* ((calls '())
+         (old (fdefinition 'cl-oci-client/http:http-exchange))
+         (reg (make-registry "https://registry.example")))
+    (unwind-protect
+        (progn
+          (setf (fdefinition 'cl-oci-client/http:http-exchange)
+                (lambda (method url &key timeout &allow-other-keys)
+                  (declare (ignore url))
+                  (push (cons method timeout) calls)
+                  (let ((h (make-hash-table :test 'equal)))
+                    (ecase method
+                      (:post (setf (gethash "location" h)
+                                   "https://registry.example/v2/x/blobs/uploads/1")
+                       (values nil 202 h))
+                      (:put (values nil 201 h))
+                      (:get (values (make-array 1 :element-type '(unsigned-byte 8)) 200 h))))))
+          (cl-oci-client/push:push-blob-monolithic
+           reg "x" (make-array 1 :element-type '(unsigned-byte 8)) "sha256:00")
+          (cl-oci-client/pull:pull-blob reg "x" "sha256:00"))
+      (setf (fdefinition 'cl-oci-client/http:http-exchange) old))
+    (let ((blob (cl-oci-client/registry:blob-timeout)))
+      (ok (equal (list (cons :post nil) (cons :put blob) (cons :get blob))
+                 (reverse calls))))))

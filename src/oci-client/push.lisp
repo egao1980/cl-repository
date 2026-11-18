@@ -22,7 +22,8 @@
 
 (defun push-blob-monolithic (registry repository data digest)
   "Push a blob monolithically (POST then PUT).
-   DATA is an octet vector, DIGEST is a formatted digest string like 'sha256:abc...'."
+   DATA is an octet vector, DIGEST is a formatted digest string like 'sha256:abc...'.
+   The PUT carries the whole blob, so it gets BLOB-TIMEOUT, not the 30 s default."
   (let ((location (initiate-upload registry repository)))
     (unless location
       (error 'upload-error :body "No upload location returned"))
@@ -30,8 +31,9 @@
            (put-url (format nil "~a~adigest=~a" location sep digest)))
       (multiple-value-bind (body status headers)
           (registry-request registry :put put-url
-                            :content data
-                            :content-type "application/octet-stream")
+                                     :content data
+                                     :content-type "application/octet-stream"
+                                     :timeout (cl-oci-client/registry:blob-timeout))
         (declare (ignore body))
         (unless (= status 201)
           (error 'upload-error :status status :url put-url))
