@@ -118,6 +118,20 @@ CL_REPO_HTTP_BACKEND=async)."
   (when headers
     (gethash (string-downcase name) headers)))
 
+(defvar *http-clients* '()
+  "Clients HTTP-EXCHANGE reuses, one per (backend verify http-version), so a
+   run of pulls shares one client and its connection pool instead of making a
+   client per request.")
+
+(defun %http-client (verify)
+  (let* ((version (%registry-http-version))
+         (key (list *http-backend* verify version)))
+    (or (cdr (assoc key *http-clients* :test #'equal))
+        (let ((client (make-http-client *http-backend* :verify verify
+                                                       :http-version version)))
+          (push (cons key client) *http-clients*)
+          client))))
+
 (defun http-exchange (method url &key headers content (force-binary t) (verify t)
                                    (decompress t))
   "Perform METHOD on URL via http-protocol.
@@ -130,8 +144,7 @@ CL_REPO_HTTP_BACKEND=async)."
   ;; reload the client's own http-protocol from the install tree.
   (with-loaded-systems-pinned ()
     (ensure-http-backend)
-    (let* ((client (make-http-client *http-backend* :verify verify
-                                                    :http-version (%registry-http-version)))
+    (let* ((client (%http-client verify))
            (res (request method url
                          :client client
                          :headers headers
