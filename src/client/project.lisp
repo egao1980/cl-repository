@@ -671,13 +671,16 @@ install tree, since the project's .asd is read in this image."
      (append (list "--eval" form) rest))
     (t rest)))
 
-(defun cmd-run (argv &key (directory (uiop:getcwd)) overlay)
-  "Sync, then exec ARGV. A lisp implementation is started with the source
-   registry already configured. CL_SOURCE_REGISTRY is not exported."
+(defun cmd-run (argv &key (directory (uiop:getcwd)) system overlay)
+  "Sync (SYSTEM, else every project system), then exec ARGV. A lisp
+   implementation is started with the source registry already configured.
+   CL_SOURCE_REGISTRY is not exported. The startup form loads ASDF itself and
+   names it only through FIND-SYMBOL, so it reads and runs whatever options
+   come before it (ros +Q starts without ASDF)."
   (when (null argv)
     (error "cl-repo: run requires a command"))
-  (cmd-sync :directory directory :overlay overlay)
-  (let* ((form (format nil "(asdf:initialize-source-registry '~s)"
+  (cmd-sync :directory directory :system system :overlay overlay)
+  (let* ((form (format nil "(progn (require \"asdf\") (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s))"
                        (source-registry-form (project-registry-directories directory)
                                              :locked (locked-versions directory))))
          (args (lisp-startup (first argv) form (rest argv)))

@@ -340,7 +340,7 @@ exec ros +Q -- $0 "$@"
              (unless cmd-args
                (format *error-output* "~&Error: run requires a command after --~%")
                (ros:quit 1))
-             (cmd-run cmd-args :overlay (overlay-opt opts)))
+             (cmd-run cmd-args :system (getf opts :system) :overlay (overlay-opt opts)))
 
             ((string-equal command "grovel")
              (cmd-grovel :directory (uiop:getcwd) :system (getf opts :system)
