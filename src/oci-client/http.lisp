@@ -132,6 +132,12 @@ CL_REPO_HTTP_BACKEND=async)."
           (push (cons key client) *http-clients*)
           client))))
 
+(defparameter *accept-encoding* '(:gzip :deflate)
+  "Content-Encodings the client asks registries for. Only what
+   http-encoding-chipz (pure Lisp, loaded by ENSURE-HTTP-BACKEND) decodes:
+   :DEFAULT would probe every coding, load native codecs (brotli, zstd)
+   mid-sync when the install tree has them, and warn about the others.")
+
 (defun http-exchange (method url &key headers content (force-binary t) (verify t)
                              (decompress t) timeout)
   "Perform METHOD on URL via http-protocol.
@@ -143,7 +149,8 @@ CL_REPO_HTTP_BACKEND=async)."
 
    TIMEOUT (seconds, a plist or an HTTP-TIMEOUT) overrides the client's default
    for this request; http-backend-async applies it to the whole exchange, body
-   included, so a large blob needs more than the 30 s default."
+   included, so a large blob needs more than the 30 s default.
+   Accept-Encoding is *ACCEPT-ENCODING*."
   ;; Pinned: a request may load a Content-Encoding backend, and must not
   ;; reload the client's own http-protocol from the install tree.
   (with-loaded-systems-pinned ()
@@ -155,6 +162,7 @@ CL_REPO_HTTP_BACKEND=async)."
                          :content content
                          :force-binary force-binary
                          :decompress decompress
+                         :accept-encoding *accept-encoding*
                          :timeout timeout
                          :raise-for-status nil)))
       (values (response-body res)
