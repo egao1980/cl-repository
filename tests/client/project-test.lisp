@@ -411,3 +411,31 @@
         (asdf:clear-system "cl-repo-pref-demo")
         (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
         (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))))
+
+(deftest sync-roots-cover-every-system-of-the-project
+  (let* ((stamp (format nil "~(~36r~)" (random (expt 36 8))))
+         (main (format nil "cl-repo-roots-~a" stamp))
+         (other (format nil "cl-repo-roots-tools-~a" stamp))
+         (dir (uiop:ensure-directory-pathname
+               (merge-pathnames (format nil "~a/" main) (uiop:temporary-directory)))))
+    (ensure-directories-exist dir)
+    (unwind-protect
+         (progn
+           (with-open-file (out (merge-pathnames (format nil "~a.asd" main) dir)
+                                :direction :output)
+             (format out "(defsystem ~s)~%(defsystem ~s :depends-on (~s))~%(defsystem ~s)~%"
+                     main (format nil "~a/agent" main) main (format nil "~a/tests" main)))
+           (with-open-file (out (merge-pathnames (format nil "~a.asd" other) dir)
+                                :direction :output)
+             (format out "(defsystem ~s)~%" other))
+           (testing "every primary .asd, the directory's own first"
+             (ok (equal (list main other)
+                        (cl-repository-client/project::project-primary-systems dir))))
+           (testing "the secondary systems that .asd defines"
+             (asdf:load-asd (merge-pathnames (format nil "~a.asd" main) dir))
+             (ok (equal (list (format nil "~a/agent" main) (format nil "~a/tests" main))
+                        (cl-repository-client/project::project-secondary-systems main dir)))
+             (ok (null (cl-repository-client/project::project-secondary-systems other dir)))))
+      (dolist (name (list main (format nil "~a/agent" main) (format nil "~a/tests" main) other))
+        (asdf:clear-system name))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
