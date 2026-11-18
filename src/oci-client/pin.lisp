@@ -19,6 +19,7 @@
   (:export #:with-loaded-systems-pinned
            #:loaded-system-files
            #:pinned-system-p
+           #:unpin-system
            #:loaded-system-shadows-newer
            #:shadowed-system-name
            #:shadowed-loaded-version
@@ -141,6 +142,15 @@
 (defun pinned-system-p (name)
   "True while NAME is pinned: loaded in this image and outside the checkout."
   (and *pinned* (nth-value 1 (gethash (string-downcase (string name)) *pinned*))))
+
+(defun unpin-system (name)
+  "Stop pinning NAME (and its secondary systems) for the rest of this pin
+   scope, so a newer copy can be found and loaded over the running one."
+  (when *pinned*
+    (let ((primary (asdf:primary-system-name (string-downcase (string name)))))
+      (loop for key in (loop for k being the hash-keys of *pinned* collect k)
+            when (string= primary (asdf:primary-system-name key))
+              do (remhash key *pinned*)))))
 
 (defun call-with-loaded-systems-pinned (thunk &key except)
   (if *pinned*

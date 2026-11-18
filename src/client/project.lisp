@@ -8,7 +8,7 @@
                 #:add-registry #:ensure-system-dependencies #:ensure-systems)
   (:import-from :cl-repository-client/asd-rewrite #:asd-defsystem-depends-on)
   (:import-from :cl-oci-client/conditions #:registry-error #:not-found-error #:auth-error)
-  (:import-from :cl-oci-client/pin #:with-loaded-systems-pinned)
+  (:import-from :cl-oci-client/pin #:with-loaded-systems-pinned #:pinned-system-p #:unpin-system)
   (:import-from :cl-repository-client/dep-satisfy #:system-satisfied-p)
   (:import-from :cl-repository-client/version-utils #:version< #:select-preferred-version)
   (:import-from :cl-repository-client/lockfile
@@ -428,11 +428,45 @@
         ((stringp overlay) overlay)
         (t (string-downcase (string overlay)))))
 
+(define-condition extension-upgrade-failed (error)
+  ((name :initarg :name :reader extension-upgrade-failed-name)
+   (minimum :initarg :minimum :reader extension-upgrade-failed-minimum)
+   (loaded :initarg :loaded :reader extension-upgrade-failed-loaded))
+  (:report (lambda (c s)
+             (format s "cl-repo: the project's .asd needs ~a >= ~a in this image, which runs ~a. "
+                     (extension-upgrade-failed-name c)
+                     (extension-upgrade-failed-minimum c)
+                     (extension-upgrade-failed-loaded c))
+             (format s "Loading the newer copy from the install tree did not take; reinstall the client."))))
+
+(defun upgrade-loaded-extension (name minimum)
+  "Load NAME >= MINIMUM over the copy this image runs, for a project .asd that
+   names it in :defsystem-depends-on. Signals EXTENSION-UPGRADE-FAILED when the
+   loaded version is still below MINIMUM."
+  (flet ((loaded-version ()
+           (let ((sys (asdf:registered-system name)))
+             (and sys (asdf:component-version sys)))))
+    (let ((before (loaded-version)))
+      (when (and before (version< (princ-to-string before) (princ-to-string minimum)))
+        (msg "~&; cl-repo: upgrading the loaded ~a ~a to >= ~a for :defsystem-depends-on~%"
+             name before minimum)
+        (unpin-system name)
+        (asdf:clear-system name)
+        (configure-asdf-source-registry)
+        (asdf:load-system name)
+        (let ((after (loaded-version)))
+          (when (or (null after) (version< (princ-to-string after) (princ-to-string minimum)))
+            (error 'extension-upgrade-failed :name name :minimum minimum
+                                             :loaded (or after before))))))))
+
 (defun ensure-defsystem-depends-on (directory)
   "Install the :defsystem-depends-on systems (asdf-native, cffi-grovel, ...) of
 the .asd files in DIRECTORY that ASDF can't find, or finds older than a
 (:version name min) entry asks for. ASDF loads them while reading the .asd,
-before any :depends-on walk can see them. → the names installed."
+before any :depends-on walk can see them. → the names installed.
+An extension this image already runs below the minimum (the client's own
+asdf-native) is upgraded in place: unpinned, cleared and loaded from the
+install tree, since the project's .asd is read in this image."
   (let ((wanted '()) (minimums '()))
     (dolist (asd (top-level-asds (uiop:ensure-directory-pathname directory)))
       (multiple-value-bind (names mins) (asd-defsystem-depends-on asd)
@@ -449,7 +483,9 @@ before any :depends-on walk can see them. → the names installed."
         (let ((min (cdr (assoc n minimums :test #'string=))))
           (msg "~&; cl-repo: installing :defsystem-depends-on ~a~@[ (>= ~a)~]~%" n min)
           (apply #'ensure-systems (list n) :default-source :oci
-                 (when min (list :minimum min)))))
+                 (when min (list :minimum min)))
+          (when (and min (pinned-system-p n))
+            (upgrade-loaded-extension n min))))
       missing)))
 
 (defvar *sync-with* nil
