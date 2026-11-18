@@ -9,7 +9,7 @@
   (:import-from :cl-repository-client/asd-rewrite #:asd-defsystem-depends-on)
   (:import-from :cl-oci-client/conditions #:registry-error #:not-found-error #:auth-error)
   (:import-from :cl-oci-client/pin #:with-loaded-systems-pinned #:pinned-system-p #:unpin-system)
-  (:import-from :cl-repository-client/dep-satisfy #:system-satisfied-p)
+  (:import-from :cl-repository-client/dep-satisfy #:system-satisfied-p #:asdf-dep-spec #:note-minimum)
   (:import-from :cl-repository-client/version-utils #:version< #:select-preferred-version)
   (:import-from :cl-repository-client/lockfile
                 #:lockfile-path #:read-lockfile #:lockfile-entry-system #:lockfile-entry-version)
@@ -32,6 +32,13 @@
            #:ensure-defsystem-depends-on
            #:expand-ci-env
            #:cmd-sync
+           #:client-runs-older-system
+           #:older-system-name
+           #:older-system-loaded-version
+           #:older-system-required-version
+           #:*reload-unsafe-systems*
+           #:reload-safe-system-p
+           #:ensure-project-requirements
            #:cmd-test
            #:prepare-test
            #:*test-in-subprocess*
@@ -439,25 +446,109 @@
                      (extension-upgrade-failed-loaded c))
              (format s "Loading the newer copy from the install tree did not take; reinstall the client."))))
 
+(define-condition client-runs-older-system (error)
+  ((name :initarg :name :reader older-system-name)
+   (loaded :initarg :loaded :reader older-system-loaded-version)
+   (required :initarg :required :reader older-system-required-version)
+   (loaded-file :initarg :loaded-file :initform nil :reader older-system-loaded-file))
+  (:documentation "The project needs a newer NAME than the one this client image
+runs, and NAME owns native libraries, so it cannot be replaced in a running
+image. CONTINUE uses the loaded copy.")
+  (:report (lambda (c s)
+             (format s "cl-repo: the project needs ~a >= ~a, but this cl-repo client runs ~a ~a~@[ (~a)~]. "
+                     (older-system-name c) (older-system-required-version c)
+                     (older-system-name c) (older-system-loaded-version c)
+                     (older-system-loaded-file c))
+             (format s "It loads native libraries, so it cannot be replaced in a running image. ")
+             (format s "Upgrade the client (curl -fsSL https://raw.githubusercontent.com/egao1980/cl-repository/main/install.sh | bash), ")
+             (format s "or run the work in a fresh image (cl-repo test without CL_REPO_TEST_IN_PROCESS)."))))
+
+(defvar *reload-unsafe-systems* '("cl+ssl")
+  "Systems never reloaded in a running client although no native library lives
+   in their own tree: cl+ssl opens cl-stack-ssl's libcrypto, and its reload
+   unloaded the live library (http-backend-async#44).")
+
+(defun loaded-system-version (name)
+  (let ((sys (asdf:registered-system name)))
+    (and sys (asdf:component-loaded-p sys) (asdf:component-version sys))))
+
+(defun %under-directory-p (path dir)
+  (let ((p (uiop:truename* path)) (d (uiop:truename* dir)))
+    (and p d (uiop:subpathp p d))))
+
+(defun reload-safe-system-p (name)
+  "True when reloading NAME cannot close or reopen native code: no loaded
+   foreign library lives under its directory, it declares no asdf-native
+   :NATIVE-LIBRARY component, and it is not in *RELOAD-UNSAFE-SYSTEMS*."
+  (let* ((name (string-downcase (string name)))
+         (sys (asdf:registered-system name))
+         (dir (and sys (asdf:system-source-directory sys)))
+         (native-class (and (find-package "ASDF-NATIVE")
+                            (find-class (find-symbol "NATIVE-LIBRARY" "ASDF-NATIVE") nil))))
+    (not (or (member (asdf:primary-system-name name) *reload-unsafe-systems* :test #'string=)
+             (and sys native-class
+                  (some (lambda (c) (typep c native-class)) (asdf:component-children sys)))
+             (and dir (find-package "CFFI")
+                  (some (lambda (lib)
+                          (let ((path (uiop:symbol-call "CFFI" "FOREIGN-LIBRARY-PATHNAME" lib)))
+                            (and path (%under-directory-p path dir))))
+                        (uiop:symbol-call "CFFI" "LIST-FOREIGN-LIBRARIES" :loaded-only t)))))))
+
+(defun ensure-loaded-at-least (name minimum)
+  "When this image runs a pinned NAME older than MINIMUM: upgrade it in place
+   if RELOAD-SAFE-SYSTEM-P, else signal CLIENT-RUNS-OLDER-SYSTEM (CONTINUE keeps
+   the loaded copy)."
+  (let ((loaded (loaded-system-version name)))
+    (when (and loaded (pinned-system-p name)
+               (version< (princ-to-string loaded) (princ-to-string minimum)))
+      (if (reload-safe-system-p name)
+          (upgrade-loaded-extension name minimum)
+          (cerror "Use the loaded copy anyway." 'client-runs-older-system
+                  :name name :loaded loaded :required minimum
+                  :loaded-file (let ((sys (asdf:registered-system name)))
+                                 (and sys (asdf:system-source-file sys))))))))
+
+(defun required-minimums (roots)
+  "(name . version) for every (:version name min) in the :depends-on closure of
+   ROOTS that ASDF can find, keeping the highest minimum per name. Reads .asd
+   files; loads no code."
+  (let ((seen (make-hash-table :test #'equal))
+        (mins (make-hash-table :test #'equal)))
+    (labels ((walk (name)
+               (let ((name (string-downcase (string name))))
+                 (unless (gethash name seen)
+                   (setf (gethash name seen) t)
+                   (let ((sys (asdf:find-system name nil)))
+                     (when sys
+                       (dolist (spec (asdf:system-depends-on sys))
+                         (multiple-value-bind (dep min) (asdf-dep-spec spec)
+                           (when dep
+                             (when min (note-minimum mins (string-downcase dep) min))
+                             (walk dep))))))))))
+      (mapc #'walk roots))
+    (loop for k being the hash-keys of mins using (hash-value v) collect (cons k v))))
+
+(defun ensure-project-requirements (roots)
+  "Before loading project code into this image: every pinned system ROOTS need
+   newer is upgraded (pure Lisp) or reported (native; CLIENT-RUNS-OLDER-SYSTEM)."
+  (loop for (name . min) in (required-minimums roots)
+        do (ensure-loaded-at-least name min)))
+
 (defun upgrade-loaded-extension (name minimum)
-  "Load NAME >= MINIMUM over the copy this image runs, for a project .asd that
-   names it in :defsystem-depends-on. Signals EXTENSION-UPGRADE-FAILED when the
-   loaded version is still below MINIMUM."
-  (flet ((loaded-version ()
-           (let ((sys (asdf:registered-system name)))
-             (and sys (asdf:component-version sys)))))
-    (let ((before (loaded-version)))
-      (when (and before (version< (princ-to-string before) (princ-to-string minimum)))
-        (msg "~&; cl-repo: upgrading the loaded ~a ~a to >= ~a for :defsystem-depends-on~%"
-             name before minimum)
-        (unpin-system name)
-        (asdf:clear-system name)
-        (configure-asdf-source-registry)
-        (asdf:load-system name)
-        (let ((after (loaded-version)))
-          (when (or (null after) (version< (princ-to-string after) (princ-to-string minimum)))
-            (error 'extension-upgrade-failed :name name :minimum minimum
-                                             :loaded (or after before))))))))
+  "Load NAME >= MINIMUM over the copy this image runs. Only for systems that
+   RELOAD-SAFE-SYSTEM-P accepts; see ENSURE-LOADED-AT-LEAST. Signals
+   EXTENSION-UPGRADE-FAILED when the loaded version is still below MINIMUM."
+  (let ((before (loaded-system-version name)))
+    (when (and before (version< (princ-to-string before) (princ-to-string minimum)))
+      (msg "~&; cl-repo: upgrading the loaded ~a ~a to >= ~a~%" name before minimum)
+      (unpin-system name)
+      (asdf:clear-system name)
+      (configure-asdf-source-registry)
+      (asdf:load-system name)
+      (let ((after (loaded-system-version name)))
+        (when (or (null after) (version< (princ-to-string after) (princ-to-string minimum)))
+          (error 'extension-upgrade-failed :name name :minimum minimum
+                                           :loaded (or after before)))))))
 
 (defun ensure-defsystem-depends-on (directory)
   "Install the :defsystem-depends-on systems (asdf-native, cffi-grovel, ...) of
@@ -484,8 +575,8 @@ install tree, since the project's .asd is read in this image."
           (msg "~&; cl-repo: installing :defsystem-depends-on ~a~@[ (>= ~a)~]~%" n min)
           (apply #'ensure-systems (list n) :default-source :oci
                  (when min (list :minimum min)))
-          (when (and min (pinned-system-p n))
-            (upgrade-loaded-extension n min))))
+          (when min
+            (ensure-loaded-at-least n min))))
       missing)))
 
 (defvar *sync-with* nil
@@ -551,8 +642,14 @@ install tree, since the project's .asd is read in this image."
 (defun prepare-test (&key (directory (uiop:getcwd)) system)
   "Make the project's install tree visible to ASDF, load init files and the
    :load-before-test systems. Returns the system name. After this, everything
-   cl-repo sync installed (including :ci :with extras) can be loaded."
+   cl-repo sync installed (including :ci :with extras) can be loaded.
+   Runs in this image, so a pinned system the project needs newer is upgraded
+   or reported first (ENSURE-PROJECT-REQUIREMENTS)."
   (multiple-value-bind (name extras) (test-setup directory system)
+    (ensure-project-requirements
+     (append (list name) extras
+             (let ((tests (format nil "~a/tests" name)))
+               (and (asdf:find-system tests nil) (list tests)))))
     (dolist (extra extras)
       (asdf:load-system extra))
     name))
@@ -702,7 +799,10 @@ install tree, since the project's .asd is read in this image."
 
 (defun cmd-grovel (&key (directory (uiop:getcwd)) system overlay)
   "Sync and load the system so cffi-grovel runs. The grovel directory of the
-   most specific matching overlay is created for the output."
+   most specific matching overlay is created for the output. The load runs in
+   this image with the client's systems pinned, so it never reloads one of
+   them from the install tree; one the project needs newer is upgraded or
+   reported first (ENSURE-PROJECT-REQUIREMENTS)."
   (cmd-sync :directory directory :system system :overlay overlay)
   (let* ((dir (uiop:ensure-directory-pathname directory))
          (name (or system (discover-project-system dir)))
@@ -710,5 +810,7 @@ install tree, since the project's .asd is read in this image."
          (out (merge-pathnames (format nil "grovel/~a/" key) dir)))
     (ensure-directories-exist (merge-pathnames ".keep" out))
     (when name
-      (asdf:load-system name))
+      (with-loaded-systems-pinned (:except (list dir))
+        (ensure-project-requirements (list name))
+        (asdf:load-system name)))
     out))

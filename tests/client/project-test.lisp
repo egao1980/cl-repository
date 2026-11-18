@@ -439,3 +439,46 @@
       (dolist (name (list main (format nil "~a/agent" main) (format nil "~a/tests" main) other))
         (asdf:clear-system name))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest reload-safety-of-loaded-systems
+  (ok (not (cl-repository-client/project:reload-safe-system-p "cl+ssl"))
+      "cl+ssl is listed: it opens cl-stack-ssl's libcrypto")
+  (ok (cl-repository-client/project:reload-safe-system-p "alexandria") "pure Lisp")
+  (let ((cl-repository-client/project:*reload-unsafe-systems* '("alexandria")))
+    (ok (not (cl-repository-client/project:reload-safe-system-p "alexandria"))
+        "the list is consulted by primary name")))
+
+(deftest required-minimums-walk-the-dependency-closure
+  (let* ((stamp (format nil "~(~36r~)" (random (expt 36 8))))
+         (main (format nil "cl-repo-mins-~a" stamp))
+         (dir (uiop:ensure-directory-pathname
+               (merge-pathnames (format nil "~a/" main) (uiop:temporary-directory))))
+         (asd (merge-pathnames (format nil "~a.asd" main) dir)))
+    (ensure-directories-exist dir)
+    (unwind-protect
+         (progn
+           (with-open-file (out asd :direction :output)
+             (format out "(defsystem ~s :depends-on ((:version \"alexandria\" \"99.0\") ~s))~%(defsystem ~s :depends-on ((:version \"alexandria\" \"98.0\")))~%"
+                     main (format nil "~a/part" main) (format nil "~a/part" main)))
+           (asdf:load-asd asd)
+           (let ((mins (cl-repository-client/project::required-minimums (list main))))
+             (ok (equal "99.0" (cdr (assoc "alexandria" mins :test #'string=)))
+                 "the highest minimum across the closure")))
+      (asdf:clear-system main)
+      (asdf:clear-system (format nil "~a/part" main))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest older-native-system-is-reported-not-reloaded
+  (let ((cl-repository-client/project:*reload-unsafe-systems* '("alexandria")))
+    (cl-oci-client/pin:with-loaded-systems-pinned ()
+      (ok (signals (cl-repository-client/project::ensure-loaded-at-least "alexandria" "999.0")
+                   'cl-repository-client/project:client-runs-older-system)
+          "an unsafe system the project needs newer is an error")
+      (let ((c (handler-case (cl-repository-client/project::ensure-loaded-at-least "alexandria" "999.0")
+                 (cl-repository-client/project:client-runs-older-system (e) e))))
+        (ok (equal "999.0" (cl-repository-client/project:older-system-required-version c)))
+        (ok (search "install.sh" (princ-to-string c)) "the report says how to fix it"))
+      (ok (null (handler-bind ((cl-repository-client/project:client-runs-older-system #'continue))
+                  (cl-repository-client/project::ensure-loaded-at-least "alexandria" "999.0")))
+          "CONTINUE keeps the loaded copy")
+      (ok (asdf:component-loaded-p (asdf:registered-system "alexandria")) "still loaded"))))
