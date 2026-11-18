@@ -43,7 +43,7 @@ for dir in "$ART"/native-*; do
     cp -a "$dir/grovel"/. "$gdest/"
   fi
 
-  if [ -z "$(find "$target" \( -type f -o -type l \) 2>/dev/null | head -1)" ]; then
+  if [ -z "$(find "$target" \( -type f -o -type l \) -print -quit 2>/dev/null)" ]; then
     echo "error: no native files under ${target} (from ${dir})" >&2
     exit 1
   fi
@@ -58,8 +58,8 @@ fi
 echo "Platforms:"
 cat "$PLATFORMS_FILE"
 echo "Native files:"
-find lib \( -type f -o -type l \) | head -80
+find lib \( -type f -o -type l \) | awk 'NR <= 80'
 if [ -d grovel ]; then
   echo "Grovel files:"
-  find grovel -type f | head -40
+  find grovel -type f | awk 'NR <= 40'
 fi
