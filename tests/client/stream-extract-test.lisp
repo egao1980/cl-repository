@@ -159,12 +159,6 @@
           "no temp files left")
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
-(defun %scratch-dir (tag)
-  (let ((dir (uiop:ensure-directory-pathname
-              (format nil "~a/cl-repo-~a-~36r/" (uiop:temporary-directory) tag (random (expt 36 6))))))
-    (ensure-directories-exist dir)
-    dir))
-
 (defun %file-names (dir)
   (sort (mapcar #'file-namestring (uiop:directory-files dir)) #'string<))
 
