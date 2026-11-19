@@ -18,7 +18,7 @@
   (:import-from :cl-oci/descriptor #:make-descriptor #:descriptor-digest
                 #:descriptor-size #:descriptor-annotations)
   (:import-from :cl-oci/digest #:parse-digest #:format-digest #:compute-digest)
-  (:import-from :cl-oci/manifest #:manifest #:manifest-layers)
+  (:import-from :cl-oci/manifest #:manifest #:manifest-layers #:manifest-annotations)
   (:import-from :cl-oci/config #:+role-source+)
   (:import-from :cl-oci/system-names #:oci-package-name #:slash-system-name-p)
   (:import-from :cl-repository-packager/build-matrix
@@ -44,6 +44,7 @@
            #:publish-overlay
            #:publish-system-name-anchors
            #:system-name-anchor-targets
+           #:anchor-should-move-p
            #:fetch-source-layer-info))
 (in-package :cl-repository-packager/publisher)
 
@@ -274,8 +275,34 @@
 
 ;;; --- System-name anchor ---
 
+(defun anchor-should-move-p (current-version new-version)
+  "True when REPO:latest at CURRENT-VERSION may be repointed to NEW-VERSION.
+   Publishing an older release (a rebuild of 0.2.0 after 0.2.1) must not move
+   :latest backwards. Versions that are not dotted integers compare as unknown,
+   and an unknown or missing current version always moves."
+  (let ((current (and (stringp current-version) (uiop:parse-version current-version)))
+        (new (and (stringp new-version) (uiop:parse-version new-version))))
+    (not (and current new (uiop:version< new-version current-version)))))
+
+(defun %current-anchor (registry repo)
+  "Version annotation and digest of REPO:latest, or NIL when absent."
+  (handler-case
+      (let ((obj (pull-manifest registry repo "latest")))
+        (when (typep obj 'manifest)
+          (let ((ann (manifest-annotations obj)))
+            (when (hash-table-p ann)
+              (values (gethash +ann-version+ ann)
+                      (head-manifest-digest registry repo "latest"))))))
+    (registry-error () nil)))
+
 (defun ensure-system-name-anchor (registry repo system-name canonical-name version)
-  "Create/update system-name anchor at REPO:latest. Returns anchor digest."
+  "Create/update system-name anchor at REPO:latest. Returns anchor digest.
+   When :latest already names a newer version, it is left alone and its digest
+   is returned (the provider referrer for VERSION still hangs off it)."
+  (multiple-value-bind (current current-digest) (%current-anchor registry repo)
+    (when (and current current-digest (not (anchor-should-move-p current version)))
+      (msg "~&  Keeping ~a:latest at ~a (publishing older ~a)~%" repo current version)
+      (return-from ensure-system-name-anchor current-digest)))
   (let* ((config-ht (make-hash-table :test 'equal))
          (_ (progn
               (setf (gethash "system-name" config-ht) system-name)
