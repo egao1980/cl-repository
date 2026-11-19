@@ -158,3 +158,65 @@
                  (sort (mapcar #'file-namestring (uiop:directory-files dir)) #'string<))
           "no temp files left")
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(defun %file-names (dir)
+  (sort (mapcar #'file-namestring (uiop:directory-files dir)) #'string<))
+
+(deftest atomic-write-that-fails-leaves-no-temp
+  "cl-repository#102: a write that does not complete must delete its temp and
+   leave the target as it was."
+  (let ((dir (%scratch-dir "atomic-fail")))
+    (unwind-protect
+         (dolist (name '("LICENSE" "foo.lisp"))
+           (let ((path (merge-pathnames name dir)))
+             (cl-repository-client/atomic-file:with-atomic-output-file (s path)
+               (write-string "old" s))
+             (ok (signals (cl-repository-client/atomic-file:with-atomic-output-file (s path)
+                            (write-string "partial" s)
+                            (error "disk full")))
+                 name)
+             (ok (equal "old" (uiop:read-file-string path)) name)))
+      (ok (equal '("LICENSE" "foo.lisp") (%file-names dir)) "no temp files left")
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest temp-file-names-left-by-a-writer
+  (let ((now 4003170000))
+    (flet ((stale-p (name)
+             (cl-repository-client/atomic-file:temp-file-name-p name :now now)))
+      ;; 0.27.4-0.27.5: <file>.tmp-<time>-<n>
+      (ok (stale-p "LICENSE.tmp-4003163167-377900"))
+      (ok (stale-p ".gitignore.tmp-4003165824-328016"))
+      (ok (stale-p "README.md.tmp-4003163167-1"))
+      ;; current: .<name>.tmp-<time>-<n>[.<type>]
+      (ok (stale-p ".LICENSE.tmp-4003163167-2"))
+      (ok (stale-p ".foo.tmp-4003163167-2.lisp"))
+      ;; a concurrent writer's temp is young: kept
+      (ng (stale-p (format nil ".LICENSE.tmp-~d-3" now)))
+      (ng (stale-p (format nil ".foo.tmp-~d-3.lisp" (- now 10))))
+      ;; ordinary files
+      (dolist (name '("LICENSE" "foo.lisp" ".gitignore" "a.tmp" "x.tmp-1" "x.tmp-a-1"
+                      "tmp-4003163167-1" "notes.tmp-4003163167-1x"))
+        (ng (stale-p name) name)))))
+
+(deftest install-manifest-removes-stale-temps
+  "cl-repository#102: 17 LICENSE.tmp-* sat in rove/0.10.3, and the file
+   manifest recorded them as part of the system. Re-installing removes them."
+  (let* ((dir (%scratch-dir "stale-temp"))
+         (young (format nil ".LICENSE.tmp-~d-7" (get-universal-time))))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist (merge-pathnames "src/" dir))
+           (dolist (name (list "LICENSE" "LICENSE.tmp-4003163167-377900"
+                               ".gitignore.tmp-4003165824-328016" "src/main.lisp"
+                               "src/.main.tmp-4003163167-9.lisp" young))
+             (with-open-file (out (merge-pathnames name dir) :direction :output
+                                                             :if-exists :supersede)
+               (write-string "x" out)))
+           (let* ((*standard-output* (make-broadcast-stream))
+                  (entries (cl-repository-client/integrity:record-file-manifest dir)))
+             (ok (equal (list young "LICENSE")
+                        (remove ".cl-repo-manifest.sexp" (%file-names dir) :test #'string=))
+                 "old temps deleted, a concurrent writer's young one kept")
+             (ok (equal '("main.lisp") (%file-names (merge-pathnames "src/" dir))))
+             (ng (find "LICENSE.tmp-4003163167-377900" entries :key #'car :test #'string=))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

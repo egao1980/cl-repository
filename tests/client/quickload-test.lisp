@@ -398,3 +398,42 @@
                      "cl-repo-lc-demo" "0.3.0"))))
       (asdf:clear-system "cl-repo-lc-demo")
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))
+
+(deftest test-collect-missing-takes-the-strongest-minimum
+  "cl-repository#100: ai-agent-protocol needs conversation-protocol 0.3.0, its
+   /tests 0.4.0. The walk checked the first (:version ...) it met, found the
+   cached 0.3.0 new enough, and never looked at the test system's 0.4.0: sync
+   fetched nothing and the test load failed. The same holds for :with extras."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-tmin-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (write-asd (lambda (name text)
+                      (with-open-file (out (merge-pathnames (format nil "~a.asd" name) dir)
+                                           :direction :output :if-exists :supersede)
+                        (write-string text out)))))
+    (ensure-directories-exist dir)
+    (funcall write-asd "cl-tmin-dep" "(defsystem \"cl-tmin-dep\" :version \"0.3.0\")")
+    (funcall write-asd "cl-tmin-main"
+             "(defsystem \"cl-tmin-main\" :depends-on ((:version \"cl-tmin-dep\" \"0.3.0\")))
+(defsystem \"cl-tmin-main/tests\"
+  :depends-on (\"cl-tmin-main\" (:version \"cl-tmin-dep\" \"0.4.0\")))")
+    (funcall write-asd "cl-tmin-extra"
+             "(defsystem \"cl-tmin-extra\" :depends-on ((:version \"cl-tmin-dep\" \"0.5.0\")))")
+    (push dir asdf:*central-registry*)
+    (unwind-protect
+         (let ((asdf/session:*asdf-session* nil))
+           ;; ENSURE-SYSTEM-DEPENDENCIES puts the test system first
+           (dolist (roots '(("cl-tmin-main/tests" "cl-tmin-main")
+                            ("cl-tmin-main" "cl-tmin-main/tests")))
+             (multiple-value-bind (missing minimums) (collect-missing-asdf-deps roots)
+               (ok (equal '("cl-tmin-dep") missing) (format nil "~s: too old for /tests" roots))
+               (ok (equal "0.4.0" (cdr (assoc "cl-tmin-dep" minimums :test #'string=))))))
+           (ok (null (collect-missing-asdf-deps '("cl-tmin-main")))
+               "the main system alone is satisfied by 0.3.0")
+           (multiple-value-bind (missing minimums)
+               (collect-missing-asdf-deps '("cl-tmin-main") '("cl-tmin-extra"))
+             (ok (equal '("cl-tmin-dep") missing) ":with extra asks for more")
+             (ok (equal "0.5.0" (cdr (assoc "cl-tmin-dep" minimums :test #'string=))))))
+      (setf asdf:*central-registry* (remove dir asdf:*central-registry* :test #'equal))
+      (dolist (s '("cl-tmin-main/tests" "cl-tmin-main" "cl-tmin-dep" "cl-tmin-extra"))
+        (asdf:clear-system s))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
