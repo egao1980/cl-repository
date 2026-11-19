@@ -387,20 +387,37 @@
   "Walk ASDF :depends-on from LOCAL-ROOTS. Return names that are not satisfied.
    A system is unsatisfied when it is missing, older than its :version minimum,
    or found under a Quicklisp tree. Second value is an alist of (name . minimum).
-   Does not return LOCAL-ROOTS themselves."
+   Does not return LOCAL-ROOTS themselves.
+   Every (:version name min) in the closure counts, not only the first one
+   met: a name seen again with a higher minimum (the test system or a :with
+   extra asks for more than the main system) is checked again against it."
   (let ((seen (make-hash-table :test #'equal))
         (mins (make-hash-table :test #'equal))
         (local (mapcar (lambda (s) (string-downcase (string s))) local-roots))
         (missing '()))
     (labels ((local-p (n) (member n local :test #'string=))
+             (stronger-p (minimum checked)
+               (and minimum
+                    (or (null checked)
+                        (tag-older-than-p (princ-to-string checked)
+                                          (princ-to-string minimum)))))
              (walk-specs (sys)
                (dolist (spec (system-direct-dep-specs sys))
                  (walk (car spec) (cdr spec))))
              (walk (name minimum)
-               (let ((n (string-downcase (string name))))
+               (let* ((n (string-downcase (string name)))
+                      (visit (gethash n seen)))
                  (note-minimum mins n minimum)
-                 (unless (gethash n seen)
-                   (setf (gethash n seen) t)
+                 ;; VISIT is (minimum-checked). Its deps were walked on the
+                 ;; first visit; a stronger minimum only re-checks N itself.
+                 (when (and visit (not (local-p n))
+                            (not (member n missing :test #'string=))
+                            (stronger-p minimum (car visit)))
+                   (setf (car visit) minimum)
+                   (unless (satisfied-or-definer n minimum)
+                     (pushnew n missing :test #'string=)))
+                 (unless visit
+                   (setf (gethash n seen) (list minimum))
                    (cond
                      ((local-p n)
                       (let ((sys (asdf:find-system n nil)))

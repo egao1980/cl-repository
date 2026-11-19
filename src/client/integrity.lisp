@@ -2,7 +2,8 @@
   (:use :cl)
   (:import-from :cl-oci/runtime #:*quiet* #:msg)
   (:import-from :cl-oci/digest #:compute-file-digest #:format-digest)
-  (:import-from :cl-repository-client/atomic-file #:with-atomic-output-file #:read-sexp-file)
+  (:import-from :cl-repository-client/atomic-file #:with-atomic-output-file #:read-sexp-file
+                #:remove-stale-temp-files)
   (:export #:record-file-manifest
            #:verify-installed-system
            #:verify-all-systems
@@ -47,7 +48,10 @@
 
 (defun record-file-manifest (install-dir)
   "Record SHA-256 digests of all files in INSTALL-DIR to a manifest file.
-   Called after system extraction is complete."
+   Called after system extraction is complete. Temp files a failed or older
+   client left behind (LICENSE.tmp-N, cl-repository#102) are deleted first:
+   they are not part of the system and must not be recorded as if they were."
+  (remove-stale-temp-files install-dir)
   (let* ((dir (uiop:ensure-directory-pathname install-dir))
          (manifest-path (merge-pathnames *manifest-filename* dir))
          (files (collect-files dir))
