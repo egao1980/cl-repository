@@ -632,6 +632,10 @@
           plan)
          ((and (not force)
                (not (string= pkg name))
+               ;; A secondary asked for at a MINIMUM its findable copy does not meet
+               ;; (the first clause keeps one that does) needs a newer package: an
+               ;; installed conversation-protocol 0.3.0 does not provide /summary 0.4.0.
+               (null minimum)
                (or (asdf:find-system pkg nil)
                    (system-already-installed-p pkg)
                    (system-protected-p pkg)))

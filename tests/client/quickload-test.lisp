@@ -290,6 +290,49 @@
       (asdf:clear-system "cl-min-demo")
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
+(deftest test-secondary-below-minimum-resolves-its-package
+  "ai-agent-protocol/tests needs conversation-protocol/summary 0.4.0. An
+   installed conversation-protocol 0.3.0 counted as \"provided by installed\",
+   nothing was installed, and sync ended with \"system
+   conversation-protocol/summary is not in the registry\"."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-sec-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (sym 'cl-repository-client/constraint-builder:build-install-plan)
+         (orig (fdefinition sym))
+         (calls '()))
+    (ensure-directories-exist dir)
+    (with-open-file (out (merge-pathnames "cl-sec-demo.asd" dir) :direction :output
+                                                                 :if-exists :supersede)
+      (write-string "(defsystem \"cl-sec-demo\" :version \"0.3.0\")
+(defsystem \"cl-sec-demo/sub\" :version \"0.3.0\")" out))
+    (push dir asdf:*central-registry*)
+    (unwind-protect
+         (progn
+           (setf (fdefinition sym)
+                 (lambda (name version registries &key force)
+                   (declare (ignore registries force))
+                   (push name calls)
+                   (values (list (cons name (if (eq version :latest) "0.4.0" version))) nil)))
+           (let ((*standard-output* (make-broadcast-stream))
+                 (asdf/session:*asdf-session* nil))
+             (ok (null (cl-repository-client/quickload::%resolve-one-into-plan
+                        "cl-sec-demo/sub" nil nil))
+                 "no minimum: provided by the installed package")
+             (ok (null (cl-repository-client/quickload::%resolve-one-into-plan
+                        "cl-sec-demo/sub" nil nil :minimum "0.2.0"))
+                 "new enough: kept")
+             (ok (null calls))
+             (ok (equal '(("cl-sec-demo" . "0.4.0"))
+                        (cl-repository-client/quickload::%resolve-one-into-plan
+                         "cl-sec-demo/sub" nil nil :minimum "0.4.0"))
+                 "too old: its package is resolved from the registry")
+             (ok (equal '("cl-sec-demo") calls))))
+      (setf (fdefinition sym) orig)
+      (setf asdf:*central-registry* (remove dir asdf:*central-registry*))
+      (asdf:clear-system "cl-sec-demo/sub")
+      (asdf:clear-system "cl-sec-demo")
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
 (deftest installed-version-is-the-newest-not-the-last-in-path-order
   (let* ((root (uiop:ensure-directory-pathname
                 (format nil "~a/cl-repo-iv-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
