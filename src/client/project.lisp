@@ -45,7 +45,10 @@
            #:tests-failed
            #:cmd-run
            #:cmd-grovel
-           #:*default-ql-dist*))
+           #:*default-ql-dist*
+           #:lisp-command-p
+           #:split-lisp-command-args
+           #:expand-lisp-command))
 (in-package :cl-repository-client/project)
 
 (defvar *default-ql-dist* "https://beta.quicklisp.org/dist/quicklisp.txt"
@@ -788,6 +791,42 @@ install tree, since the project's .asd is read in this image."
                                               :input :interactive))))
     (unless (zerop code)
       (uiop:quit code))))
+
+(defparameter *lisp-commands* '("ros" "sbcl" "ccl" "ecl" "abcl")
+  "Commands that `cl-repo <lisp> …` runs as `cl-repo run -- <lisp> …`.")
+
+(defun lisp-command-p (name)
+  (and (stringp name) (member name *lisp-commands* :test #'string-equal) t))
+
+(defun split-lisp-command-args (args)
+  "Split the arguments after `cl-repo <lisp>`. Leading --system NAME and
+   --overlay NAME are cl-repo's; the rest goes to the lisp unchanged (its own
+   -l, -q, --, --help, `ros run`). Here --overlay always takes a name, so a
+   following word such as `run` is never mistaken for one.
+   Returns (values lisp-args system overlay)."
+  (let ((system nil) (overlay nil))
+    (loop
+      (let ((arg (first args)))
+        (cond ((and (member arg '("--system" "--overlay") :test #'equal)
+                    (rest args))
+               (if (equal arg "--system")
+                   (setf system (second args))
+                   (setf overlay (second args)))
+               (setf args (cddr args)))
+              (t (return (values args system overlay))))))))
+
+(defun expand-lisp-command (argv)
+  "`cl-repo ros …` → `cl-repo run [--system S] [--overlay O] -- ros …`.
+   Other ARGV is returned unchanged."
+  (if (lisp-command-p (first argv))
+      (multiple-value-bind (lisp-args system overlay)
+          (split-lisp-command-args (rest argv))
+        (append (list "run")
+                (when system (list "--system" system))
+                (when overlay (list "--overlay" overlay))
+                (list "--" (first argv))
+                lisp-args))
+      argv))
 
 (defun machine-overlay-key (directory)
   (multiple-value-bind (os arch impl) (detect-local-platform)

@@ -1,10 +1,30 @@
 (defpackage :cl-repository-client/tests/project-test
   (:use :cl :rove)
   (:import-from :cl-repository-client/project #:expand-ci-env #:discover-project-system
-                #:project-registry-directories)
+                #:project-registry-directories #:expand-lisp-command)
   (:import-from :cl-repository-client/dep-satisfy
                 #:asdf-dep-spec #:system-satisfied-p #:quicklisp-source-p))
 (in-package :cl-repository-client/tests/project-test)
+
+(deftest lisp-command-expands-to-run
+  (testing "cl-repo ros … is cl-repo run -- ros …"
+    (ok (equal (expand-lisp-command '("ros" "-l" "x.lisp" "-q" "--" "2026f"))
+               '("run" "--" "ros" "-l" "x.lisp" "-q" "--" "2026f"))))
+  (testing "leading --system / --overlay are cl-repo's"
+    (ok (equal (expand-lisp-command
+                '("ros" "--system" "foo/update" "--overlay" "cuda" "-l" "x.lisp"))
+               '("run" "--system" "foo/update" "--overlay" "cuda" "--" "ros" "-l" "x.lisp"))))
+  (testing "after the first lisp argument everything is the lisp's"
+    (ok (equal (expand-lisp-command '("sbcl" "--script" "t.lisp" "--system" "x"))
+               '("run" "--" "sbcl" "--script" "t.lisp" "--system" "x")))
+    (ok (equal (expand-lisp-command '("ros" "run"))
+               '("run" "--" "ros" "run")))
+    (ok (equal (expand-lisp-command '("ros" "--help"))
+               '("run" "--" "ros" "--help"))))
+  (testing "other commands are unchanged"
+    (ok (equal (expand-lisp-command '("sync" "--system" "x")) '("sync" "--system" "x")))
+    (ok (equal (expand-lisp-command '("run" "--" "ros")) '("run" "--" "ros")))
+    (ok (null (expand-lisp-command '())))))
 
 (deftest asdf-version-dep-keeps-minimum
   (multiple-value-bind (name minimum) (asdf-dep-spec '(:version "Foo" "1.2.3"))

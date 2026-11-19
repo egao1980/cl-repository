@@ -61,6 +61,7 @@ cl-repo publish
 cl-repo sync
 cl-repo test
 cl-repo run -- sbcl --script tool.lisp
+cl-repo ros --system foo/tool -l tool.lisp -q
 cl-repo publish
 cl-repo add-overlay
 cl-repo version --bump patch
@@ -68,6 +69,10 @@ cl-repo publish --overlay
 cl-repo install alexandria
 ```
 
+
+### Запуск Lisp
+
+`cl-repo run -- <команда…>` делает sync и запускает команду. Lisp (ros, sbcl, ccl, ecl, abcl) стартует с уже настроенным source registry; `CL_SOURCE_REGISTRY` не экспортируется. `cl-repo ros …` — краткая форма `cl-repo run -- ros …` (то же для остальных Lisp). Ведущие `--system NAME` / `--overlay NAME` относятся к cl-repo; всё остальное уходит в Lisp без изменений, включая `--help` и `ros run`.
 
 ### Версии
 
