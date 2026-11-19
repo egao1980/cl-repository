@@ -5,6 +5,7 @@
 #       uses: egao1980/cl-repository/.github/workflows/publish-source.yml@main
 #       with:
 #         version: ${{ inputs.version }}
+#         ref: ${{ inputs.ref }}     # optional: rebuild an older commit/tag
 #       permissions:
 #         contents: read
 #         packages: write
@@ -17,6 +18,11 @@ on:
     inputs:
       system:
         description: ASDF system (empty → discover from *.asd)
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: Git ref to publish (empty → the triggering ref). Rebuild an old release from its tag/commit.
         required: false
         type: string
         default: ""
@@ -68,6 +74,8 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
 
       # uses: cannot interpolate inputs/github — GH parse-time restriction.
       - uses: egao1980/cl-repository/.github/actions/setup-lisp@main
