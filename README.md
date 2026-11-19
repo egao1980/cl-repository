@@ -71,12 +71,17 @@ The registry defaults to `https://ghcr.io` / `egao1980/cl-systems`. No `CL_SOURC
 cl-repo sync
 cl-repo test
 cl-repo run -- sbcl --script tool.lisp
+cl-repo ros --system foo/tool -l tool.lisp -q
 cl-repo publish
 cl-repo add-overlay
 cl-repo version --bump patch
 cl-repo publish --overlay
 cl-repo install alexandria
 ```
+
+### Run a Lisp
+
+`cl-repo run -- <command…>` syncs, then runs the command. A Lisp (ros, sbcl, ccl, ecl, abcl) starts with the source registry already set; `CL_SOURCE_REGISTRY` is not exported. `cl-repo ros …` is short for `cl-repo run -- ros …`, and the same goes for the other Lisps. Leading `--system NAME` / `--overlay NAME` are cl-repo's; everything after goes to the Lisp unchanged, `--help` and `ros run` included.
 
 ### Versions
 

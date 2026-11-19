@@ -61,6 +61,7 @@ cl-repo publish
 cl-repo sync
 cl-repo test
 cl-repo run -- sbcl --script tool.lisp
+cl-repo ros --system foo/tool -l tool.lisp -q
 cl-repo publish
 cl-repo add-overlay
 cl-repo version --bump patch
@@ -68,6 +69,10 @@ cl-repo publish --overlay
 cl-repo install alexandria
 ```
 
+
+### Lisp の実行
+
+`cl-repo run -- <command…>` は sync してからコマンドを実行する。Lisp（ros、sbcl、ccl、ecl、abcl）は source registry を設定済みの状態で起動し、`CL_SOURCE_REGISTRY` はエクスポートしない。`cl-repo ros …` は `cl-repo run -- ros …` の短縮形（他の Lisp も同様）。先頭の `--system NAME` / `--overlay NAME` は cl-repo のオプションで、それ以降は `--help` や `ros run` も含めてそのまま Lisp に渡す。
 
 ### バージョン
 

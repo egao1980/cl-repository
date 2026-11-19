@@ -50,6 +50,7 @@ exec ros +Q -- $0 "$@"
                 #:*default-registry* #:*default-namespace*)
   (:import-from :cl-repository-client/project
                 #:cmd-sync #:cmd-test #:cmd-run #:cmd-grovel #:client-source-tree
+                #:expand-lisp-command
                 #:ensure-default-registry #:discover-project-system
                 #:register-project #:ensure-defsystem-depends-on)
   (:import-from :cl-repository-client/asd-rewrite #:cmd-add-overlay)
@@ -73,6 +74,7 @@ exec ros +Q -- $0 "$@"
   (format t "  sync                  Install the .asd and qlfile dependencies~%")
   (format t "  test                  Sync, then run the system test-op~%")
   (format t "  run -- <command...>   Sync, then run a command~%")
+  (format t "  ros <args...>         Same as run -- ros <args...> (also sbcl, ccl, ecl, abcl)~%")
   (format t "  grovel                Sync, load the system, write the grovel overlay~%")
   (format t "  publish               Push the source and overlays whose files exist~%")
   (format t "  publish --overlay     Push one overlay. A name selects that overlay.~%")
@@ -262,9 +264,14 @@ exec ros +Q -- $0 "$@"
                    reg ns (or (funcall version-fn spec) "latest") result spec)))))
 
 (defun main (&rest argv)
-  (when (or (null argv) (member "--help" argv :test #'string=) (member "-h" argv :test #'string=))
-    (usage)
-    (ros:quit 0))
+  (setf argv (expand-lisp-command argv))
+  (let ((own (subseq argv 0 (position "--" argv :test #'string=))))
+    ;; Help flags after -- (or after `cl-repo ros`) belong to the command.
+    (when (or (null argv)
+              (member "--help" own :test #'string=)
+              (member "-h" own :test #'string=))
+      (usage)
+      (ros:quit 0)))
   (multiple-value-bind (cmd-args opts) (parse-options (rest argv))
     (let* ((command (first argv))
            (registry-url (getf opts :registry))
