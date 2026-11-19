@@ -65,14 +65,13 @@
 
 (defun filter-publish-provides (system-name provides)
   "Provides written into the published package. Drops test systems.
-   Slash secondaries stay in the list (they live in the primary tarball)."
+   Slash secondaries stay in the list (they live in the primary tarball).
+   SYSTEM-NAME comes first: PUBLISH-PACKAGE pushes to the first name's repo."
   (let* ((primary (string-downcase (string system-name)))
          (raw (or provides (list primary)))
          (cleaned (remove-if #'test-system-name-p
                              (mapcar (lambda (s) (string-downcase (string s))) raw))))
-    (if (member primary cleaned :test #'string=)
-        cleaned
-        (cons primary cleaned))))
+    (cons primary (remove primary cleaned :test #'string=))))
 
 (defun normalize-metadata-string (value)
   "Coerce ASDF metadata (author/description) to a single-line string or NIL.
@@ -304,9 +303,18 @@ as cuda) is kept as its own overlay."
   (let* ((system (asdf:find-system system-name))
          (cl-repo (system-cl-repo-properties system))
          (source-dir (asdf:system-source-directory system))
+         (name (asdf:component-name system))
          (provides (or (getf cl-repo :provides)
-                       (when source-dir (discover-provided-systems source-dir))
-                       (list (asdf:component-name system)))))
+                       ;; Directory order is arbitrary. The packaged system
+                       ;; comes first: PUBLISH-PACKAGE pushes to the first
+                       ;; name's repo (json-protocol#19 pushed every sibling
+                       ;; to json-backend-jzon).
+                       (let ((found (when source-dir (discover-provided-systems source-dir))))
+                         (when found
+                           (if (member name found :test #'string-equal)
+                               (cons name (remove name found :test #'string-equal))
+                               found)))
+                       (list name))))
     (make-instance 'package-spec
                    :name (asdf:component-name system)
                    :version (asdf:component-version system)

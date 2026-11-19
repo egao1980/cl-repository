@@ -191,3 +191,52 @@
             (end-of-file () nil)
             (reader-error () nil))
           (format nil "~a reads to the end" (file-namestring file))))))
+
+(deftest asd-system-versions-read-literal-version
+  (let ((dir (make-temp-dir)))
+    (unwind-protect
+         (progn
+           (write-asd dir "json-protocol.asd" :systems '("json-protocol" "json-protocol/tests")
+                                              :extra ":version \"0.2.1\"")
+           (write-asd dir "json-backend-jzon.asd" :systems '("json-backend-jzon")
+                                                  :extra ":version \"0.2.0\"")
+           (write-asd dir "computed.asd" :systems '("computed")
+                                         :extra ":version (:read-file-form \"v.sexp\")")
+           (let ((pairs (cl-repository-ci-lib:discover-asd-system-versions dir)))
+             (ok (equal (cdr (assoc "json-protocol" pairs :test #'string=)) "0.2.1"))
+             (ok (equal (cdr (assoc "json-backend-jzon" pairs :test #'string=)) "0.2.0"))
+             (ok (assoc "computed" pairs :test #'string=))
+             (ok (null (cdr (assoc "computed" pairs :test #'string=))))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest publish-provides-system-first-drops-other-versions
+  "json-protocol#19: every job of a multi-.asd checkout pushed to the first
+   sibling's repo and mounted itself onto the others at its own tag."
+  (let ((declared '(("json-backend-jzon" . "0.2.0")
+                    ("json-backend-yason" . "0.2.0")
+                    ("json-protocol" . "0.2.1")
+                    ("extras" . nil))))
+    (multiple-value-bind (kept dropped)
+        (cl-repository-ci-lib:publish-provides
+         "json-protocol" "0.2.1"
+         '("json-backend-jzon" "json-backend-yason" "json-protocol" "json-protocol/x" "extras")
+         declared)
+      (ok (equal kept '("json-protocol" "json-protocol/x" "extras")))
+      (ok (equal dropped '("json-backend-jzon" "json-backend-yason"))))
+    (multiple-value-bind (kept dropped)
+        (cl-repository-ci-lib:publish-provides
+         "json-backend-yason" "0.2.0"
+         '("json-backend-jzon" "json-backend-yason" "json-protocol")
+         declared)
+      (ok (equal kept '("json-backend-yason" "json-backend-jzon")))
+      (ok (equal dropped '("json-protocol"))))))
+
+(deftest check-publish-version-refuses-mismatched-tag
+  (ok (equal (cl-repository-ci-lib:check-publish-version "foo" nil "1.0") "1.0"))
+  (ok (equal (cl-repository-ci-lib:check-publish-version "foo" "1.0" "1.0") "1.0"))
+  (ok (equal (cl-repository-ci-lib:check-publish-version "cffi" "0.24.1" nil) "0.24.1"))
+  (ok (signals (cl-repository-ci-lib:check-publish-version "json-backend-jzon" "0.2.1" "0.2.0")
+               'cl-repository-ci-lib:publish-version-mismatch))
+  (ok (equal (handler-bind ((cl-repository-ci-lib:publish-version-mismatch #'continue))
+               (cl-repository-ci-lib:check-publish-version "foo" "2.0" "1.0"))
+             "2.0")))

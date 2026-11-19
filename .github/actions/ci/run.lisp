@@ -250,6 +250,16 @@
 
 (defun %run-publish ()
   (%ensure-packager)
+  ;; CONFIGURE-ASDF-SOURCE-REGISTRY put the installed tree before the checkout.
+  ;; A dependency whose package provides the system under test installs a
+  ;; symlink for it (json-backend-jzon → json-protocol, yaml-protocol), and
+  ;; that copy then shadowed the checkout: publish packaged the old installed
+  ;; tree (json-protocol#19). The checkout goes first.
+  (asdf:initialize-source-registry
+   (%registry-form (remove nil (list (namestring (uiop:getcwd))
+                                     (namestring (cl-repo:systems-root))
+                                     (cl-repository-ci-lib:nonempty-env "CL_REPOSITORY_DEST")))))
+  (cl-repository-ci-lib:clear-checkout-systems)
   (load (merge-pathnames "publish.lisp" *load-truename*)))
 
 (let ((phase (string-downcase (or (%env "CL_REPO_CI_PHASE") ""))))

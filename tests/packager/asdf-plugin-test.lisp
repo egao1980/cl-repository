@@ -236,3 +236,35 @@
              '("ai-agent-protocol" "ai-agent-protocol/mcp" "ai-agent-protocol/ag-ui")))
   (ok (equal (filter-publish-provides "foo" '("foo-test" "foo/bar"))
              '("foo" "foo/bar"))))
+
+(deftest filter-publish-provides-puts-system-first
+  "PUBLISH-PACKAGE pushes to the first name's repo. Publishing json-protocol
+   from a checkout that also holds json-backend-*.asd pushed to
+   json-backend-jzon (json-protocol#19)."
+  (ok (equal (filter-publish-provides
+              "json-protocol"
+              '("json-backend-jzon" "json-backend-yason" "json-protocol"))
+             '("json-protocol" "json-backend-jzon" "json-backend-yason"))))
+
+(deftest auto-package-spec-puts-system-first-among-siblings
+  (let ((dir (uiop:ensure-directory-pathname
+              (merge-pathnames (format nil "cl-repo-asd-sib-~a/" (get-universal-time))
+                               (uiop:temporary-directory)))))
+    (ensure-directories-exist dir)
+    (dolist (name '("sib-a" "sib-b" "sib-z"))
+      (with-open-file (s (merge-pathnames (format nil "~a.asd" name) dir)
+                         :direction :output :if-exists :supersede)
+        (format s "(defsystem ~s :version \"1.0\" :components ((:file \"m\")))~%" name)))
+    (with-open-file (s (merge-pathnames "m.lisp" dir) :direction :output :if-exists :supersede)
+      (format s "(in-package :cl-user)~%"))
+    (unwind-protect
+         (progn
+           (asdf:initialize-source-registry
+            `(:source-registry (:tree ,(namestring dir)) :inherit-configuration))
+           (asdf:clear-system "sib-z")
+           (let ((provides (cl-repository-packager/build-matrix::package-spec-provides
+                            (auto-package-spec "sib-z"))))
+             (ok (string= (first provides) "sib-z"))
+             (ok (equal (sort (copy-list provides) #'string<) '("sib-a" "sib-b" "sib-z")))))
+      (dolist (name '("sib-a" "sib-b" "sib-z")) (asdf:clear-system name))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
