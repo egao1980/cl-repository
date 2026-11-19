@@ -26,6 +26,10 @@
            #:classpath-entries
            #:discover-asd-system-names
            #:clear-checkout-systems
+           #:discover-asd-system-versions
+           #:publish-provides
+           #:check-publish-version
+           #:publish-version-mismatch
            #:*extra-with*
            #:*extra-sources*))
 (in-package :cl-repository-ci-lib)
@@ -93,6 +97,76 @@
                     when name do (pushnew name names :test #'string=))))
         (error () nil)))
     (nreverse names)))
+
+(defun defsystem-version (form)
+  "The literal :version string of a defsystem FORM, or NIL (absent or computed)."
+  (loop for (key value) on (cddr form) by #'cddr
+        when (eq key :version)
+          return (and (stringp value) value)))
+
+(defun discover-asd-system-versions (source-dir)
+  "Alist (name . version) for every defsystem in the top-level *.asd under
+   SOURCE-DIR. VERSION is the literal :version string, or NIL."
+  (let ((pairs nil)
+        (*read-eval* nil)
+        (*package* (find-package :cl-user))
+        (dir (uiop:ensure-directory-pathname source-dir)))
+    (dolist (asd-path (directory (merge-pathnames "*.asd" dir)))
+      (handler-case
+          (with-open-file (s asd-path :direction :input :if-does-not-exist nil)
+            (when s
+              (loop for form = (read s nil :eof)
+                    until (eq form :eof)
+                    for name = (defsystem-name form)
+                    when (and name (not (assoc name pairs :test #'string-equal)))
+                      do (push (cons name (defsystem-version form)) pairs))))
+        (error () nil)))
+    (nreverse pairs)))
+
+(defun publish-provides (system version provides declared-versions)
+  "Provides for publishing SYSTEM at VERSION. SYSTEM comes first: the publisher
+   pushes to the repo of the first name and mounts the rest. A sibling system
+   whose .asd declares a different :version is its own release: mounting it at
+   VERSION would make <sibling>:VERSION carry a mismatched .asd and break
+   (:version \"sibling\" VERSION). DECLARED-VERSIONS is the
+   DISCOVER-ASD-SYSTEM-VERSIONS alist. Returns (values kept dropped)."
+  (let ((kept (list system))
+        (dropped nil))
+    (dolist (name provides)
+      (unless (string-equal name system)
+        (let ((declared (cdr (assoc name declared-versions :test #'string-equal))))
+          (if (and declared version
+                   (not (find #\/ name))
+                   (string/= declared version))
+              (push name dropped)
+              (push name kept)))))
+    (values (nreverse kept) (nreverse dropped))))
+
+(define-condition publish-version-mismatch (error)
+  ((system :initarg :system :reader publish-version-mismatch-system)
+   (requested :initarg :requested :reader publish-version-mismatch-requested)
+   (declared :initarg :declared :reader publish-version-mismatch-declared))
+  (:report (lambda (c s)
+             (format s "Refusing to publish ~a:~a: its .asd declares :version ~s. ~
+                        The tag must match the .asd, or (:version ~s ~s) fails to load. ~
+                        Bump the .asd or leave the version input empty."
+                     (publish-version-mismatch-system c)
+                     (publish-version-mismatch-requested c)
+                     (publish-version-mismatch-declared c)
+                     (publish-version-mismatch-system c)
+                     (publish-version-mismatch-requested c)))))
+
+(defun check-publish-version (system requested declared)
+  "Signal PUBLISH-VERSION-MISMATCH when the REQUESTED tag differs from the
+   DECLARED .asd :version. An .asd without :version may be tagged freely."
+  (when (and requested declared (string/= requested declared))
+    (restart-case
+        (error 'publish-version-mismatch
+               :system system :requested requested :declared declared)
+      (continue ()
+        :report "Publish with the requested tag anyway."
+        nil)))
+  (or requested declared))
 
 (defun clear-checkout-systems (&optional (source-dir (uiop:getcwd)))
   "Drop ASDF registrations so the next find-system re-reads checkout asds."

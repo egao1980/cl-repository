@@ -19,9 +19,22 @@
             (error (e)
               (format t "~&  Warning: system-name anchor ~a failed: ~A~%" sys-repo e))))))))
 
+(defun %checkout-system (system)
+  "SYSTEM as defined by the checkout. An installed copy that provides the same
+   name (a provides symlink) must never be what gets packaged."
+  (let* ((checkout (uiop:ensure-directory-pathname (uiop:getcwd)))
+         (found (asdf:find-system system))
+         (dir (asdf:system-source-directory found)))
+    (unless (and dir (uiop:pathname-equal (truename dir) (truename checkout)))
+      (error "Refusing to publish ~a from ~a: that is not the checkout ~a. ~
+              An installed package shadows the system under test."
+             system dir checkout))
+    found))
+
 (let* ((system (%resolve-system))
-       (version (or (%env "PKG_VERSION")
-                    (asdf:component-version (asdf:find-system system))))
+       (declared (asdf:component-version (%checkout-system system)))
+       (version (cl-repository-ci-lib:check-publish-version
+                 system (%env "PKG_VERSION") declared))
        (registry-url (%env "OCI_REGISTRY" "ghcr.io"))
        (namespace (string-downcase (%env "OCI_NAMESPACE" "egao1980/cl-systems")))
        (auth (cl-oci-client/auth:make-auth-config
@@ -37,9 +50,18 @@
         (result nil))
     ;; Keep auto-package-spec provides (slash secondaries included). Drop tests only.
     ;; Slash names are recorded in the annotation; publisher does not mount extra GHCR repos for them.
-    (setf (cl-repository-packager/build-matrix:package-spec-provides spec)
-          (cl-repository-packager/asdf-plugin:filter-publish-provides
-           system (cl-repository-packager/build-matrix:package-spec-provides spec)))
+    ;; The published system first (the publisher pushes to the first name's
+    ;; repo); siblings whose .asd declares another :version are not mounted.
+    (multiple-value-bind (kept dropped)
+        (cl-repository-ci-lib:publish-provides
+         system version
+         (cl-repository-packager/asdf-plugin:filter-publish-provides
+          system (cl-repository-packager/build-matrix:package-spec-provides spec))
+         (cl-repository-ci-lib:discover-asd-system-versions (uiop:getcwd)))
+      (dolist (name dropped)
+        (format t "~&; ci: not mounting ~a at ~a (its .asd has another :version)~%"
+                name version))
+      (setf (cl-repository-packager/build-matrix:package-spec-provides spec) kept))
     (setf (cl-repository-packager/build-matrix:package-spec-version spec) version)
     (setf result (cl-repository-packager/build-matrix:build-package spec))
     (format t "~&Publishing ~a/~a:~a~%" namespace system version)
