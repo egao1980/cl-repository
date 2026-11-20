@@ -1,5 +1,6 @@
-;;;; Canned CI phases: install | test | publish.
+;;;; Canned CI phases: install | test | publish | run.
 ;;;; Env: CL_REPO_CI_PHASE, optional CL_REPO_SYSTEM / PKG_SYSTEM, CL_REPO_CI_WITH,
+;;;;      CL_REPO_RUN_ARGV_FILE (phase run: NUL-separated argv, from action.yml),
 ;;;;      PKG_VERSION, PACKAGER_VERSION, OCI_NAMESPACE, OCI_REGISTRY,
 ;;;;      GITHUB_TOKEN, GITHUB_ACTOR, GITHUB_ENV.
 ;;;;
@@ -262,12 +263,45 @@
   (cl-repository-ci-lib:clear-checkout-systems)
   (load (merge-pathnames "publish.lisp" *load-truename*)))
 
+(defun %run-argv ()
+  "The phase run command: CL_REPO_RUN_ARGV_FILE holds its words, each ended
+   by a NUL (action.yml splits the command input as the shell would)."
+  (let ((file (%env "CL_REPO_RUN_ARGV_FILE")))
+    (when (and file (probe-file file))
+      (let ((text (uiop:read-file-string file :external-format :utf-8)))
+        (loop for start = 0 then (1+ end)
+              for end = (position (code-char 0) text :start start)
+              while end
+              collect (subseq text start end))))))
+
+(defun %run-run ()
+  "cl-repo run -- ARGV in this directory: sync every project system (or
+   CL_REPO_SYSTEM), then run ARGV with the project registry. A non-zero exit
+   of ARGV is this process's exit code."
+  (let ((argv (%run-argv))
+        (system (or (%env "CL_REPO_SYSTEM") (%env "PKG_SYSTEM")))
+        (cmd-run (find-symbol "CMD-RUN" :cl-repo)))
+    (unless argv
+      (error "phase run: no command (CL_REPO_RUN_ARGV_FILE is unset or empty)"))
+    (unless (and cmd-run (fboundp cmd-run))
+      (error "phase run: this cl-repository-client has no CMD-RUN"))
+    (format t "~&; ci: run~@[ --system ~a~] -- ~{~a~^ ~} in ~a~%" system argv (uiop:getcwd))
+    (%add-default-registry)
+    (%maybe-load-hook "pre-run")
+    (%ci-muffle
+     (lambda ()
+       (%call-with-sync-extras
+        (lambda () (funcall cmd-run argv :directory (uiop:getcwd) :system system)))))
+    (%maybe-load-hook "post-run")
+    (format t "~&; ci: run ok~%")))
+
 (let ((phase (string-downcase (or (%env "CL_REPO_CI_PHASE") ""))))
   (cond
     ((string= phase "install") (%run-install) (uiop:quit 0))
     ((string= phase "test") (%run-test) (uiop:quit 0))
     ((string= phase "publish") (%run-publish) (uiop:quit 0))
+    ((string= phase "run") (%run-run) (uiop:quit 0))
     (t
-     (format *error-output* "~&CL_REPO_CI_PHASE must be install, test, or publish (got ~s)~%"
+     (format *error-output* "~&CL_REPO_CI_PHASE must be install, test, publish, or run (got ~s)~%"
              phase)
      (uiop:quit 1))))

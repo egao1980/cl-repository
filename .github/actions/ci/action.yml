@@ -1,13 +1,25 @@
 name: cl-repo CI
 description: >-
   Install, test, or publish a checkout from .asd metadata
-  (:depends-on + :properties :cl-repo :ci). Optional hooks in scripts/ci/.
+  (:depends-on + :properties :cl-repo :ci), or run a command in a project
+  with `cl-repo run` (phase run). Optional hooks in scripts/ci/.
   Requires setup-lisp (or setup-client + setup-roswell) in this job first.
 
 inputs:
   phase:
-    description: install | test | publish
+    description: install | test | publish | run
     required: true
+  working-directory:
+    description: Project directory, relative to the workspace (all phases)
+    required: false
+    default: "."
+  command:
+    description: >-
+      phase run: the command for `cl-repo run -- <command>`, in shell syntax
+      (quotes group words; no pipes or redirections). The step fails when it
+      exits non-zero. `sbcl` is the Roswell SBCL when none is on PATH.
+    required: false
+    default: ""
   system:
     description: ASDF system name. Empty → discover from *.asd (unique primary).
     required: false
@@ -49,7 +61,9 @@ runs:
   steps:
     - name: cl-repo ${{ inputs.phase }}
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
+        CL_REPO_RUN_COMMAND: ${{ inputs.command }}
         CL_REPO_CI_PHASE: ${{ inputs.phase }}
         CL_REPO_SYSTEM: ${{ inputs.system }}
         CL_REPO_CI_WITH: ${{ inputs.with }}
@@ -65,6 +79,28 @@ runs:
         heap=""
         if [[ -n "${SBCL_DYNAMIC_SPACE_MB}" && "${SBCL_DYNAMIC_SPACE_MB}" != 0 ]]; then
           heap="dynamic-space-size=${SBCL_DYNAMIC_SPACE_MB}"
+        fi
+        if [[ "${CL_REPO_CI_PHASE}" == run ]]; then
+          [[ -n "${CL_REPO_RUN_COMMAND}" ]] || { echo "::error::phase run needs the command input"; exit 1; }
+          # Words as the shell would split them, NUL-separated for run.lisp.
+          eval "argv=(${CL_REPO_RUN_COMMAND})"
+          CL_REPO_RUN_ARGV_FILE="${RUNNER_TEMP:-/tmp}/cl-repo-run-argv.$$"
+          printf '%s\0' "${argv[@]}" > "${CL_REPO_RUN_ARGV_FILE}"
+          export CL_REPO_RUN_ARGV_FILE
+          # `cl-repo run -- sbcl …` (the README form): on Linux / Windows
+          # Roswell's SBCL is not on PATH. Put its runtime there.
+          if [[ "${argv[0]}" == sbcl ]] && ! command -v sbcl >/dev/null 2>&1; then
+            info="$(ros -e '(format t "~a~%~a~%" sb-ext:*runtime-pathname* (namestring sb-ext:*core-pathname*))' -q | tail -2)"
+            runtime="$(sed -n 1p <<<"${info}" | tr -d '\r')"
+            core="$(sed -n 2p <<<"${info}" | tr -d '\r')"
+            if command -v cygpath >/dev/null 2>&1; then
+              runtime="$(cygpath -u "${runtime}")"
+              core="$(cygpath -m "${core}")"
+            fi
+            export PATH="$(dirname "${runtime}"):${PATH}"
+            export SBCL_HOME="$(dirname "${core}")"
+            echo "; ci: sbcl = ${runtime} (SBCL_HOME=${SBCL_HOME})"
+          fi
         fi
         # shellcheck disable=SC2086
         ros ${heap} -l "${GITHUB_ACTION_PATH}/run.lisp" -q
