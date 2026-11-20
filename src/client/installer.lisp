@@ -346,12 +346,18 @@
    that commit; those siblings are packages of their own, and a stale copy
    here would shadow the real one in the systems :tree (cl-repository#117).
    Only when PROVIDES is known (a package without it keeps every file) and
-   never a test .asd. → the deleted pathnames."
-  (when provides
-    (let ((own (cons (string-downcase name)
-                     (mapcar #'string-downcase provides)))
-          (deleted nil))
-      (dolist (asd (directory (merge-pathnames "*.asd" install-dir)))
+   one of the package's own .asd files is there (a package published under
+   another name than its .asd keeps it); never a test .asd. → the deleted
+   pathnames."
+  (let* ((own (cons (string-downcase name)
+                    (mapcar #'string-downcase provides)))
+         (asds (directory (merge-pathnames "*.asd" install-dir)))
+         (deleted nil))
+    (when (and provides
+               (some (lambda (asd)
+                       (member (string-downcase (pathname-name asd)) own :test #'string=))
+                     asds))
+      (dolist (asd asds)
         (let ((file (string-downcase (pathname-name asd))))
           (unless (or (member file own :test #'string=)
                       (test-asd-name-p file))

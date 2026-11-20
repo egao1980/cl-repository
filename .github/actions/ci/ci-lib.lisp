@@ -192,12 +192,15 @@
    them puts a copy of the sibling, as it was at this commit, into the
    package, and that stale copy can shadow the sibling's own package in the
    client's systems :tree (cl-repository#117)."
-  (let ((own (mapcar #'string-downcase provides)))
-    (loop for asd in (directory (merge-pathnames "*.asd" (uiop:ensure-directory-pathname source-dir)))
-          for name = (string-downcase (pathname-name asd))
-          unless (or (member name own :test #'string=)
-                     (test-system-name-p name))
-            collect asd)))
+  (let* ((own (mapcar #'string-downcase provides))
+         (asds (directory (merge-pathnames "*.asd" (uiop:ensure-directory-pathname source-dir))))
+         (own-p (lambda (asd) (member (string-downcase (pathname-name asd)) own :test #'string=))))
+    ;; A package named otherwise than its .asd (no own .asd) keeps them all.
+    (when (some own-p asds)
+      (loop for asd in asds
+            unless (or (funcall own-p asd)
+                       (test-system-name-p (pathname-name asd)))
+              collect asd))))
 
 (define-condition publish-version-mismatch (error)
   ((system :initarg :system :reader publish-version-mismatch-system)

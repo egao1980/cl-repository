@@ -299,7 +299,9 @@
                       '("cli-backend-adopt" "cli-protocol")))
            (ok (null (cl-repository-ci-lib:sibling-asd-files
                       dir '("cli-protocol" "cli-backend-clingon" "cli-backend-adopt")))
-               "declared provides keep their .asd files"))
+               "declared provides keep their .asd files")
+           (ok (null (cl-repository-ci-lib:sibling-asd-files dir '("renamed-package")))
+               "no own .asd: nothing is a sibling"))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
 (deftest ci-action-has-run-phase

@@ -149,3 +149,10 @@
     (dolist (f '("a.asd" "b.asd")) (touch dir f))
     (ok (null (drop-sibling-asds dir "a" nil)))
     (ok (equal '("a" "b") (asd-names dir)))))
+
+(deftest drop-sibling-asds-keeps-a-renamed-package
+  "A package published under another name than its .asd (cl-calc → cl-calc-e2e)."
+  (with-temp-extract-dir (dir)
+    (touch dir "cl-calc.asd")
+    (ok (null (drop-sibling-asds dir "cl-calc-e2e" '("cl-calc-e2e"))))
+    (ok (equal '("cl-calc") (asd-names dir)))))
