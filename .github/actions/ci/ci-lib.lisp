@@ -28,6 +28,8 @@
            #:clear-checkout-systems
            #:discover-asd-system-versions
            #:publish-provides
+           #:primary-asd-files
+           #:own-provides
            #:check-publish-version
            #:publish-version-mismatch
            #:*extra-with*
@@ -141,6 +143,47 @@
               (push name dropped)
               (push name kept)))))
     (values (nreverse kept) (nreverse dropped))))
+
+(defun primary-asd-files (source-dir)
+  "Top-level *.asd files under SOURCE-DIR that define a primary system (not a
+   test or slash secondary)."
+  (let ((*read-eval* nil)
+        (*package* (find-package :cl-user))
+        (dir (uiop:ensure-directory-pathname source-dir)))
+    (loop for asd-path in (directory (merge-pathnames "*.asd" dir))
+          when (handler-case
+                   (with-open-file (s asd-path :direction :input :if-does-not-exist nil)
+                     (and s
+                          (loop for form = (read s nil :eof)
+                                until (eq form :eof)
+                                thereis (let ((name (defsystem-name form)))
+                                          (and name (not (secondary-system-name-p name)))))))
+                 (error () nil))
+            collect asd-path)))
+
+(defun own-provides (system provides &key explicit-system declared-provides source-dir)
+  "Provides for publishing SYSTEM from a checkout. When the job names
+   EXPLICIT-SYSTEM, the .asd declares no :cl-repo :provides (DECLARED-PROVIDES)
+   and SOURCE-DIR has several primary .asd files, keep only SYSTEM and its
+   slash secondaries: each sibling is published by its own job, and mounting
+   same-version siblings makes the matrix jobs overwrite each other's tags
+   (cl-repository#109). Otherwise PROVIDES is kept as is.
+   Returns (values kept dropped)."
+  (if (and explicit-system
+           (null declared-provides)
+           source-dir
+           (> (length (primary-asd-files source-dir)) 1))
+      (let ((prefix (format nil "~a/" (string-downcase system)))
+            (kept nil)
+            (dropped nil))
+        (dolist (name provides)
+          (if (or (string-equal name system)
+                  (and (> (length name) (length prefix))
+                       (string-equal prefix name :end2 (length prefix))))
+              (push name kept)
+              (push name dropped)))
+        (values (nreverse kept) (nreverse dropped)))
+      (values provides nil)))
 
 (define-condition publish-version-mismatch (error)
   ((system :initarg :system :reader publish-version-mismatch-system)
