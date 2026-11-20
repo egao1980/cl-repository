@@ -202,3 +202,37 @@ jobs:
           fi
           echo "Resolved client ${CL_REPOSITORY_CLIENT_VERSION}"
           ros -e '(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:ensure-directory-pathname (uiop:getenv "CL_REPOSITORY_DEST"))) :ignore-inherited-configuration))' -e '(asdf:load-system "cl-repository-client")' -e '(format t "~&loaded cl-repository-client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' -q
+
+      # ci action phase run (cl-repository#103): a subdirectory project, the
+      # README `cl-repo run -- sbcl …` form, and a failing command.
+      - name: Make a subdirectory project
+        shell: bash
+        run: |
+          mkdir -p ci-run-demo
+          printf '%s\n' '(defsystem "ci-run-demo" :version "0.0.1" :depends-on ("alexandria"))' \
+            > ci-run-demo/ci-run-demo.asd
+
+      - name: ci phase run
+        uses: ./.github/actions/ci
+        with:
+          phase: run
+          working-directory: ci-run-demo
+          command: >-
+            sbcl --non-interactive --no-userinit --eval '(require "asdf")'
+            --eval '(asdf:load-system "ci-run-demo")'
+            --eval '(format t "~&ci-run-demo: alexandria ~a~%" (asdf:component-version (asdf:find-system "alexandria")))'
+
+      - name: ci phase run (failing command)
+        id: run-fails
+        continue-on-error: true
+        uses: ./.github/actions/ci
+        with:
+          phase: run
+          working-directory: ci-run-demo
+          command: sbcl --non-interactive --no-userinit --eval '(uiop:quit 3)'
+
+      - name: The failing command failed the step
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.run-fails.outcome }}
+        run: '[[ "${OUTCOME}" == failure ]] || { echo "phase run ignored exit 3 (outcome ${OUTCOME})"; exit 1; }'

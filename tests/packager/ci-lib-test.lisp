@@ -282,3 +282,14 @@
                        "foo" '("foo" "foo-extra") :explicit-system "foo" :source-dir dir)
                       '("foo" "foo-extra"))))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest ci-action-has-run-phase
+  "cl-repository#103: phase run = cl-repo run -- <command> in working-directory."
+  (let* ((root (uiop:pathname-directory-pathname
+                (asdf:system-source-file "cl-repository-packager")))
+         (run (uiop:read-file-string (merge-pathnames ".github/actions/ci/run.lisp" root)))
+         (action (uiop:read-file-string (merge-pathnames ".github/actions/ci/action.yml" root))))
+    (ok (search "((string= phase \"run\") (%run-run)" run))
+    (ok (search "CL_REPO_RUN_ARGV_FILE" run))
+    (ok (search "working-directory: ${{ inputs.working-directory }}" action))
+    (ok (search "CL_REPO_RUN_COMMAND: ${{ inputs.command }}" action))))

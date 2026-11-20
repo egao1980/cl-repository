@@ -38,6 +38,27 @@ jobs:
       packages: write
 ```
 
+Run a command in a subdirectory project (demos), on any OS. The step fails
+when the command exits non-zero:
+
+```yaml
+  - uses: egao1980/cl-repository/.github/actions/ci@main
+    with:
+      phase: run
+      working-directory: harness/data
+      command: >-
+        sbcl --non-interactive --no-userinit --eval '(require "asdf")'
+        --eval '(asdf:load-system "harness-demos-data")'
+        --eval '(harness-demos-data:run-demos)'
+```
+
+`command` is split as the shell would (quotes group words; no pipes or
+redirections). Sync covers every project system (or `system`), then the
+command runs with the project registry, as `cl-repo run`. `sbcl` is
+Roswell's SBCL when none is on PATH (Linux, Windows). Hooks:
+`scripts/ci/{pre,post}-run.lisp`. Tools the command needs (git, jj) come
+from earlier steps.
+
 ## `.asd` `:cl-repo :ci`
 
 Honest `:depends-on` + `foo/tests` is enough. Extras that are **not** in the asd:
@@ -81,7 +102,9 @@ scripts/ci/post-publish.lisp
 
 | Input | Default | |
 |-------|---------|---|
-| `phase` | required | `install` / `test` / `publish` |
+| `phase` | required | `install` / `test` / `publish` / `run` |
+| `working-directory` | `.` | Project directory (any phase) |
+| `command` | | `run`: command for `cl-repo run -- <command>` |
 | `system` | discover | Unique primary `*.asd`, or directory-name match |
 | `with` | | Space-separated extras, merged with `:ci :with` |
 | `version` | `.asd :version` | Publish tag |
