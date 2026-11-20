@@ -536,7 +536,14 @@
                             :sources sources :deny deny :allow allow
                             :default-source default-source
                             :config-path config-path)
-            (ignore-errors (asdf:clear-system target)))
+            ;; Clearing drops a stale FIND-SYSTEM answer so the new .asd is
+            ;; read. A system this image runs keeps its registration:
+            ;; cleared, it is no longer COMPONENT-LOADED-P, so
+            ;; LOADED-COPY-SATISFIED-P stops counting the copy just
+            ;; installed, FIND-SYSTEM finds the older client copy again, and
+            ;; the next pass fails with "not in the registry" (#115).
+            (unless (or (pinned-system-p target) (asdf:component-loaded-p target))
+              (ignore-errors (asdf:clear-system target))))
           (setf prev targets))))
     (values)))
 
