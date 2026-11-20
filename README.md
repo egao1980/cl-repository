@@ -62,7 +62,7 @@ cl-repo publish
 ```
 
 A stock `.asd` is enough. `qlfile` / `qlfile.lock` in the same directory are installed too.
-The registry defaults to `https://ghcr.io` / `egao1980/cl-systems`. No `CL_SOURCE_REGISTRY`.
+The registry defaults to `https://ghcr.io` / `egao1980/cl-systems`. Source-registry configuration files (`~/.config/common-lisp/source-registry.conf.d`) are not read. The `:tree` / `:directory` entries of a `CL_SOURCE_REGISTRY` you pass are kept, after the project, for sync, test and run alike.
 `cl-repo test` runs the suite in a fresh image of the same SBCL that only gets the source registry, so none of the client's own systems (dexador, cl+ssl, its OpenSSL) are loaded there. `CL_REPO_TEST_IN_PROCESS=1` runs it in the client's image instead.
 
 ### CLI
