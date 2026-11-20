@@ -437,3 +437,43 @@
       (dolist (s '("cl-tmin-main/tests" "cl-tmin-main" "cl-tmin-dep" "cl-tmin-extra"))
         (asdf:clear-system s))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest test-loaded-dependency-installed-mid-walk-stays-satisfied
+  "#115: the image runs cl-ld-demo 0.1.0 and the project needs 0.2.0. The walk
+   installs 0.2.0, then cleared the loaded system, so the next pass saw only
+   the old copy and failed with \"system cl-ld-demo is not in the registry\"."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-ld-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (root (merge-pathnames "systems/" dir))
+         (sym 'cl-repository-client/quickload::ensure-systems)
+         (orig (fdefinition sym))
+         (installs '()))
+    (ensure-directories-exist root)
+    (with-open-file (out (merge-pathnames "cl-ld-demo.asd" dir) :direction :output :if-exists :supersede)
+      (write-string "(defsystem \"cl-ld-demo\" :version \"0.1.0\")" out))
+    (with-open-file (out (merge-pathnames "cl-ld-root.asd" dir) :direction :output :if-exists :supersede)
+      (write-string "(defsystem \"cl-ld-root\" :depends-on ((:version \"cl-ld-demo\" \"0.2.0\")))" out))
+    (push dir asdf:*central-registry*)
+    (unwind-protect
+         (let ((*standard-output* (make-broadcast-stream))
+               (cl-repository-client/installer::*systems-root* root))
+           (asdf:load-system "cl-ld-demo")
+           (setf (fdefinition sym)
+                 (lambda (systems &rest keys)
+                   (declare (ignore keys))
+                   (dolist (s systems)
+                     (push s installs)
+                     (ensure-directories-exist (merge-pathnames (format nil "~a/0.2.0/" s) root)))))
+           (ok (null (handler-case
+                         (progn (cl-repository-client/quickload:ensure-system-dependencies
+                                 "cl-ld-root" :also-tests nil)
+                                nil)
+                       (error (e) (princ-to-string e))))
+               "no \"not in the registry\" after installing a loaded system")
+           (ok (equal '("cl-ld-demo") installs) "installed once")
+           (ok (asdf:component-loaded-p "cl-ld-demo") "the running copy stays registered"))
+      (setf (fdefinition sym) orig)
+      (setf asdf:*central-registry* (remove dir asdf:*central-registry* :test #'equal))
+      (dolist (s '("cl-ld-root" "cl-ld-demo"))
+        (asdf:clear-system s))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
