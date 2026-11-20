@@ -502,3 +502,50 @@
                   (cl-repository-client/project::ensure-loaded-at-least "alexandria" "999.0")))
           "CONTINUE keeps the loaded copy")
       (ok (asdf:component-loaded-p (asdf:registered-system "alexandria")) "still loaded"))))
+
+(deftest explicit-source-registry-keeps-trees-drops-inheritance
+  "cl-repository#99: the project registry keeps the trees CL_SOURCE_REGISTRY
+   names and never inherits the user's source-registry.conf.d."
+  (let ((entries (cl-repository-client/project:explicit-source-registry-entries
+                  "(:source-registry (:tree \"/w/a\") (:directory \"/w/b/\") (:tree \"rel/\") (:include \"/u/x.conf\") :inherit-configuration)")))
+    (ok (equal entries '((:tree "/w/a/") (:directory "/w/b/")))))
+  (ok (equal (cl-repository-client/project:explicit-source-registry-entries "/w/a//:/w/b/:")
+             '((:tree "/w/a/") (:directory "/w/b/"))))
+  (ok (null (cl-repository-client/project:explicit-source-registry-entries "")))
+  (ok (null (cl-repository-client/project:explicit-source-registry-entries nil)))
+  (let* ((project (uiop:ensure-directory-pathname "/p/proj/"))
+         (form (cl-repository-client/project:source-registry-form
+                (list project "/p/other/")
+                :extra '((:tree "/w/a/")))))
+    (ok (eq :ignore-inherited-configuration (car (last form))))
+    (ok (not (member :inherit-configuration form)))
+    (testing "explicit trees follow the project, before the other trees"
+      (let ((trees (remove-if-not (lambda (e) (and (consp e) (eq (first e) :tree))) form)))
+        (ok (equal (mapcar #'second trees) '("/p/proj/" "/w/a/" "/p/other/")))))))
+
+(deftest sync-and-test-image-share-the-explicit-trees
+  "REGISTER-PROJECT (sync, test-setup) carries CL_SOURCE_REGISTRY trees; the
+   test image is started with that same parameter."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (merge-pathnames (format nil "cl-repo-99-~D/" (random 1000000 (make-random-state t)))
+                                (uiop:temporary-directory))))
+         (side (merge-pathnames "side/" dir))
+         (project (merge-pathnames "project/" dir))
+         (saved asdf:*source-registry-parameter*))
+    (ensure-directories-exist side)
+    (ensure-directories-exist project)
+    (with-open-file (o (merge-pathnames "cl-repo-99-side.asd" side) :direction :output)
+      (write-string "(defsystem \"cl-repo-99-side\" :version \"9.9.9\")" o))
+    (unwind-protect
+         (call-with-env "CL_SOURCE_REGISTRY"
+                        (format nil "(:source-registry (:tree ~S) :inherit-configuration)"
+                                (namestring side))
+           (lambda ()
+             (cl-repository-client/project:register-project project)
+             (let ((param asdf/source-registry:*source-registry-parameter*))
+               (ok (member (list :tree (namestring side)) param :test #'equal))
+               (ok (not (member :inherit-configuration param))))
+             (ok (system-satisfied-p "cl-repo-99-side" "9.9.9"))))
+      (asdf:clear-system "cl-repo-99-side")
+      (asdf:initialize-source-registry saved)
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

@@ -72,7 +72,7 @@ cl-repo install alexandria
 
 ### Запуск Lisp
 
-`cl-repo run -- <команда…>` делает sync и запускает команду. Lisp (ros, sbcl, ccl, ecl, abcl) стартует с уже настроенным source registry; `CL_SOURCE_REGISTRY` не экспортируется. `cl-repo ros …` — краткая форма `cl-repo run -- ros …` (то же для остальных Lisp). Ведущие `--system NAME` / `--overlay NAME` относятся к cl-repo; всё остальное уходит в Lisp без изменений, включая `--help` и `ros run`.
+`cl-repo run -- <команда…>` делает sync и запускает команду. Lisp (ros, sbcl, ccl, ecl, abcl) стартует с уже настроенным source registry; `CL_SOURCE_REGISTRY` не экспортируется (файлы конфигурации source-registry не читаются; записи `:tree` / `:directory` из переданного `CL_SOURCE_REGISTRY` используются одинаково в sync, test и run). `cl-repo ros …` — краткая форма `cl-repo run -- ros …` (то же для остальных Lisp). Ведущие `--system NAME` / `--overlay NAME` относятся к cl-repo; всё остальное уходит в Lisp без изменений, включая `--help` и `ros run`.
 
 ### Версии
 

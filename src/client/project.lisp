@@ -28,6 +28,8 @@
            #:ensure-default-registry
            #:register-project
            #:project-registry-directories
+           #:explicit-source-registry-entries
+           #:source-registry-form
            #:discover-project-system
            #:ensure-defsystem-depends-on
            #:expand-ci-env
@@ -70,13 +72,36 @@
 (defun ensure-default-registry ()
   (add-registry *default-registry* :namespace *default-namespace* :priority :append))
 
-(defun source-registry-form (directories &key locked)
+(defun explicit-source-registry-entries (&optional (env (uiop:getenv "CL_SOURCE_REGISTRY")))
+  "The (:tree DIR) and (:directory DIR) entries the user passed in ENV
+   (CL_SOURCE_REGISTRY, either syntax), with absolute DIRs. Directives are
+   dropped: :inherit-configuration would bring in the user's
+   source-registry.conf.d (workspace checkouts), which the sync's satisfied
+   check then counted although nothing told the test image about them
+   (cl-repository#99). The project registry carries these entries, so the
+   sync, the fresh test image and `cl-repo run` all see the same trees."
+  (when (and env (plusp (length (string-trim '(#\Space #\Tab #\Newline) env))))
+    (let ((form (handler-case (asdf/source-registry:parse-source-registry-string env)
+                  (error (e)
+                    (msg "~&; cl-repo: WARNING: ignoring CL_SOURCE_REGISTRY: ~a~%" e)
+                    nil))))
+      (loop for entry in (rest form)
+            for dir = (and (consp entry)
+                           (member (first entry) '(:tree :directory))
+                           (typep (second entry) '(or string pathname))
+                           (uiop:ensure-directory-pathname (second entry)))
+            when (and dir (uiop:absolute-pathname-p dir))
+              collect (list (first entry) (namestring dir))))))
+
+(defun source-registry-form (directories &key locked extra)
   ;; A checkout's leftover qlot tree (.qlot/ → Quicklisp releases) would make
   ;; every dependency resolve to a Quicklisp copy, which the walk rejects.
   ;; ASDF's :also-exclude matches directory names below each :tree root, so a
   ;; systems root that itself lives in .cl-repository/ is still scanned.
   ;; The install tree is preceded by the one version each multi-version
   ;; system should resolve to (PREFERRED-INSTALL-TREES).
+  ;; EXTRA entries (EXPLICIT-SOURCE-REGISTRY-ENTRIES) follow the first
+  ;; directory, the project: they shadow installed copies, not the checkout.
   (let ((root (ignore-errors (systems-root))))
     `(:source-registry
       (:also-exclude ".qlot")
@@ -85,10 +110,14 @@
       ;; its cl-oci 0.16.0 was recompiled over the running one.
       (:also-exclude ".cl-repository")
       ,@(loop for dir in directories
+              for first = t then nil
               for tree = (uiop:ensure-directory-pathname dir)
-              when (and root (uiop:pathname-equal tree root))
-                append (cl-repository-client/asdf-integration:preferred-install-trees tree locked)
-              collect (list :tree (namestring tree)))
+              append (if (and root (uiop:pathname-equal tree root))
+                         (append (cl-repository-client/asdf-integration:preferred-install-trees
+                                  tree locked)
+                                 (list (list :tree (namestring tree))))
+                         (list (list :tree (namestring tree))))
+              when first append (copy-list extra))
       :ignore-inherited-configuration)))
 
 (defun locked-versions (directory)
@@ -119,11 +148,13 @@
 
 (defun register-project (directory)
   "Register the project, the installed systems, and the client trees.
-   Does not export CL_SOURCE_REGISTRY and does not inherit it."
+   Does not export CL_SOURCE_REGISTRY and does not inherit configuration:
+   only its explicit trees (EXPLICIT-SOURCE-REGISTRY-ENTRIES) are kept."
   (setf cl-repository-client/asdf-integration:*locked-versions* (locked-versions directory))
   (asdf:initialize-source-registry
    (source-registry-form (project-registry-directories directory)
-                         :locked cl-repository-client/asdf-integration:*locked-versions*)))
+                         :locked cl-repository-client/asdf-integration:*locked-versions*
+                         :extra (explicit-source-registry-entries))))
 
 (defun top-level-asds (directory)
   (directory (merge-pathnames "*.asd" (uiop:ensure-directory-pathname directory))))
@@ -782,7 +813,8 @@ install tree, since the project's .asd is read in this image."
   (cmd-sync :directory directory :system system :overlay overlay)
   (let* ((form (format nil "(progn (require \"asdf\") (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s))"
                        (source-registry-form (project-registry-directories directory)
-                                             :locked (locked-versions directory))))
+                                             :locked (locked-versions directory)
+                                             :extra (explicit-source-registry-entries))))
          (args (lisp-startup (first argv) form (rest argv)))
          (code (nth-value 2 (uiop:run-program (cons (first argv) args)
                                               :ignore-error-status t
