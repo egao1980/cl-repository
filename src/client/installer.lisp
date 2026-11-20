@@ -41,6 +41,7 @@
            #:system-install-path
            #:*requested-overlay*
            #:create-provides-symlinks
+           #:drop-sibling-asds
            #:parse-ocicl-layer-info))
 (in-package :cl-repository-client/installer)
 
@@ -200,6 +201,7 @@
                   (extract-layer-stripping-prefix blob install-dir strip-prefix)))))))
       ;; Create symlinks for provided system names
       (when config
+        (drop-sibling-asds install-dir name (config-provides config))
         (create-provides-symlinks name (config-provides config)))
       (record-file-manifest install-dir)
       (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
@@ -229,6 +231,7 @@
     (dolist (layer-desc (manifest-layers manifest))
       (let ((blob (pull-verified-blob registry repository layer-desc)))
         (extract-layer-stripping-prefix blob install-dir strip-prefix)))
+    (drop-sibling-asds install-dir name (config-provides config))
     (create-provides-symlinks name (config-provides config))
     (record-file-manifest install-dir)
     (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
@@ -325,6 +328,43 @@
     (uiop:run-program (list "cmd" "/c" "mklink" "/J" link target) :error-output t)
     #-windows
     (uiop:run-program (list "ln" "-s" target link) :error-output t)))
+
+(defun test-asd-name-p (name)
+  "NAME (an .asd file name) looks like a test system's: never a package of its
+   own, so the packager leaves it out of provides."
+  (let* ((n (string-downcase name))
+         (len (length n)))
+    (flet ((suffixp (suffix)
+             (and (>= len (length suffix))
+                  (string= n suffix :start1 (- len (length suffix))))))
+      (or (suffixp "-test") (suffixp "-tests")))))
+
+(defun drop-sibling-asds (install-dir name provides)
+  "Delete the top-level .asd files of INSTALL-DIR that define none of the
+   package's systems (NAME and PROVIDES). A package built from a checkout
+   with several .asd files carries its siblings' .asd files, as they were at
+   that commit; those siblings are packages of their own, and a stale copy
+   here would shadow the real one in the systems :tree (cl-repository#117).
+   Only when PROVIDES is known (a package without it keeps every file) and
+   one of the package's own .asd files is there (a package published under
+   another name than its .asd keeps it); never a test .asd. → the deleted
+   pathnames."
+  (let* ((own (cons (string-downcase name)
+                    (mapcar #'string-downcase provides)))
+         (asds (directory (merge-pathnames "*.asd" install-dir)))
+         (deleted nil))
+    (when (and provides
+               (some (lambda (asd)
+                       (member (string-downcase (pathname-name asd)) own :test #'string=))
+                     asds))
+      (dolist (asd asds)
+        (let ((file (string-downcase (pathname-name asd))))
+          (unless (or (member file own :test #'string=)
+                      (test-asd-name-p file))
+            (delete-file asd)
+            (push asd deleted)
+            (msg "~&  Dropped sibling ~a.asd (not a system of ~a)~%" file name))))
+      (nreverse deleted))))
 
 (defun create-provides-symlinks (canonical-name provides)
   "Create symlinks for provided system names that differ from the canonical name.

@@ -1,6 +1,7 @@
 (defpackage :cl-repository-client/tests/installer-test
   (:use :cl :rove)
-  (:import-from :cl-repository-client/installer #:system-install-path #:role-subdirectory)
+  (:import-from :cl-repository-client/installer #:system-install-path #:role-subdirectory
+                #:drop-sibling-asds)
   (:import-from :cl-oci/config #:make-cl-system-config)
   (:import-from :flexi-streams))
 (in-package :cl-repository-client/tests/installer-test)
@@ -113,3 +114,45 @@
   (ok (cl-repository-client/installer::shared-library-pathname-p #p"/x/libssl-3-x64.dll"))
   (ng (cl-repository-client/installer::shared-library-pathname-p #p"/x/README.md"))
   (ng (cl-repository-client/installer::shared-library-pathname-p #p"/x/libssl.a")))
+
+;;; --- sibling .asd files (#117) ---
+
+(defun touch (dir name)
+  (with-open-file (s (merge-pathnames name dir) :direction :output :if-exists :supersede)
+    (write-line "(defsystem \"x\")" s)))
+
+(defun asd-names (dir)
+  (sort (mapcar #'pathname-name (directory (merge-pathnames "*.asd" dir))) #'string<))
+
+(deftest drop-sibling-asds-keeps-the-package-systems
+  (with-temp-extract-dir (dir)
+    (dolist (f '("cli-protocol.asd" "cli-backend-clingon.asd" "cli-backend-adopt.asd"
+                 "cli-backend-clingon-tests.asd" "README.md"))
+      (touch dir f))
+    (let ((deleted (drop-sibling-asds dir "cli-backend-clingon" '("cli-backend-clingon"))))
+      (ok (equal '("cli-backend-adopt" "cli-protocol")
+                 (sort (mapcar #'pathname-name deleted) #'string<)))
+      (ok (equal '("cli-backend-clingon" "cli-backend-clingon-tests") (asd-names dir))
+          "the own .asd and the test .asd stay")
+      (ok (probe-file (merge-pathnames "README.md" dir))))))
+
+(deftest drop-sibling-asds-honours-provides
+  (with-temp-extract-dir (dir)
+    (dolist (f '("capability-protocol.asd" "blackboard-protocol.asd")) (touch dir f))
+    (ok (null (drop-sibling-asds dir "capability-protocol"
+                                 '("capability-protocol" "blackboard-protocol"
+                                   "capability-protocol/tests"))))
+    (ok (equal '("blackboard-protocol" "capability-protocol") (asd-names dir)))))
+
+(deftest drop-sibling-asds-without-provides-keeps-all
+  (with-temp-extract-dir (dir)
+    (dolist (f '("a.asd" "b.asd")) (touch dir f))
+    (ok (null (drop-sibling-asds dir "a" nil)))
+    (ok (equal '("a" "b") (asd-names dir)))))
+
+(deftest drop-sibling-asds-keeps-a-renamed-package
+  "A package published under another name than its .asd (cl-calc → cl-calc-e2e)."
+  (with-temp-extract-dir (dir)
+    (touch dir "cl-calc.asd")
+    (ok (null (drop-sibling-asds dir "cl-calc-e2e" '("cl-calc-e2e"))))
+    (ok (equal '("cl-calc") (asd-names dir)))))
