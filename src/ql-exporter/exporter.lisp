@@ -22,7 +22,8 @@
   (:export #:export-dist
            #:export-project-to-registry
            #:version-from-prefix
-           #:install-locally))
+           #:install-locally
+           #:export-summary))
 (in-package :cl-repository-ql-exporter/exporter)
 
 (defun download-archive (url &key expected-md5)
@@ -64,7 +65,9 @@
   (remove-if-not (lambda (s) (string= (ql-system-project s) project-name)) all-systems))
 
 (defun export-project-to-registry (registry repository release systems &key version)
-  "Export a single project to the registry. Returns T on success."
+  "Export a single project to the registry. Returns :PUSHED when published,
+   :INSTALLED when the INSTALL-LOCALLY restart installed it unpublished, NIL
+   on failure."
   (let* ((project-name (ql-release-project release))
          (archive-url (ql-release-url release))
          (ver (or version (version-from-prefix (ql-release-prefix release) project-name))))
@@ -90,13 +93,13 @@
                            (repackage-result-index-json result)
                            :content-type +oci-image-index-v1+)
             (msg "~&  Pushed ~a:~a~%" repository ver)
-            t)
+            :pushed)
         (install-locally (installer)
           :report (lambda (s) (format s "Install ~a ~a locally instead of publishing it"
                                       project-name ver))
           ;; INSTALLER: (project version tar-gz-octets) → unpacks the release.
           (funcall installer project-name ver archive-data)
-          t)))))
+          :installed)))))
 
 (defun export-dist (dist-url target-registry-url
                     &key (namespace "cl-systems")
@@ -119,6 +122,7 @@
              (filter-fn (make-filter-fn filter))
              (total (length releases))
              (processed 0)
+             (installed 0)
              (skipped 0)
              (failed 0))
         (msg "~&Found ~d projects, ~d systems~%" total (length systems))
@@ -137,12 +141,18 @@
                (incf skipped))
               (t
                (let ((proj-systems (systems-for-project systems project-name)))
-                 (if (export-project-to-registry registry repository release proj-systems
-                                                 :version ver)
-                     (incf processed)
-                     (incf failed)))))))
-        (msg "~&Export complete: ~d pushed, ~d skipped, ~d failed (of ~d total)~%"
-             processed skipped failed total)))))
+                 (case (export-project-to-registry registry repository release proj-systems
+                                                   :version ver)
+                   (:installed (incf installed))
+                   ((nil) (incf failed))
+                   (t (incf processed))))))))
+        (msg "~&~a~%" (export-summary processed installed skipped failed total))
+        (values processed installed skipped failed)))))
+
+(defun export-summary (pushed installed skipped failed total)
+  "One-line export summary. A local-only install is not a push."
+  (format nil "Export complete: ~d pushed, ~@[~d installed locally (unpublished), ~]~d skipped, ~d failed (of ~d total)"
+          pushed (and (plusp installed) installed) skipped failed total))
 
 (defun make-filter-fn (filter)
   "Make a filter predicate. FILTER can be NIL, a function, or a comma-separated string."

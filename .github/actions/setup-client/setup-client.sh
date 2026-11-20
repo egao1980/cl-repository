@@ -245,7 +245,7 @@ qlfile_seeds() {
   [[ -f "${qlfile}" ]] || return 0
   "${PY}" -c '
 import sys
-skip = {"rove", "archive"}
+skip = {"rove"}
 path = sys.argv[1]
 out = []
 with open(path, encoding="utf-8") as f:
