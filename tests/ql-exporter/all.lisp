@@ -2,4 +2,5 @@
   (:use :cl)
   (:use-reexport
    :cl-repository-ql-exporter/tests/dist-parser-test
-   :cl-repository-ql-exporter/tests/repackager-test))
+   :cl-repository-ql-exporter/tests/repackager-test
+   :cl-repository-ql-exporter/tests/exporter-test))

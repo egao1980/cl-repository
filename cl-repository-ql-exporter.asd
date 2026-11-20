@@ -1,5 +1,5 @@
 (defsystem "cl-repository-ql-exporter"
-  :version "0.2.0"
+  :version "0.2.1"
   :author "Nikolai Matiushev"
   :license "MIT"
   :description "Quicklisp/Ultralisp to OCI artifact exporter"
@@ -14,6 +14,7 @@
   :serial t
   :components ((:file "dist-parser-test")
                (:file "repackager-test")
+               (:file "exporter-test")
                (:file "all"))
   :perform (test-op (o c)
             (unless (symbol-call :rove :run c)
