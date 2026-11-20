@@ -19,6 +19,27 @@
             (error (e)
               (format t "~&  Warning: system-name anchor ~a failed: ~A~%" sys-repo e))))))))
 
+(defun %stash-sibling-asds (files)
+  "Move FILES out of the checkout for the build. → ((stashed . original) …)."
+  (when files
+    (let ((dir (uiop:ensure-directory-pathname
+                (merge-pathnames "cl-repo-sibling-asds/"
+                                 (uiop:ensure-directory-pathname
+                                  (or (uiop:getenv "RUNNER_TEMP")
+                                      (namestring (uiop:temporary-directory))))))))
+      (ensure-directories-exist dir)
+      (loop for file in files
+            for dest = (merge-pathnames (file-namestring file) dir)
+            do (when (probe-file dest) (delete-file dest))
+               (rename-file file dest)
+               (format t "~&; ci: not packaging sibling ~a (a package of its own)~%"
+                       (file-namestring file))
+            collect (cons dest file)))))
+
+(defun %restore-sibling-asds (stashed)
+  (loop for (dest . file) in stashed
+        do (rename-file dest file)))
+
 (defun %checkout-system (system)
   "SYSTEM as defined by the checkout. An installed copy that provides the same
    name (a provides symlink) must never be what gets packaged."
@@ -76,7 +97,15 @@
                   name version))
         (setf (cl-repository-packager/build-matrix:package-spec-provides spec) kept)))
     (setf (cl-repository-packager/build-matrix:package-spec-version spec) version)
-    (setf result (cl-repository-packager/build-matrix:build-package spec))
+    ;; Sibling .asd files (systems this package does not provide) stay out of
+    ;; the layer: a stale copy shadows the sibling's own package (#117).
+    (let ((stashed (%stash-sibling-asds
+                    (cl-repository-ci-lib:sibling-asd-files
+                     (uiop:getcwd)
+                     (cl-repository-packager/build-matrix:package-spec-provides spec)))))
+      (unwind-protect
+           (setf result (cl-repository-packager/build-matrix:build-package spec))
+        (%restore-sibling-asds stashed)))
     (format t "~&Publishing ~a/~a:~a~%" namespace system version)
     (cl-repository-packager/publisher:publish-package
      reg namespace version result spec :skip-catalog t)

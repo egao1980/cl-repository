@@ -30,6 +30,7 @@
            #:publish-provides
            #:primary-asd-files
            #:own-provides
+           #:sibling-asd-files
            #:check-publish-version
            #:publish-version-mismatch
            #:*extra-with*
@@ -184,6 +185,19 @@
               (push name dropped)))
         (values (nreverse kept) (nreverse dropped)))
       (values provides nil)))
+
+(defun sibling-asd-files (source-dir provides)
+  "Top-level .asd files of SOURCE-DIR that define none of PROVIDES (a test
+   .asd excepted): siblings published as packages of their own. Shipping
+   them puts a copy of the sibling, as it was at this commit, into the
+   package, and that stale copy can shadow the sibling's own package in the
+   client's systems :tree (cl-repository#117)."
+  (let ((own (mapcar #'string-downcase provides)))
+    (loop for asd in (directory (merge-pathnames "*.asd" (uiop:ensure-directory-pathname source-dir)))
+          for name = (string-downcase (pathname-name asd))
+          unless (or (member name own :test #'string=)
+                     (test-system-name-p name))
+            collect asd)))
 
 (define-condition publish-version-mismatch (error)
   ((system :initarg :system :reader publish-version-mismatch-system)

@@ -283,6 +283,25 @@
                       '("foo" "foo-extra"))))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
+(deftest sibling-asd-files-are-the-unprovided-ones
+  "cl-repository#117: cli-backend-clingon:0.2.0 shipped a stale cli-protocol.asd."
+  (let ((dir (make-temp-dir)))
+    (unwind-protect
+         (progn
+           (write-asd dir "cli-protocol.asd" :systems '("cli-protocol" "cli-protocol/tests"))
+           (write-asd dir "cli-backend-clingon.asd" :systems '("cli-backend-clingon"))
+           (write-asd dir "cli-backend-adopt.asd" :systems '("cli-backend-adopt"))
+           (write-asd dir "cli-backend-clingon-tests.asd" :systems '("cli-backend-clingon-tests"))
+           (ok (equal (sort (mapcar #'pathname-name
+                                    (cl-repository-ci-lib:sibling-asd-files
+                                     dir '("cli-backend-clingon")))
+                            #'string<)
+                      '("cli-backend-adopt" "cli-protocol")))
+           (ok (null (cl-repository-ci-lib:sibling-asd-files
+                      dir '("cli-protocol" "cli-backend-clingon" "cli-backend-adopt")))
+               "declared provides keep their .asd files"))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
 (deftest ci-action-has-run-phase
   "cl-repository#103: phase run = cl-repo run -- <command> in working-directory."
   (let* ((root (uiop:pathname-directory-pathname
