@@ -4,7 +4,9 @@ set -euo pipefail
 BASE_SHA=""
 
 if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" && -n "${GITHUB_BASE_REF:-}" ]]; then
-  git fetch --no-tags --prune --depth=1 origin "${GITHUB_BASE_REF}"
+  # No --depth: a shallow base tip has no merge-base with a branch made
+  # before the base moved (fetch-depth: 0 already has the history).
+  git fetch --no-tags --prune origin "${GITHUB_BASE_REF}"
   BASE_SHA="$(git merge-base HEAD "origin/${GITHUB_BASE_REF}")"
 elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
   BASE_SHA="$(git rev-parse HEAD^)"
