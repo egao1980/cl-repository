@@ -52,16 +52,29 @@
     ;; Slash names are recorded in the annotation; publisher does not mount extra GHCR repos for them.
     ;; The published system first (the publisher pushes to the first name's
     ;; repo); siblings whose .asd declares another :version are not mounted.
-    (multiple-value-bind (kept dropped)
-        (cl-repository-ci-lib:publish-provides
-         system version
+    ;; An explicit system input from a multi-.asd checkout publishes that
+    ;; system alone (plus slash secondaries) unless its .asd sets :provides.
+    (multiple-value-bind (own siblings)
+        (cl-repository-ci-lib:own-provides
+         system
          (cl-repository-packager/asdf-plugin:filter-publish-provides
           system (cl-repository-packager/build-matrix:package-spec-provides spec))
-         (cl-repository-ci-lib:discover-asd-system-versions (uiop:getcwd)))
-      (dolist (name dropped)
-        (format t "~&; ci: not mounting ~a at ~a (its .asd has another :version)~%"
-                name version))
-      (setf (cl-repository-packager/build-matrix:package-spec-provides spec) kept))
+         :explicit-system (or (%env "CL_REPO_SYSTEM") (%env "PKG_SYSTEM"))
+         :declared-provides (getf (cl-repository-ci-lib:system-cl-repo-properties
+                                   (asdf:find-system system))
+                                  :provides)
+         :source-dir (uiop:getcwd))
+      (dolist (name siblings)
+        (format t "~&; ci: not mounting sibling ~a (its own .asd; set :cl-repo :provides to mount it)~%"
+                name))
+      (multiple-value-bind (kept dropped)
+          (cl-repository-ci-lib:publish-provides
+           system version own
+           (cl-repository-ci-lib:discover-asd-system-versions (uiop:getcwd)))
+        (dolist (name dropped)
+          (format t "~&; ci: not mounting ~a at ~a (its .asd has another :version)~%"
+                  name version))
+        (setf (cl-repository-packager/build-matrix:package-spec-provides spec) kept)))
     (setf (cl-repository-packager/build-matrix:package-spec-version spec) version)
     (setf result (cl-repository-packager/build-matrix:build-package spec))
     (format t "~&Publishing ~a/~a:~a~%" namespace system version)

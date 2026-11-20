@@ -240,3 +240,45 @@
   (ok (equal (handler-bind ((cl-repository-ci-lib:publish-version-mismatch #'continue))
                (cl-repository-ci-lib:check-publish-version "foo" "2.0" "1.0"))
              "2.0")))
+
+(deftest own-provides-explicit-system-drops-same-version-siblings
+  "cl-repository#109: json-protocol 0.2.0 rebuild — every sibling shared the
+   version, so each matrix job mounted its index onto the others' tags."
+  (let ((dir (make-temp-dir))
+        (provides '("json-backend-yason" "json-backend-jzon" "json-protocol"
+                    "json-backend-yason/x")))
+    (unwind-protect
+         (progn
+           (write-asd dir "json-protocol.asd" :systems '("json-protocol" "json-protocol/tests"))
+           (write-asd dir "json-backend-jzon.asd" :systems '("json-backend-jzon"))
+           (write-asd dir "json-backend-yason.asd"
+                      :systems '("json-backend-yason" "json-backend-yason/x"))
+           (ok (= 3 (length (cl-repository-ci-lib:primary-asd-files dir))))
+           (multiple-value-bind (kept dropped)
+               (cl-repository-ci-lib:own-provides
+                "json-backend-yason" provides
+                :explicit-system "json-backend-yason" :source-dir dir)
+             (ok (equal kept '("json-backend-yason" "json-backend-yason/x")))
+             (ok (equal dropped '("json-backend-jzon" "json-protocol"))))
+           (testing "declared :provides wins"
+             (ok (equal (cl-repository-ci-lib:own-provides
+                         "json-backend-yason" provides
+                         :explicit-system "json-backend-yason"
+                         :declared-provides '("json-backend-yason" "json-protocol")
+                         :source-dir dir)
+                        provides)))
+           (testing "discovered system keeps provides"
+             (ok (equal (cl-repository-ci-lib:own-provides
+                         "json-backend-yason" provides :source-dir dir)
+                        provides))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest own-provides-single-asd-keeps-provides
+  (let ((dir (make-temp-dir)))
+    (unwind-protect
+         (progn
+           (write-asd dir "foo.asd" :systems '("foo" "foo-extra" "foo/tests"))
+           (ok (equal (cl-repository-ci-lib:own-provides
+                       "foo" '("foo" "foo-extra") :explicit-system "foo" :source-dir dir)
+                      '("foo" "foo-extra"))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
