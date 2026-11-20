@@ -93,7 +93,7 @@ jobs:
             . /opt/cl-ci/image.env
             command -v ros
             command -v oras
-            # cl-repository#101: the PPA git, not noble's 2.43.
+            # cl-repository#101: the PPA git, not the noble 2.43.
             gv=$(git --version | awk "{print \$3}")
             [ "$(printf "%s\n%s\n" 2.50 "$gv" | sort -V | head -1)" = 2.50 ] || { echo "git $gv < 2.50"; exit 1; }
             echo "git $gv"
