@@ -366,6 +366,35 @@
        (asdf:component-loaded-p name)
        (installed-satisfies-p name minimum)))
 
+(defun still-missing-message (targets &optional minimums)
+  "Why TARGETS are still missing after the walk installed them. A system
+   whose package is installed but whose .asd is not in the version directory
+   was not produced by the install (a provides link sent it elsewhere, #124);
+   only a system with nothing installed is not in the registry."
+  (let ((lines '()))
+    (dolist (target targets)
+      (let* ((primary (asdf:primary-system-name target))
+             (version (installed-system-version primary))
+             (dir (when version
+                    (ignore-errors
+                     (truename (merge-pathnames (format nil "~a/~a/" primary version)
+                                                (systems-root))))))
+             (minimum (cdr (assoc target minimums :test #'string=))))
+        (push (cond
+                ((null dir)
+                 (format nil "system ~a is not in the registry" target))
+                ((not (probe-file (merge-pathnames (format nil "~a.asd" primary) dir)))
+                 (format nil "the install of ~a ~a did not produce ~a.asd (in ~a)"
+                         primary version primary (uiop:native-namestring dir)))
+                (minimum
+                 (format nil "system ~a ~a is installed (~a) but below the required ~a"
+                         target version (uiop:native-namestring dir) minimum))
+                (t
+                 (format nil "system ~a is installed (~a) but ASDF does not find it"
+                         target (uiop:native-namestring dir))))
+              lines)))
+    (format nil "cl-repo: ~{~a~^; ~}" (nreverse lines))))
+
 (defun satisfied-or-definer (name minimum)
   "SYSTEM-SATISFIED-P for NAME, except when reading NAME's .asd stops on a
    system ASDF needs while defining it (:defsystem-depends-on). Then the second
@@ -590,7 +619,7 @@
                     (equal (sort (copy-list targets) #'string<)
                            (sort (copy-list prev) #'string<)))
             (when targets
-              (error "cl-repo: system ~{~a~^, ~} is not in the registry" targets))
+              (error "~a" (still-missing-message targets minimums)))
             (return))
           (msg "~&; cl-repo: ensure deps for local ~a → ~{~a~^, ~}~%" name targets)
           (dolist (target targets)
