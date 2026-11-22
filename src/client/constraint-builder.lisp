@@ -4,7 +4,8 @@
   (:import-from :cl-oci-client/registry #:make-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-blob)
   (:import-from :cl-oci-client/content-discovery #:list-tags)
-  (:import-from :cl-oci-client/conditions #:registry-error #:registry-error-status)
+  (:import-from :cl-oci-client/conditions #:registry-error #:registry-error-status
+                #:registry-transport-error)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests)
   (:import-from :cl-oci/manifest #:manifest #:manifest-config)
   (:import-from :cl-oci/descriptor #:descriptor-digest)
@@ -27,12 +28,29 @@
            #:scan-installed-systems
            #:installed-versions
            #:find-missing-deps
-           #:dependency-resolution-error))
+           #:dependency-resolution-error
+           #:system-lookup-error
+           #:system-lookup-error-name
+           #:system-lookup-error-failures))
 (in-package :cl-repository-client/constraint-builder)
 
 (define-condition dependency-resolution-error (error)
   ((message :initarg :message :reader resolution-error-message))
   (:report (lambda (c s) (format s "Dependency resolution failed: ~a" (resolution-error-message c)))))
+
+(define-condition system-lookup-error (error)
+  ((name :initarg :name :reader system-lookup-error-name)
+   (failures :initarg :failures :reader system-lookup-error-failures :initform nil
+             :documentation "((registry-url . condition) ...), in registry order."))
+  (:documentation
+   "No registry answered that NAME is there, and at least one request failed
+    (network, TLS, timeout, an HTTP 5xx, a broken pull). The package may well
+    be in the registry: this is not \"not found\" (#120, #132).")
+  (:report (lambda (c s)
+             (format s "cl-repo: could not look up or pull ~a (not a missing package):~{~&  pulling ~a from ~a failed: ~a~}"
+                     (system-lookup-error-name c)
+                     (loop for (url . e) in (system-lookup-error-failures c)
+                           collect (system-lookup-error-name c) collect url collect e)))))
 
 ;;; Caches for registry queries
 
@@ -85,39 +103,46 @@
 
 (defun list-tags/retry (registry repo &key (attempts *tag-list-attempts*)
                                            (lister #'list-tags))
-  "LIST-TAGS with transient-failure retries (linear backoff 1s, 2s, ...).
+  "LIST-TAGS with retries of failed answers (linear backoff 1s, 2s, ...).
    HTTP 404 (unknown repo) is final and yields NIL silently. HTTP 401/403 is
    final too (ghcr answers 403 at the token endpoint for an unknown repo when
    stored credentials are presented — one per sb-posix/uiop-style builtin) and
-   is logged once. Any other error is logged per attempt; NIL after the last
-   one. Swallowing errors silently here made registry/TLS hiccups
-   indistinguishable from a missing package (\"not found in any registry\").
-   LISTER is the tag-listing function (tests inject a stub)."
+   is logged once as \"package not found in registry\". A request that got no
+   response (REGISTRY-TRANSPORT-ERROR: HTTP-EXCHANGE already retried it)
+   propagates at once. Any other error is logged per attempt and the last one
+   is re-signalled: a failed lookup must not read as a missing package
+   (#120, #132). LISTER is the tag-listing function (tests inject a stub)."
   (loop for attempt from 1 to attempts
         do (handler-case (return (funcall lister registry repo))
+             (registry-transport-error (e)
+               (error e))
              (registry-error (e)
                (case (registry-error-status e)
                  (404 (return nil))
                  ((401 403)
-                  (msg "~&; cl-repo: ~a: not accessible (~a); treating as absent~%" repo e)
+                  (msg "~&; cl-repo: ~a: package not found in registry (~a)~%" repo e)
                   (return nil)))
                (msg "~&; cl-repo: ~a: tag listing failed (attempt ~d/~d): ~a~%"
-                    repo attempt attempts e))
+                    repo attempt attempts e)
+               (when (= attempt attempts) (error e)))
              (error (e)
                (msg "~&; cl-repo: ~a: tag listing failed (attempt ~d/~d): ~a~%"
-                    repo attempt attempts e)))
-           (when (< attempt attempts) (sleep attempt))
-        finally (return nil)))
+                    repo attempt attempts e)
+               (when (= attempt attempts) (error e))))
+           (when (< attempt attempts) (sleep attempt))))
 
 (defun fetch-available-versions (name registries)
   "Get available versions for NAME from registries. Cached.
    Respects source policy: skips registries denied/not-allowed for NAME.
-   Registry path uses OCI-PACKAGE-NAME (slash → primary, + → -plus-)."
+   Registry path uses OCI-PACKAGE-NAME (slash → primary, + → -plus-).
+   A registry whose lookup fails is skipped; when none has NAME and one
+   failed, signals SYSTEM-LOOKUP-ERROR rather than answering \"no versions\"."
   (when (implementation-system-p name)
     (return-from fetch-available-versions nil))
   (let ((pkg (oci-package-name name)))
     (or (gethash pkg *version-cache*)
-        (let ((versions nil))
+        (let ((versions nil)
+              (failures nil))
           (when (oci-allowed-p name)
             (dolist (entry registries)
               (let* ((url (first entry))
@@ -125,9 +150,15 @@
                      (repo (format nil "~a/~a" ns pkg))
                      (reg (make-registry url)))
                 (when (registry-allowed-p name url)
-                  (dolist (tag (list-tags/retry reg repo))
-                    (unless (string= tag "latest")
-                      (pushnew tag versions :test #'string=)))))))
+                  (handler-case
+                      (dolist (tag (list-tags/retry reg repo))
+                        (unless (string= tag "latest")
+                          (pushnew tag versions :test #'string=)))
+                    (error (e)
+                      (msg "~&; cl-repo: ~a: lookup in ~a failed: ~a~%" name url e)
+                      (push (cons url e) failures)))))))
+          (when (and failures (null versions))
+            (error 'system-lookup-error :name name :failures (nreverse failures)))
           (setf (gethash pkg *version-cache*) versions)
           versions))))
 

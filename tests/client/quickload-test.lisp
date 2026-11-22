@@ -14,7 +14,10 @@
                 #:list-tags/retry
                 #:*tag-list-attempts*)
   (:import-from :cl-oci-client/registry #:make-registry)
-  (:import-from :cl-oci-client/conditions #:registry-error))
+  (:import-from :cl-oci-client/conditions #:registry-error #:registry-transport-error)
+  (:import-from :cl-repository-client/quickload #:ensure-system-installed #:find-system-in-registry)
+  (:import-from :cl-repository-client/constraint-builder
+                #:system-lookup-error #:system-lookup-error-failures))
 (in-package :cl-repository-client/tests/quickload-test)
 
 (deftest test-asdf-dep-name-string
@@ -145,15 +148,44 @@
                    (setf result (funcall fn))))))
       (values result log))))
 
-(deftest test-list-tags-retry-logs-and-returns-nil
-  "Unreachable registry: every attempt fails, each is logged, result is NIL (no signal)."
+(deftest test-list-tags-retry-unreachable-signals
+  "#132: an unreachable registry is not an empty one. HTTP-EXCHANGE retries
+   the request; then the transport error propagates, it is not NIL."
   (let ((*tag-list-attempts* 2)
+        (cl-oci-client/http:*transport-retry* nil)
         (reg (make-registry "http://127.0.0.1:9" :insecure-p t)))
-    (multiple-value-bind (result log)
-        (%call-capturing-log (lambda () (list-tags/retry reg "cl-systems/nope")))
-      (ok (null result))
-      (ok (search "tag listing failed (attempt 1/2)" log))
-      (ok (search "tag listing failed (attempt 2/2)" log)))))
+    (ok (signals (%call-capturing-log (lambda () (list-tags/retry reg "cl-systems/nope")))
+                 'registry-transport-error))))
+
+(deftest test-list-tags-retry-transport-error-is-not-retried-again
+  (let ((calls 0)
+        (*tag-list-attempts* 3)
+        (reg (make-registry "http://127.0.0.1:9" :insecure-p t)))
+    (ok (signals (%call-capturing-log
+                  (lambda ()
+                    (list-tags/retry reg "x/y"
+                                     :lister (lambda (r p)
+                                               (declare (ignore r p))
+                                               (incf calls)
+                                               (error 'registry-transport-error
+                                                      :method :get :url "u")))))
+                 'registry-transport-error))
+    (ok (= calls 1))))
+
+(deftest test-list-tags-retry-persistent-5xx-signals
+  "A 503 on every attempt is a failed lookup: the last error propagates."
+  (let ((calls 0)
+        (*tag-list-attempts* 2)
+        (reg (make-registry "http://127.0.0.1:9" :insecure-p t)))
+    (ok (signals (%call-capturing-log
+                  (lambda ()
+                    (list-tags/retry reg "x/y"
+                                     :lister (lambda (r p)
+                                               (declare (ignore r p))
+                                               (incf calls)
+                                               (error 'registry-error :status 503)))))
+                 'registry-error))
+    (ok (= calls 2))))
 
 (deftest test-list-tags-retry-404-is-final
   "HTTP 404 is a real answer (unknown repo): no retry, no log, NIL."
@@ -188,7 +220,7 @@
                                       (error 'registry-error :status 403)))))
       (ok (null result))
       (ok (= calls 1))
-      (ok (search "not accessible" log))
+      (ok (search "package not found in registry" log))
       (ng (search "attempt" log)))))
 
 (deftest test-list-tags-retry-recovers
@@ -574,3 +606,119 @@
       (asdf:clear-system "cl-rc-demo")
       (asdf:initialize-source-registry saved)
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+;;; #120 / #132: a registry that fails to answer is not one without the package.
+;;; A fake transport (an http-protocol backend scripted per URL) stands in for
+;;; ghcr.io.
+
+(defclass %scripted-registry (http-protocol:http-backend)
+  ((routes :initarg :routes :reader %routes)
+   (calls :initform 0 :accessor %calls))
+  (:default-initargs :name "scripted-registry"))
+
+(defmethod http-protocol:send ((backend %scripted-registry) client request &key)
+  (declare (ignore client))
+  (incf (%calls backend))
+  (let ((url (http-protocol:http-request-url request)))
+    (loop for (suffix . action) in (%routes backend)
+          when (search suffix url)
+            do (return-from http-protocol:send (funcall action)))
+    (%respond 404 "{\"errors\":[{\"code\":\"NAME_UNKNOWN\"}]}")))
+
+(defun %respond (status body)
+  (let ((headers (make-hash-table :test #'equal)))
+    (setf (gethash "content-type" headers) "application/json")
+    (make-instance 'http-protocol:http-response
+                   :status status :headers headers
+                   :body (babel:string-to-octets body :encoding :utf-8))))
+
+(defun %incomplete ()
+  (error 'http-protocol:http-protocol-error :message "incomplete HTTP response"))
+
+(defun %with-scripted-registry (routes fn)
+  "Call FN with *REGISTRIES* naming one fake registry that answers ROUTES,
+   ((url-substring . thunk) ...); other URLs get a 404. FN gets the backend."
+  (let* ((backend (make-instance '%scripted-registry :routes routes))
+         (http-protocol:*http-backend* backend)
+         (cl-oci-client/http::*http-clients* '())
+         (cl-oci-client/http:*transport-retry*
+           (make-instance 'cl-oci-client/http::transport-retry
+                          :total 2 :backoff-factor 0 :status nil
+                          :allowed-methods '(:get :head)))
+         (*tag-list-attempts* 1)
+         (cl-repository-client/quickload::*registries*
+           '(("https://r.test" :namespace "ns"))))
+    (funcall fn backend)))
+
+(deftest test-blob-pull-transport-failure-is-not-not-found
+  "#120: the tag listing works, the manifest pull keeps getting an incomplete
+   response. Each pull is retried; then the error says the pull failed and
+   why, not that the system is not in the registry."
+  (%with-scripted-registry
+   (list (cons "/tags/list" (lambda () (%respond 200 "{\"name\":\"ns/fakesys\",\"tags\":[\"0.2.2\"]}")))
+         (cons "/manifests/0.2.2" #'%incomplete))
+   (lambda (backend)
+     (let ((e nil) (log nil))
+       (setf log (nth-value 1 (%call-capturing-log
+                               (lambda ()
+                                 (handler-case (ensure-system-installed "fakesys")
+                                   (system-lookup-error (c) (setf e c)))))))
+       (ok e)
+       (ok (= 1 (length (system-lookup-error-failures e))))
+       (ok (typep (cdr (first (system-lookup-error-failures e))) 'registry-transport-error))
+       ;; one tag listing + three manifest attempts
+       (ok (= 4 (%calls backend)))
+       (let ((report (princ-to-string e)))
+         (ok (search "incomplete HTTP response" report))
+         (ok (search "pulling fakesys from https://r.test failed" report))
+         (ng (search "not in" report)))
+       (ok (search "pulling fakesys from https://r.test failed" log))))))
+
+(deftest test-tag-listing-timeout-is-not-not-found
+  "#132: a timed-out lookup signals from FIND-SYSTEM-IN-REGISTRY (NIL there
+   means \"not in the registry\") and ENSURE-SYSTEM-INSTALLED reports it."
+  (%with-scripted-registry
+   (list (cons "/tags/list"
+               (lambda () (error 'http-protocol:http-timeout-error :message "sync await timed out"))))
+   (lambda (backend)
+     (declare (ignore backend))
+     (ok (signals (find-system-in-registry "https://r.test" "ns" "fakesys")
+                  'registry-transport-error))
+     (let ((e (handler-case (progn (%call-capturing-log
+                                    (lambda () (ensure-system-installed "fakesys")))
+                                   nil)
+                (system-lookup-error (c) c))))
+       (ok e)
+       (ok (search "sync await timed out" (princ-to-string e)))))))
+
+(deftest test-a-404-still-means-not-found
+  "The registry answers 404 for the tag listing and the anchor: NAME is not
+   there. ENSURE-SYSTEM-INSTALLED returns NIL without signalling."
+  (%with-scripted-registry
+   '()
+   (lambda (backend)
+     (declare (ignore backend))
+     (ok (null (find-system-in-registry "https://r.test" "ns" "fakesys")))
+     (ok (null (%call-capturing-log (lambda () (ensure-system-installed "fakesys"))))))))
+
+(deftest test-a-token-endpoint-403-means-not-found
+  "#131: ghcr answers 403 at the token endpoint for a repository it lacks.
+   That is \"package not found in registry\", printed as text."
+  (%with-scripted-registry
+   (list (cons "/tags/list"
+               (lambda ()
+                 (let ((r (%respond 401 "{}")))
+                   (setf (gethash "www-authenticate" (http-protocol:response-headers r))
+                         "Bearer realm=\"https://r.test/token\",service=\"r.test\",scope=\"repository:ns/fakesys:pull\"")
+                   r)))
+         (cons "/token"
+               (lambda ()
+                 (%respond 403 "{\"errors\":[{\"code\":\"DENIED\",\"message\":\"requested access to the resource is denied\"}]}"))))
+   (lambda (backend)
+     (declare (ignore backend))
+     (multiple-value-bind (result log)
+         (%call-capturing-log
+          (lambda () (find-system-in-registry "https://r.test" "ns" "fakesys" :type :ocicl)))
+       (ok (null result))
+       (ok (search "package not found in registry" log))
+       (ok (search "DENIED: requested access to the resource is denied" log))
+       (ng (search "#(" log))))))

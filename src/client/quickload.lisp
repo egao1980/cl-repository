@@ -4,7 +4,7 @@
   (:import-from :cl-oci-client/registry #:make-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-blob)
   (:import-from :cl-oci-client/content-discovery #:list-referrers)
-  (:import-from :cl-oci-client/conditions #:registry-error)
+  (:import-from :cl-oci-client/conditions #:registry-error #:registry-transport-error)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests)
   (:import-from :cl-oci/manifest #:manifest #:manifest-artifact-type #:manifest-config
                 #:manifest-annotations)
@@ -24,7 +24,7 @@
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
                 #:build-install-plan #:find-missing-deps #:dependency-resolution-error
-                #:list-tags/retry)
+                #:list-tags/retry #:system-lookup-error)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version #:version<)
   (:import-from :cl-repository-client/dep-satisfy
                 #:asdf-dep-spec #:system-direct-dep-specs #:system-satisfied-p #:note-minimum
@@ -147,34 +147,34 @@
     (error () nil)))
 
 (defun find-system-in-registry (reg-url namespace system-name &key version minimum (type :cl-repo))
-  "Find SYSTEM-NAME in a registry. Returns (values repo tag) or NIL.
+  "Find SYSTEM-NAME in a registry. Returns (values repo tag), or NIL when the
+   registry answers that it has no such package or no matching tag.
    VERSION is an exact tag. MINIMUM selects the newest tag that is not older.
-   For :ocicl registries, the repo is just the system name (no namespace nesting)."
+   For :ocicl registries, the repo is just the system name (no namespace nesting).
+   A failed lookup (network, TLS, timeout, HTTP 5xx) signals: it is not an
+   answer, and NIL here reads as \"not in the registry\" (#132)."
   (let* ((pkg (oci-package-name system-name))
          (repo (format nil "~a/~a" namespace pkg))
          (reg (make-registry reg-url)))
-    (handler-case
-        (cond
-          (version (values repo version))
-          (t
-           (let ((tags (list-tags/retry reg repo)))
-             (if tags
-                 (let* ((version-tags (remove "latest" tags :test #'string=))
-                        (ok (if minimum
-                                (remove-if (lambda (tag) (tag-older-than-p tag minimum)) version-tags)
-                                version-tags)))
-                   (cond
-                     (ok (values repo (select-preferred-version ok)))
-                     (version-tags nil)
-                     (t (values repo (first tags)))))
-                 (unless (eq type :ocicl)
-                   (find-via-anchor reg repo))))))
-      (error (e)
-        (msg "~&; cl-repo: ~a: lookup in ~a failed: ~a~%" system-name reg-url e)
-        nil))))
+    (cond
+      (version (values repo version))
+      (t
+       (let ((tags (list-tags/retry reg repo)))
+         (if tags
+             (let* ((version-tags (remove "latest" tags :test #'string=))
+                    (ok (if minimum
+                            (remove-if (lambda (tag) (tag-older-than-p tag minimum)) version-tags)
+                            version-tags)))
+               (cond
+                 (ok (values repo (select-preferred-version ok)))
+                 (version-tags nil)
+                 (t (values repo (first tags)))))
+             (unless (eq type :ocicl)
+               (find-via-anchor reg repo))))))))
 
 (defun find-via-anchor (registry repo)
-  "Try to find system via system-name anchor at :latest."
+  "Try to find system via system-name anchor at :latest. NIL when the
+   registry has none; a request that got no response propagates."
   (handler-case
       (let ((obj (pull-manifest registry repo "latest")))
         (when (and (typep obj 'manifest)
@@ -189,23 +189,36 @@
                                         (subseq repo 0 (position #\/ repo :from-end t))
                                         alias-for)))
                 (values alias-repo version))))))
+    (registry-transport-error (e) (error e))
     (error () nil)))
 
 (defun ensure-system-installed (name &key version minimum)
-  "Install NAME from configured registries. Returns INSTALL-RESULT or NIL."
-  (dolist (entry *registries* nil)
-    (let ((url (registry-url entry))
-          (ns (registry-namespace entry))
-          (type (registry-type entry)))
-      (handler-case
-          (multiple-value-bind (repo tag)
-              (find-system-in-registry url ns name :version version :minimum minimum :type type)
-            (when (and repo tag)
-              (msg "~&; cl-repo: found ~a:~a in ~a (~a)~%" name tag url type)
-              (return-from ensure-system-installed
-                (install-system url repo tag :type type))))
-        (error (e)
-          (msg "~&; cl-repo: ~a not in ~a (~a)~%" name url e))))))
+  "Install NAME from configured registries. Returns INSTALL-RESULT, or NIL
+   when every registry answers that it has no NAME. A registry whose lookup
+   or pull fails is logged and the next one tried; when none installs NAME
+   and one failed, signals SYSTEM-LOOKUP-ERROR naming each failure (a
+   transport error, after HTTP-EXCHANGE's retries), not \"not in the
+   registry\" (#120, #132). Restart CONTINUE treats NAME as absent."
+  (let ((failures '()))
+    (dolist (entry *registries*)
+      (let ((url (registry-url entry))
+            (ns (registry-namespace entry))
+            (type (registry-type entry)))
+        (handler-case
+            (multiple-value-bind (repo tag)
+                (find-system-in-registry url ns name :version version :minimum minimum :type type)
+              (when (and repo tag)
+                (msg "~&; cl-repo: found ~a:~a in ~a (~a)~%" name tag url type)
+                (return-from ensure-system-installed
+                  (install-system url repo tag :type type))))
+          (error (e)
+            (msg "~&; cl-repo: pulling ~a from ~a failed: ~a~%" name url e)
+            (push (cons url e) failures)))))
+    (when failures
+      (restart-case (error 'system-lookup-error :name name :failures (nreverse failures))
+        (continue ()
+          :report (lambda (s) (format s "Treat ~a as not in any registry" name))
+          nil)))))
 
 ;;; Missing deps accumulator (set by compute-install-plan, consumed by load-system)
 

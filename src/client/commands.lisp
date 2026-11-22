@@ -5,7 +5,7 @@
                 #:registry-request)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-manifest-raw)
   (:import-from :cl-oci-client/content-discovery #:list-tags-paginated #:list-referrers)
-  (:import-from :cl-oci-client/conditions #:registry-error)
+  (:import-from :cl-oci-client/conditions #:registry-error #:auth-error #:not-found-error)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests #:image-index-annotations)
   (:import-from :cl-oci/descriptor #:descriptor-annotations #:descriptor-artifact-type)
   (:import-from :cl-oci/annotations #:+ann-title+ #:+ann-version+ #:+ann-description+
@@ -223,6 +223,9 @@
                (let ((ann (image-index-annotations obj)))
                  (when (plusp (hash-table-count ann))
                    (maphash (lambda (k v) (msg "  ~a: ~a~%" k v)) ann))))))
+        ;; 401/403 at the token endpoint is how ghcr answers for a repo it lacks (#131)
+        ((or not-found-error auth-error) (e)
+          (msg "~&Info failed: ~a: package not found in registry (~a)~%" full-repo e))
         (error (e)
           (msg "~&Info failed: ~a~%" e))))))
 
