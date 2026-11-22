@@ -529,3 +529,48 @@
       (dolist (s '("cl-nd-root" "cl-nd-demo" "cl-nd-new"))
         (asdf:clear-system s))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest client-copy-does-not-satisfy-what-the-registry-gives-older
+  "#119: this image runs cl-rc-demo 0.2.0 from its own tree (the client's
+   CL_REPOSITORY_DEST); the registry puts an installed 0.1.0 first. A fresh
+   `cl-repo run` / `cl-repo test` image gets 0.1.0, so a (:version ... \"0.2.0\")
+   is not satisfied until 0.2.0 is installed."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-rc-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (own (merge-pathnames "own/" dir))
+         (systems (merge-pathnames "systems/" dir))
+         (saved asdf/source-registry:*source-registry-parameter*)
+         (write-file (lambda (path version)
+                       (ensure-directories-exist path)
+                       (with-open-file (out path :direction :output :if-exists :supersede)
+                         (format out "(defsystem \"cl-rc-demo\" :version ~s)" version))))
+         (use-registry (lambda (&rest trees)
+                         (asdf:initialize-source-registry
+                          `(:source-registry ,@(mapcar (lambda (d) (list :tree (namestring d))) trees)
+                                             :ignore-inherited-configuration)))))
+    (funcall write-file (merge-pathnames "cl-rc-demo.asd" own) "0.2.0")
+    (funcall write-file (merge-pathnames "cl-rc-demo/0.1.0/cl-rc-demo.asd" systems) "0.1.0")
+    (unwind-protect
+         (progn
+           (funcall use-registry own)
+           (let ((*standard-output* (make-broadcast-stream)))
+             (asdf:load-system "cl-rc-demo"))
+           (funcall use-registry (merge-pathnames "cl-rc-demo/0.1.0/" systems) systems own)
+           (let ((cl-oci-client/pin::*pinned* nil))
+             (cl-oci-client/pin:with-loaded-systems-pinned ()
+               (ok (equal "0.2.0" (asdf:component-version (asdf:find-system "cl-rc-demo")))
+                   "this image answers with its own copy")
+               (ng (cl-repository-client/dep-satisfy:system-satisfied-p "cl-rc-demo" "0.2.0")
+                   "the registry's 0.1.0 is what a fresh image gets")
+               (ng (cl-repository-client/quickload::satisfied-or-definer "cl-rc-demo" "0.2.0"))
+               (ok (cl-repository-client/dep-satisfy:system-satisfied-p "cl-rc-demo" "0.1.0"))
+               (ok (cl-repository-client/dep-satisfy:system-satisfied-p "cl-rc-demo"))))
+           (funcall write-file (merge-pathnames "cl-rc-demo/0.2.0/cl-rc-demo.asd" systems) "0.2.0")
+           (funcall use-registry (merge-pathnames "cl-rc-demo/0.2.0/" systems) systems own)
+           (let ((cl-oci-client/pin::*pinned* nil))
+             (cl-oci-client/pin:with-loaded-systems-pinned ()
+               (ok (cl-repository-client/dep-satisfy:system-satisfied-p "cl-rc-demo" "0.2.0")
+                   "satisfied once 0.2.0 is installed"))))
+      (asdf:clear-system "cl-rc-demo")
+      (asdf:initialize-source-registry saved)
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
