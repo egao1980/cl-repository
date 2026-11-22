@@ -28,6 +28,7 @@
                (:file "asd-rewrite-test")
                (:file "asd-version-test")
                (:file "project-test")
+               (:file "resolution-test")
                (:file "all"))
   :perform (test-op (o c)
             (unless (symbol-call :rove :run c)

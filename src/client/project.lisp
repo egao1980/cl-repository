@@ -633,7 +633,13 @@ install tree, since the project's .asd is read in this image."
     ;; would otherwise re-register a system this image runs (cl+ssl) from the
     ;; install tree, and a later load would load it, and its library, again.
     (with-loaded-systems-pinned (:except (list dir))
-      (let ((*sync-stack* (cons (namestring dir) *sync-stack*)))
+      (let ((*sync-stack* (cons (namestring dir) *sync-stack*))
+            ;; one registry cache for the whole sync (CL-REPOSITORY#136)
+            (cl-repository-client/constraint-builder:*resolution-cache*
+              (or cl-repository-client/constraint-builder:*resolution-cache*
+                  (cl-repository-client/constraint-builder:make-resolution-cache)))
+            (cl-oci-client/pull:*pull-cache*
+              (or cl-oci-client/pull:*pull-cache* (make-hash-table :test 'equal))))
         (ensure-default-registry)
         (register-project dir)
         (clear-project-systems dir)

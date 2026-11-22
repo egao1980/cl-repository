@@ -28,7 +28,9 @@
                 #:http-retry
                 #:make-http-retry
                 #:retry-should-retry-p
-                #:retry-delay-seconds)
+                #:retry-delay-seconds
+                #:make-http-request
+                #:send-async)
   (:import-from :http #:request)
   (:import-from :cl-oci-client/pin #:with-loaded-systems-pinned)
   (:import-from :cl-oci-client/conditions #:registry-transport-error)
@@ -37,7 +39,9 @@
            #:http-exchange
            #:response-header-value
            #:transport-failure-p
-           #:*transport-retry*))
+           #:*transport-retry*
+           #:http-exchange-batch
+           #:batch-concurrency))
 (in-package :cl-oci-client/http)
 
 (defvar *http-backend-kind* nil
@@ -209,6 +213,40 @@ CL_REPO_HTTP_BACKEND=async)."
                         :method method :url url :cause e :attempts attempt))
                (sleep (retry-delay-seconds retry attempt))))))
 
+(defun http-request-kind (url)
+  "The kind of registry request URL is, for tracing: :TAGS, :MANIFEST, :BLOB,
+   :REFERRERS, :TOKEN or :OTHER."
+  (cond ((search "/tags/list" url) :tags)
+        ((search "/manifests/" url) :manifest)
+        ((search "/blobs/" url) :blob)
+        ((search "/referrers/" url) :referrers)
+        ((search "token" url) :token)
+        (t :other)))
+
+(defun %trace-http-p ()
+  (let ((v (uiop:getenv "CL_REPO_TRACE_HTTP")))
+    (and v (plusp (length v)) (string/= v "0"))))
+
+(defun %call-traced (method url thunk)
+  "Call THUNK, one HTTP exchange returning an HTTP-RESPONSE. With
+   CL_REPO_TRACE_HTTP set, log one line per exchange to *ERROR-OUTPUT*:
+   \"; cl-repo-http KIND METHOD STATUS MS URL\" (STATUS is ERROR when no
+   response came). Benchmarks count these lines by kind."
+  (if (%trace-http-p)
+      (let ((start (get-internal-real-time))
+            (status "error"))
+        (unwind-protect
+             (let ((res (funcall thunk)))
+               (setf status (response-status res))
+               res)
+          (format *error-output* "~&; cl-repo-http ~(~a ~a~) ~a ~d ~a~%"
+                  (http-request-kind url) method status
+                  (round (* 1000 (- (get-internal-real-time) start))
+                         internal-time-units-per-second)
+                  url)
+          (force-output *error-output*)))
+      (funcall thunk)))
+
 (defun http-exchange (method url &key headers content (force-binary t) (verify t)
                              (decompress t) timeout (retry *transport-retry*))
   "Perform METHOD on URL via http-protocol.
@@ -235,18 +273,148 @@ CL_REPO_HTTP_BACKEND=async)."
            (res (%send-with-retry
                  method url retry
                  (lambda ()
-                   (request method url
-                            :client client
-                            :headers headers
-                            :content content
-                            :force-binary force-binary
-                            :decompress decompress
-                            :accept-encoding *accept-encoding*
-                            :timeout timeout
-                            :raise-for-status nil)))))
+                   (%call-traced
+                    method url
+                    (lambda ()
+                      (request method url
+                               :client client
+                               :headers headers
+                               :content content
+                               :force-binary force-binary
+                               :decompress decompress
+                               :accept-encoding *accept-encoding*
+                               :timeout timeout
+                               :raise-for-status nil)))))))
       (values (response-body res)
               (response-status res)
               (response-headers res)))))
+
+;;; Several exchanges at once, on one event loop
+;;;
+;;; Resolution asks a registry for dozens of tag lists and configs. One at a
+;;; time, each waits a round trip. http-backend-async runs any number of
+;;; requests on one loop; threads would not do, as every blocking request
+;;; makes a libuv loop of its own and the libuv backend's handle tables are
+;;; not safe across threads (event-backend-libuv#31).
+
+(defparameter *batch-concurrency* 8
+  "How many requests HTTP-EXCHANGE-BATCH keeps in flight. CL_REPO_FETCH_JOBS
+   overrides it; 1 sends them one at a time.")
+
+(defun batch-concurrency ()
+  (let* ((v (uiop:getenv "CL_REPO_FETCH_JOBS"))
+         (n (and v (plusp (length v)) (parse-integer v :junk-allowed t))))
+    (max 1 (if (and n (plusp n)) n *batch-concurrency*))))
+
+(defun %event (name)
+  "Function NAME of event-protocol, loaded with the async backend only."
+  (fdefinition (find-symbol name "EVENT-PROTOCOL")))
+
+(defun %async-batch (requests concurrency)
+  (let* ((n (length requests))
+         (results (make-array n :initial-element nil))
+         (done (make-array n :initial-element nil))
+         (timers (make-array n :initial-element nil))
+         (pending (loop for r in requests for i from 0 collect (cons i r)))
+         (remaining n)
+         (eb (funcall (symbol-value (find-symbol "*EVENT-BACKEND-MAKER*" "HTTP-BACKEND-ASYNC"))))
+         (el (funcall (%event "MAKE-EVENT-LOOP") eb))
+         (in-run nil))
+    (labels ((finish (i value)
+               (unless (aref done i)
+                 (setf (aref done i) t
+                       (aref results i) value)
+                 (when (aref timers i)
+                   (ignore-errors (funcall (%event "CANCEL") eb (aref timers i))))
+                 (decf remaining)
+                 (if (zerop remaining)
+                     (funcall (%event "STOP") eb el)
+                     (start-next))))
+             (start-next ()
+               (let ((job (pop pending)))
+                 (when job
+                   (destructuring-bind (i &key method url headers (verify t) timeout
+                                            (force-binary t) (decompress t))
+                       job
+                     (let ((start (get-internal-real-time)))
+                       (flet ((trace-line (status)
+                                (when (%trace-http-p)
+                                  (format *error-output* "~&; cl-repo-http ~(~a ~a~) ~a ~d ~a~%"
+                                          (http-request-kind url) method status
+                                          (round (* 1000 (- (get-internal-real-time) start))
+                                                 internal-time-units-per-second)
+                                          url)
+                                  (force-output *error-output*))))
+                         (handler-case
+                             (progn
+                               (send-async
+                                *http-backend* (%http-client verify)
+                                (make-http-request :method method :url url
+                                                   :headers headers
+                                                   :force-binary force-binary
+                                                   :decompress decompress
+                                                   :accept-encoding *accept-encoding*
+                                                   :timeout timeout
+                                                   :raise-for-status nil)
+                                :callback (lambda (res)
+                                            (trace-line (response-status res))
+                                            (finish i (list (response-body res)
+                                                            (response-status res)
+                                                            (response-headers res))))
+                                :error-callback (lambda (c)
+                                                  (trace-line "error")
+                                                  (finish i c)))
+                               (unless (aref done i)
+                                 (setf (aref timers i)
+                                       (funcall (%event "SLEEP*") eb el
+                                                (if (realp timeout) timeout 30)
+                                                :callback
+                                                (lambda ()
+                                                  (trace-line "error")
+                                                  (finish i (make-condition
+                                                             'http-timeout-error
+                                                             :message "request timed out")))))))
+                           (error (e)
+                             (trace-line "error")
+                             (finish i e))))))))))
+      (progv (list (find-symbol "*EVENT-BACKEND*" "EVENT-PROTOCOL")
+                   (find-symbol "*EVENT-LOOP*" "EVENT-PROTOCOL"))
+          (list eb el)
+        (unwind-protect
+             (progn
+               (loop repeat concurrency while pending do (start-next))
+               (when (plusp remaining)
+                 (setf in-run t)
+                 (funcall (%event "RUN") eb el :stop-when-idle nil)
+                 (setf in-run nil)))
+          ;; never from an unwind out of RUN itself: libuv is mid-iteration
+          (unless in-run
+            (funcall (%event "CLOSE-EVENT-LOOP") eb el)))))
+    (coerce results 'list)))
+
+(defun http-exchange-batch (requests &key (concurrency (batch-concurrency)))
+  "Perform REQUESTS, plists (:method :url :headers :verify :timeout
+   :force-binary :decompress), up to CONCURRENCY at a time. Returns a list in
+   the order of REQUESTS: per request (body status headers), or the condition
+   it failed with. Nothing is retried here: a caller that wants
+   HTTP-EXCHANGE's transport retries sends a failed request again through it.
+   On the dexador backend, or with CONCURRENCY 1, the requests go through
+   HTTP-EXCHANGE one at a time."
+  (with-loaded-systems-pinned ()
+    (ensure-http-backend)
+    (if (and (eq *http-backend-kind* :async) (> concurrency 1) (cdr requests))
+        (%async-batch requests concurrency)
+        (mapcar (lambda (r)
+                  (handler-case
+                      (multiple-value-list
+                       (http-exchange (getf r :method) (getf r :url)
+                                      :headers (getf r :headers)
+                                      :verify (getf r :verify t)
+                                      :timeout (getf r :timeout)
+                                      :force-binary (getf r :force-binary t)
+                                      :decompress (getf r :decompress t)))
+                    (error (e) e)))
+                requests))))
 
 ;;; No backend is chosen at load time: choosing one loads systems, and doing
 ;;; that while ASDF is still loading this file is a recursive OPERATE ("Deprecated

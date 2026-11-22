@@ -13,6 +13,9 @@
            #:auth-config-token
            #:make-auth-config
            #:obtain-token
+           #:token-request
+           #:parse-token-response
+           #:parse-www-authenticate
            #:make-auth-headers))
 (in-package :cl-oci-client/auth)
 
@@ -32,41 +35,49 @@
       (setf (gethash key params) value))
     params))
 
-(defun obtain-token (www-authenticate-header &key auth insecure)
-  "Request a bearer token from the auth endpoint described in WWW-Authenticate header."
+(defun token-request (www-authenticate-header &key auth)
+  "The token request a WWW-Authenticate challenge asks for: (values url headers)."
   (let* ((params (parse-www-authenticate www-authenticate-header))
          (realm (gethash "realm" params))
          (service (gethash "service" params))
          (scope (gethash "scope" params)))
     (unless realm
       (error 'auth-error :status 401 :body "No realm in WWW-Authenticate header"))
-    (let* ((url (format nil "~a?service=~a~@[&scope=~a~]"
-                        realm
-                        (url-encode (or service ""))
-                        (when scope (url-encode scope))))
-           (headers (when (and auth (auth-config-username auth))
-                      (list (cons "Authorization"
-                                  (format nil "Basic ~a"
-                                          (cl-base64:string-to-base64-string
-                                           (format nil "~a:~a"
-                                                   (auth-config-username auth)
-                                                   (or (auth-config-password auth) ""))))))))
-           (body (multiple-value-bind (resp status)
-                     (http-exchange :get url
-                                    :headers headers
-                                    :force-binary nil
-                                    :verify (not insecure))
-                   (unless (<= 200 status 299)
-                     (error 'auth-error :status status :url url :body (error-body-text resp)))
-                   resp))
-           (text (etypecase body
-                   (string body)
-                   ((vector (unsigned-byte 8))
-                    (octets-to-string body :encoding :utf-8))))
-           (json (yason:parse text)))
-      (or (gethash "token" json)
-          (gethash "access_token" json)
-          (error 'auth-error :status 401 :body "No token in auth response")))))
+    (values (format nil "~a?service=~a~@[&scope=~a~]"
+                    realm
+                    (url-encode (or service ""))
+                    (when scope (url-encode scope)))
+            (when (and auth (auth-config-username auth))
+              (list (cons "Authorization"
+                          (format nil "Basic ~a"
+                                  (cl-base64:string-to-base64-string
+                                   (format nil "~a:~a"
+                                           (auth-config-username auth)
+                                           (or (auth-config-password auth) ""))))))))))
+
+(defun parse-token-response (body status url)
+  "The token in a token endpoint's answer: (values token expires-in-seconds-or-nil)."
+  (unless (<= 200 status 299)
+    (error 'auth-error :status status :url url :body (error-body-text body)))
+  (let* ((text (etypecase body
+                 (string body)
+                 ((vector (unsigned-byte 8))
+                  (octets-to-string body :encoding :utf-8))))
+         (json (yason:parse text)))
+    (values (or (gethash "token" json)
+                (gethash "access_token" json)
+                (error 'auth-error :status 401 :body "No token in auth response"))
+            ;; seconds the token is valid (RFC 6750 expires_in), or NIL
+            (let ((s (gethash "expires_in" json)))
+              (and (integerp s) (plusp s) s)))))
+
+(defun obtain-token (www-authenticate-header &key auth insecure)
+  "Request a bearer token from the auth endpoint described in WWW-Authenticate header.
+   Returns (values token expires-in-seconds-or-nil)."
+  (multiple-value-bind (url headers) (token-request www-authenticate-header :auth auth)
+    (multiple-value-bind (body status)
+        (http-exchange :get url :headers headers :force-binary nil :verify (not insecure))
+      (parse-token-response body status url))))
 
 (defun make-auth-headers (auth)
   "Build HTTP headers for authentication."

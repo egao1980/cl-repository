@@ -33,6 +33,8 @@ qlot を使っている場合、`cl-repo` も「プロジェクト単位で依�
 
 **HTTP.** レジストリ通信は `http-protocol` 上の cl-stack 非同期バックエンド（`http-backend-async` × `event-backend-libuv`、TLS は `cl-stack-ssl`）を、そのスタックがロードできる場合に使用し、できない場合は `http-backend-dexador` を使います。`CL_REPO_HTTP_BACKEND=async|dexador|auto` で選択を強制できます。`setup-client` がネイティブオーバーレイをインストールできるようになるまで、CI イメージには dexador が残ります。
 
+**依存関係の解決。** 解決は各パッケージの条件を満たす最新バージョンから始め、古いバージョンは競合が起きたパッケージについてだけ取得します。1 回の sync または install の間、タグ一覧・設定・マニフェスト・トークンのキャッシュを共有します。非同期バックエンドでは、レジストリへの問い合わせを 1 つのイベントループ上で最大 8 件同時に送ります（`CL_REPO_FETCH_JOBS`、1 なら 1 件ずつ）。パッケージの設定は実行をまたいで `$XDG_CACHE_HOME/cl-repository/configs/` に保存されます（`CL_REPO_CONFIG_CACHE=<ディレクトリ>` で場所を変更、`off` で無効化）。保存されたエントリは、そのタグへの HEAD が保存時と同じダイジェストを返したときだけ使われます。`CL_REPO_TRACE_HTTP=1` を設定すると、レジストリへの各リクエストを stderr に記録します。
+
 ## システム一覧
 
 | System | Description |
