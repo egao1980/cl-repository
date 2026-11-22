@@ -99,6 +99,14 @@ jobs:
             echo "git $gv"
             ros -e "(format t \"~A ~A~%\" (lisp-implementation-type) (lisp-implementation-version))" -q
             test -f "${CL_REPOSITORY_CLIENT_DIR}/cl-repository-client.asd"
+            command -v zstd
+            # Baked fasls are reused: loading the client compiles nothing.
+            export XDG_CACHE_HOME="${CL_CI_XDG_CACHE_HOME}"
+            out=$(cd /tmp && CL_REPOSITORY_DEST="${CL_REPOSITORY_DEST}" ros \
+              -e "(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:ensure-directory-pathname (uiop:getenv \"CL_REPOSITORY_DEST\"))) :ignore-inherited-configuration))" \
+              -e "(asdf:load-system \"cl-repository-client\")" -q 2>&1)
+            if grep -q "; compiling file" <<<"$out"; then echo "client recompiled in a fresh container"; exit 1; fi
+            echo "client loads from baked fasls"
             echo "ok sbcl=${CL_CI_SBCL_VERSION} client=${CL_REPOSITORY_CLIENT_VERSION}"
           '
           baked=$(docker run --rm "${IMAGE}:local" bash -lc '. /opt/cl-ci/image.env; echo "$CL_REPOSITORY_CLIENT_VERSION"')

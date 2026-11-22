@@ -1,0 +1,110 @@
+name: Cache installed systems and fasls
+description: >-
+  Restore and save the cl-repo installed-systems tree
+  (~/.local/share/cl-repository) together with ASDF's fasl cache
+  ($XDG_CACHE_HOME/common-lisp). A warm job skips dependency resolution,
+  the OCI pulls and the compile, which took 10–15 minutes cold
+  (cl-repository#136).
+
+  mode restore: after setup-lisp (which exports XDG_CACHE_HOME), before the
+  ci install phase. mode save: after the test phase, with
+  `if: always() && steps.<install>.outcome == 'success'`, so a red test run
+  still warms the cache (actions/cache's own post step saves only on
+  success). Systems and fasls are cached as one unit: the installer
+  does not keep file mtimes, so fasls are only valid next to the sources
+  they were compiled from.
+
+  The key changes every UTC day, and whenever any .asd, cl-repo.lock or
+  cl-repo.conf in the checkout changes. A job restores the newest cache
+  from the same day; on the first job of the day, or once the key misses,
+  the install phase resolves against the registry again, so new dependency
+  releases are picked up within a day (sooner when a project raises a
+  minimum version).
+
+inputs:
+  mode:
+    description: restore | save
+    required: false
+    default: restore
+  key:
+    description: mode save — the key output of the restore step
+    required: false
+    default: ""
+  fasl:
+    description: mode save — the fasl output of the restore step
+    required: false
+    default: ""
+  cache-hit:
+    description: mode save — the cache-hit output of the restore step (an exact hit is not saved again)
+    required: false
+    default: ""
+  impl:
+    description: Lisp implementation label for the key (sbcl, ecl, ccl-bin, ...)
+    required: false
+    default: sbcl
+  enabled:
+    description: '"false" skips the cache (cold install every run)'
+    required: false
+    default: "true"
+
+outputs:
+  cache-hit:
+    description: '"true" when the exact key was restored'
+    value: ${{ steps.cache.outputs.cache-hit }}
+  key:
+    description: Cache key (pass to mode save)
+    value: ${{ steps.key.outputs.key }}
+  fasl:
+    description: Fasl cache directory (pass to mode save)
+    value: ${{ steps.key.outputs.fasl }}
+
+runs:
+  using: composite
+  steps:
+    - name: Dependency cache key
+      id: key
+      if: inputs.enabled == 'true' && inputs.mode == 'restore'
+      shell: bash
+      env:
+        IMPL: ${{ inputs.impl }}
+      run: |
+        set -euo pipefail
+        cache_home="${XDG_CACHE_HOME:-}"
+        if [[ -z "${cache_home}" ]]; then
+          cache_home="${HOME}/.cache"
+          command -v cygpath >/dev/null 2>&1 && cache_home="$(cygpath -m "${cache_home}")"
+          echo "XDG_CACHE_HOME=${cache_home}" >> "${GITHUB_ENV}"
+        fi
+        day="$(date -u +%Y%m%d)"
+        # Hash every .asd / cl-repo.lock / cl-repo.conf (NUL-safe, sorted).
+        hash="$( { find . -path ./.git -prune -o -path ./.cl-repository -prune -o \
+                     \( -name '*.asd' -o -name cl-repo.lock -o -name cl-repo.conf \) -type f -print0 \
+                   | LC_ALL=C sort -z | xargs -0 cat 2>/dev/null || true; } \
+                 | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-16)"
+        prefix="${RUNNER_OS}-${RUNNER_ARCH}-cl-deps-v1-${IMPL}-client-${CL_REPOSITORY_CLIENT_VERSION:-unknown}-${day}-"
+        {
+          echo "prefix=${prefix}"
+          echo "key=${prefix}${hash}"
+          echo "fasl=${cache_home}/common-lisp"
+        } >> "${GITHUB_OUTPUT}"
+        echo "dep cache key ${prefix}${hash}"
+
+    - name: Restore dependency cache
+      id: cache
+      if: inputs.enabled == 'true' && inputs.mode == 'restore'
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          ~/.local/share/cl-repository
+          ${{ steps.key.outputs.fasl }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+
+    - name: Save dependency cache
+      if: inputs.enabled == 'true' && inputs.mode == 'save' && inputs.key != '' && inputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          ~/.local/share/cl-repository
+          ${{ inputs.fasl }}
+        key: ${{ inputs.key }}

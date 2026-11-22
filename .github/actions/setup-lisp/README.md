@@ -28,3 +28,5 @@ jobs:
 ```
 
 Prefer `test-system.yml` so the container wiring stays in one place.
+
+**Fasl cache.** In the ci-base container, activation exports `XDG_CACHE_HOME=/opt/cl-ci/.cache`, the directory where the image build compiled the client. Jobs load those fasls instead of recompiling the client and its bootstrap deps. GHA remaps `HOME` to `/github/home` in job containers, which used to hide them. Dependencies installed per project are cached by [dep-cache](../dep-cache/README.md).

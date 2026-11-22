@@ -212,7 +212,25 @@ jobs:
           printf '%s\n' '(defsystem "ci-run-demo" :version "0.0.1" :depends-on ("alexandria"))' \
             > ci-run-demo/ci-run-demo.asd
 
+      # dep-cache (cl-repository#136): restore before the ci phases.
+      - name: Restore dependency cache
+        id: dep-cache
+        uses: ./.github/actions/dep-cache
+
+      - name: dep-cache key and fasl dir
+        shell: bash
+        env:
+          KEY: ${{ steps.dep-cache.outputs.key }}
+          FASL: ${{ steps.dep-cache.outputs.fasl }}
+        run: |
+          echo "key=${KEY} fasl=${FASL} XDG_CACHE_HOME=${XDG_CACHE_HOME:-}"
+          [[ "${KEY}" =~ ^${RUNNER_OS}-${RUNNER_ARCH}-cl-deps-v1-sbcl-client-${CL_REPOSITORY_CLIENT_VERSION}-[0-9]{8}-[0-9a-f]{16}$ ]] \
+            || { echo "unexpected dep-cache key"; exit 1; }
+          [[ -n "${XDG_CACHE_HOME:-}" && "${FASL}" == "${XDG_CACHE_HOME}/common-lisp" ]] \
+            || { echo "XDG_CACHE_HOME not exported"; exit 1; }
+
       - name: ci phase run
+        id: install
         uses: ./.github/actions/ci
         with:
           phase: run
@@ -236,3 +254,12 @@ jobs:
         env:
           OUTCOME: ${{ steps.run-fails.outcome }}
         run: '[[ "${OUTCOME}" == failure ]] || { echo "phase run ignored exit 3 (outcome ${OUTCOME})"; exit 1; }'
+
+      - name: Save dependency cache
+        if: always() && steps.install.outcome == 'success'
+        uses: ./.github/actions/dep-cache
+        with:
+          mode: save
+          key: ${{ steps.dep-cache.outputs.key }}
+          fasl: ${{ steps.dep-cache.outputs.fasl }}
+          cache-hit: ${{ steps.dep-cache.outputs.cache-hit }}

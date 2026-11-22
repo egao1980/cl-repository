@@ -54,6 +54,13 @@ on:
         required: false
         type: number
         default: 4096
+      dep-cache:
+        description: >-
+          Cache installed systems + fasls between runs (one cache per UTC day
+          and .asd hash; cl-repository#136). "false" installs cold every run.
+        required: false
+        type: string
+        default: "true"
 
 jobs:
   test:
@@ -86,7 +93,14 @@ jobs:
           sbcl-version: ${{ env.SBCL_VERSION }}
           roswell-version: ${{ env.ROSWELL_VERSION }}
 
-      - uses: egao1980/cl-repository/.github/actions/ci@main
+      - uses: egao1980/cl-repository/.github/actions/dep-cache@main
+        id: dep-cache
+        with:
+          impl: sbcl
+          enabled: ${{ inputs.dep-cache }}
+
+      - id: install
+        uses: egao1980/cl-repository/.github/actions/ci@main
         with:
           phase: install
           system: ${{ inputs.system }}
@@ -98,3 +112,13 @@ jobs:
           phase: test
           system: ${{ inputs.system }}
           sbcl-dynamic-space-mb: ${{ inputs.sbcl-dynamic-space-mb }}
+
+      - uses: egao1980/cl-repository/.github/actions/dep-cache@main
+        if: always() && steps.install.outcome == 'success'
+        with:
+          mode: save
+          impl: sbcl
+          enabled: ${{ inputs.dep-cache }}
+          key: ${{ steps.dep-cache.outputs.key }}
+          fasl: ${{ steps.dep-cache.outputs.fasl }}
+          cache-hit: ${{ steps.dep-cache.outputs.cache-hit }}
