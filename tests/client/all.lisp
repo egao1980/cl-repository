@@ -15,4 +15,5 @@
    :cl-repository-client/tests/quickload-test
    :cl-repository-client/tests/stream-extract-test
    :cl-repository-client/tests/asd-rewrite-test
-   :cl-repository-client/tests/project-test))
+   :cl-repository-client/tests/project-test
+   :cl-repository-client/tests/resolution-test))

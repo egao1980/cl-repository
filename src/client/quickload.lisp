@@ -2,7 +2,7 @@
   (:use :cl)
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
   (:import-from :cl-oci-client/registry #:make-registry)
-  (:import-from :cl-oci-client/pull #:pull-manifest #:pull-blob)
+  (:import-from :cl-oci-client/pull #:pull-manifest #:pull-blob #:*pull-cache*)
   (:import-from :cl-oci-client/content-discovery #:list-referrers)
   (:import-from :cl-oci-client/conditions #:registry-error #:registry-transport-error)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests)
@@ -24,7 +24,8 @@
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
                 #:build-install-plan #:find-missing-deps #:dependency-resolution-error
-                #:list-tags/retry #:system-lookup-error)
+                #:list-tags/retry #:system-lookup-error
+                #:*resolution-cache* #:make-resolution-cache)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version #:version<)
   (:import-from :cl-repository-client/dep-satisfy
                 #:asdf-dep-spec #:system-direct-dep-specs #:system-satisfied-p #:note-minimum
@@ -298,6 +299,9 @@
    sources deny allow default-source
    (lambda ()
      (let* ((*quiet* (or *quiet* silent))
+            ;; one registry cache for every resolution of this install
+            (*resolution-cache* (or *resolution-cache* (make-resolution-cache)))
+            (*pull-cache* (or *pull-cache* (make-hash-table :test 'equal)))
             (system-list (mapcar (lambda (s) (string-downcase (string s)))
                                  (if (listp systems) systems (list systems)))))
        (ensure-snapshot)
@@ -571,6 +575,10 @@
    roots: their deps are walked, but they are never installed — otherwise an older
    published FOO would be pulled next to the checkout and could shadow it."
   (let* ((name (string-downcase (string system-name)))
+         ;; one registry cache for every target of the walk: they share
+         ;; most of their transitive dependencies
+         (*resolution-cache* (or *resolution-cache* (make-resolution-cache)))
+         (*pull-cache* (or *pull-cache* (make-hash-table :test 'equal)))
          (sys (or (asdf:find-system name nil)
                   (error "cl-repo: system ~a is not findable. The .asd must be the project file."
                          name)))

@@ -33,6 +33,8 @@ If you're familiar with qlot, cl-repo shares the same per-project dependency phi
 
 **HTTP.** Registry traffic goes through `http-protocol` on the cl-stack async backend (`http-backend-async` × `event-backend-libuv`, TLS via `cl-stack-ssl`) whenever that stack loads; otherwise `http-backend-dexador`. `CL_REPO_HTTP_BACKEND=async|dexador|auto` forces a choice. CI images still carry dexador until `setup-client` installs native overlays.
 
+**Resolution.** Dependency resolution starts from the newest acceptable version of each package and fetches older versions only around a conflict. One sync or install shares one cache of tag lists, configs, manifests and tokens. On the async backend, registry lookups go out up to 8 at a time on one event loop (`CL_REPO_FETCH_JOBS`, 1 for one at a time). Package configs are kept between runs under `$XDG_CACHE_HOME/cl-repository/configs/` (`CL_REPO_CONFIG_CACHE=<dir>` moves it, `off` disables it). An entry is used only after a HEAD of its tag returns the digest it was stored under. `CL_REPO_TRACE_HTTP=1` logs every registry request to stderr.
+
 ## Systems
 
 | System | Description |
