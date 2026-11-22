@@ -91,6 +91,7 @@
        `(:output-translations
          (t (,(uiop:xdg-cache-home "common-lisp" "cl-repo" :implementation) :**/ :*.*.*))
          :inherit-configuration)))
+    (cl-repository-ci-lib:log-stage "load client" client)
     (when client
       (format t "~&; ci: load client from ~a~%" client)
       (asdf:initialize-source-registry (%registry-form (list client))))
@@ -216,12 +217,16 @@
         (format t "~&; ci: hid .cl-repository -> ~a~%" dest)))))
 
 (defun %ensure-packager ()
+  (cl-repository-ci-lib:log-stage "resolve" "registries, system")
   (cl-repo:add-registry "https://ghcr.io" :namespace "egao1980/cl-repository" :priority :prepend)
   (cl-repo:add-registry "https://ghcr.io" :namespace "egao1980/cl-systems" :priority :append)
   (let ((ver (%env "PACKAGER_VERSION"))
         (system (%resolve-system)))
     (%ci-muffle
      (lambda ()
+       (cl-repository-ci-lib:log-stage "install packager"
+                                       (format nil "cl-repository-packager ~a, cl-oci-client"
+                                               (or ver "latest")))
        (if ver
            (cl-repo:ensure-systems "cl-repository-packager" :version ver :default-source :oci)
            (cl-repo:ensure-systems "cl-repository-packager" :default-source :oci))
@@ -232,6 +237,7 @@
        ;; (MISSING-DEPENDENCY encoding-protocol on http-protocol 0.3.9 publish).
        ;; :defsystem-depends-on (asdf-native …) must be installed before the
        ;; checkout .asd can load. Older clients lack the function.
+       (cl-repository-ci-lib:log-stage "install deps" system)
        (let ((f (find-symbol "ENSURE-DEFSYSTEM-DEPENDS-ON" :cl-repo)))
          (when (and f (fboundp f)) (funcall f (uiop:getcwd))))
        (let ((ci (cl-repository-ci-lib:system-ci-plist system)))
@@ -250,6 +256,7 @@
     (asdf:initialize-source-registry
      (%registry-form (remove nil (list (namestring (cl-repo:systems-root))
                                        (cl-repository-ci-lib:nonempty-env "CL_REPOSITORY_DEST")))))
+    (cl-repository-ci-lib:log-stage "load packager")
     (unwind-protect
          (%ci-muffle
           (lambda ()

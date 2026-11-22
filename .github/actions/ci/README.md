@@ -122,3 +122,9 @@ Call `setup-lisp` in **this** job first (Ubuntu `ci-base` image, or install on t
 Client load uses a list source registry with `:ignore-inherited-configuration`.
 `setup-lisp` does not export `CL_SOURCE_REGISTRY`. The checkout is registered
 after the client, via `clear-checkout-systems`.
+
+Each stage (load client; publish: resolve, install packager, install deps,
+load packager, package spec, build layers, push, anchors, done) prints
+`; ci: [<UTC time>] stage <name>` with the time the previous stage took, so a
+hung job shows where it stopped. `publish-source.yml` and
+`publish-native-package.yml` take a `timeout-minutes` input (30 / 45).

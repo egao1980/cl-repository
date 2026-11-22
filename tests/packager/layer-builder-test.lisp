@@ -96,7 +96,55 @@
       (ok (= (length (car result)) 121))))
   (testing "unsplittable names signal instead of silently truncating"
     (ok (signals (cl-repository-packager/layer-builder::split-tar-name
-                  (make-string 180 :initial-element #\z))))))
+                  (make-string 180 :initial-element #\z))
+                 'cl-repository-packager/layer-builder:tar-entry-name-too-long))
+    (let ((long (make-string 180 :initial-element #\z)))
+      (ok (search long (handler-case
+                           (progn (cl-repository-packager/layer-builder::split-tar-name long) "")
+                         (cl-repository-packager/layer-builder:tar-entry-name-too-long (c)
+                           (princ-to-string c))))
+          "the error names the path"))))
+
+;;; cl-repository#133: trivial-glob ships test-fixtures/circular-link, a
+;;; symlink to its own directory. The walker followed it until the entry name
+;;; overflowed ustar. The links are made here, not committed (Windows checkouts).
+(defun make-dir-symlink (link target)
+  "Make LINK a symlink to TARGET; NIL when the platform cannot (never on
+   Windows: MSYS ln -s copies instead)."
+  #+windows (declare (ignore link target))
+  #+windows nil
+  #-windows
+  (ignore-errors
+   (uiop:run-program (list "ln" "-s" target (string-right-trim "/" (uiop:native-namestring link))))
+   t))
+
+(deftest directory-symlinks-not-followed
+  (let* ((dir (uiop:ensure-directory-pathname
+               (merge-pathnames (format nil "cl-repo-lb-symlink-~a/" (random 100000000))
+                                (uiop:temporary-directory))))
+         (outside (uiop:ensure-directory-pathname
+                   (merge-pathnames (format nil "cl-repo-lb-outside-~a/" (random 100000000))
+                                    (uiop:temporary-directory))))
+         (kept (merge-pathnames "fixtures/circular/real.txt" dir))
+         (foreign (merge-pathnames "foreign.txt" outside)))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist kept)
+           (ensure-directories-exist foreign)
+           (with-open-file (s kept :direction :output :if-exists :supersede)
+             (write-string "kept" s))
+           (with-open-file (s foreign :direction :output :if-exists :supersede)
+             (write-string "foreign" s))
+           (if (not (and (make-dir-symlink (merge-pathnames "fixtures/circular/circular-link" dir) ".")
+                         (make-dir-symlink (merge-pathnames "fixtures/outside-link" dir)
+                                           (uiop:native-namestring outside))))
+               (skip "cannot create symlinks on this platform")
+               (let* ((layer (build-layer-from-directory dir "source" :tar-prefix "lib-1.0/"))
+                      (names (tar-entry-names (layer-result-data layer))))
+                 (ok (equal names '("lib-1.0/fixtures/circular/real.txt"))
+                     "only the real file is packed: no circular recursion, no foreign files"))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)
+      (uiop:delete-directory-tree outside :validate t :if-does-not-exist :ignore))))
 
 (deftest exclude-cl-repository-dir
   (testing "build-layer-from-directory omits .cl-repository"

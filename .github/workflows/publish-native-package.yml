@@ -124,6 +124,13 @@ on:
         required: false
         type: number
         default: 8192
+      timeout-minutes:
+        description: >-
+          Job time limit. A hung publish (cl-repository#135) fails here
+          instead of running for 6 hours.
+        required: false
+        type: number
+        default: 45
     outputs:
       version:
         description: The version published
@@ -140,6 +147,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       version: ${{ steps.version.outputs.version }}
     # Image string or null. No `secrets` in this expression (reusable-workflow parse).
