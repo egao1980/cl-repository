@@ -8,6 +8,7 @@
   (:import-from :yason)
   (:export #:list-tags
            #:list-tags-paginated
+           #:parse-tag-list
            #:list-referrers))
 (in-package :cl-oci-client/content-discovery)
 
@@ -18,14 +19,20 @@
     (multiple-value-bind (body status headers)
         (registry-request registry :get path)
       (declare (ignore status))
-      (let* ((json-str (etypecase body
-                         (string body)
-                         ((vector (unsigned-byte 8))
-                          (babel:octets-to-string body :encoding :utf-8))))
-             (json (yason:parse json-str)))
+      (let ((json (tag-list-json body)))
         (values (coerce (gethash "tags" json) 'list)
                 (gethash "name" json)
                 (gethash "link" headers))))))
+
+(defun tag-list-json (body)
+  (yason:parse (etypecase body
+                 (string body)
+                 ((vector (unsigned-byte 8))
+                  (babel:octets-to-string body :encoding :utf-8)))))
+
+(defun parse-tag-list (body)
+  "The tags of a tags/list response BODY, as LIST-TAGS returns them."
+  (coerce (gethash "tags" (tag-list-json body)) 'list))
 
 (defun list-tags-paginated (registry repository &key (page-size 100))
   "List all tags, handling pagination. Returns a list of all tags."
