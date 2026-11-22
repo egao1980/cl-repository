@@ -1,6 +1,6 @@
 # dep-cache
 
-Caches what the `ci` install and test phases build: the cl-repo installed-systems tree (`~/.local/share/cl-repository`) and ASDF's fasl cache (`$XDG_CACHE_HOME/common-lisp`). A cold install of a project with about 80 dependencies took 10–15 minutes: resolution, OCI pulls, then compiling everything. A warm job finds the systems already installed and the fasls current ([#136](https://github.com/egao1980/cl-repository/issues/136)).
+Caches what the `ci` install and test phases build: the cl-repo installed-systems tree (`~/.local/share/cl-repository`) and ASDF's fasl cache (`$XDG_CACHE_HOME/common-lisp`). That directory holds both fasl roots: cl-repo's own images (the test and run children, the `cl-repo` command, and the ci action's client unless Quicklisp is loaded) compile into `common-lisp/cl-repo/<impl>/`, kept apart from Quicklisp images' fasls in ASDF's default `common-lisp/<impl>/` ([#121](https://github.com/egao1980/cl-repository/issues/121)). A cold install of a project with about 80 dependencies took 10–15 minutes: resolution, OCI pulls, then compiling everything. A warm job finds the systems already installed and the fasls current ([#136](https://github.com/egao1980/cl-repository/issues/136)).
 
 `test-system.yml` and `test-system-impl.yml` use it by default. Pass `dep-cache: "false"` to install cold every run.
 

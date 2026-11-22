@@ -102,7 +102,9 @@ jobs:
             command -v zstd
             # Baked fasls are reused: loading the client compiles nothing.
             export XDG_CACHE_HOME="${CL_CI_XDG_CACHE_HOME}"
+            # With the fasl root of run.lisp and cl-repo.ros (cl-repository#121).
             out=$(cd /tmp && CL_REPOSITORY_DEST="${CL_REPOSITORY_DEST}" ros \
+              -e "(unless (or (member :quicklisp *features*) (uiop:getenvp \"ASDF_OUTPUT_TRANSLATIONS\")) (asdf:initialize-output-translations (list :output-translations (list t (list (uiop:xdg-cache-home \"common-lisp\" \"cl-repo\" :implementation) :**/ :*.*.*)) :inherit-configuration)))" \
               -e "(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:ensure-directory-pathname (uiop:getenv \"CL_REPOSITORY_DEST\"))) :ignore-inherited-configuration))" \
               -e "(asdf:load-system \"cl-repository-client\")" -q 2>&1)
             if grep -q "; compiling file" <<<"$out"; then echo "client recompiled in a fresh container"; exit 1; fi

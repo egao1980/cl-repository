@@ -28,7 +28,7 @@
   (:import-from :cl-repository-client/version-utils #:select-preferred-version #:version<)
   (:import-from :cl-repository-client/dep-satisfy
                 #:asdf-dep-spec #:system-direct-dep-specs #:system-satisfied-p #:note-minimum
-                #:quicklisp-source-p)
+                #:quicklisp-source-p #:asd-defsystem-form)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/lockfile
                 #:lockfile-entry #:add-lockfile-entry)
@@ -435,25 +435,13 @@
   "(name . minimum) specs of system NAME's literal :DEPENDS-ON in FILE, read
    without evaluating anything. Second value NIL when no DEFSYSTEM form for
    NAME could be read."
-  (let ((*read-eval* nil)
-        (*package* (make-package (gensym "DEPS-ASD-") :use '(:cl))))
-    (unwind-protect
-         (let ((form (ignore-errors
-                      (with-open-file (in file :external-format :utf-8)
-                        (loop for form = (read in nil in)
-                              until (eq form in)
-                              when (and (consp form) (symbolp (first form))
-                                        (string= "DEFSYSTEM" (symbol-name (first form)))
-                                        (or (stringp (second form)) (symbolp (second form)))
-                                        (string-equal name (string (second form))))
-                                return form)))))
-           (if (and form (listp (getf (cddr form) :depends-on)))
-               (values (loop for dep in (getf (cddr form) :depends-on)
-                             for (dep-name minimum) = (multiple-value-list (asdf-dep-spec dep))
-                             when dep-name collect (cons dep-name minimum))
-                       t)
-               (values nil nil)))
-      (delete-package *package*))))
+  (let ((form (asd-defsystem-form file name)))
+    (if (and form (listp (getf (cddr form) :depends-on)))
+        (values (loop for dep in (getf (cddr form) :depends-on)
+                      for (dep-name minimum) = (multiple-value-list (asdf-dep-spec dep))
+                      when dep-name collect (cons dep-name minimum))
+                t)
+        (values nil nil))))
 
 (defun shadowed-installed-dep-specs (name)
   "When this image runs NAME and a newer NAME is installed, the dep specs of

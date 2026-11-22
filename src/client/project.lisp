@@ -14,7 +14,7 @@
   (:import-from :cl-repository-client/lockfile
                 #:lockfile-path #:read-lockfile #:lockfile-entry-system #:lockfile-entry-version)
   (:import-from :cl-repository-client/asdf-integration
-                #:configure-asdf-source-registry)
+                #:configure-asdf-source-registry #:output-translations-form)
   (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*
                 #:system-install-path #:extract-layer)
   (:import-from :cl-repository-client/qlot-integration
@@ -739,6 +739,7 @@ install tree, since the project's .asd is read in this image."
   (with-standard-io-syntax
     (remove nil
             (list (asdf-require-form)
+                  (format nil "~S" (output-translations-form))
                   (format nil "(asdf:initialize-source-registry '~S)"
                           (namestrings asdf/source-registry:*source-registry-parameter*))
                   (when extras
@@ -794,27 +795,81 @@ install tree, since the project's .asd is read in this image."
             (asdf:load-system name)
             (asdf:test-system name))))))
 
+(defparameter *sbcl-runtime-options*
+  '(("--core" . 1) ("--dynamic-space-size" . 1) ("--control-stack-size" . 1)
+    ("--tls-limit" . 1) ("--noinform" . 0) ("--disable-ldb" . 0)
+    ("--lose-on-corruption" . 0) ("--debug-environment" . 0)
+    ("--merge-core-pages" . 0) ("--no-merge-core-pages" . 0)
+    ("--help" . 0) ("--version" . 0))
+  "SBCL C runtime options and how many arguments each takes. They must come
+   before any toplevel option such as --eval.")
+
+(defparameter *sbcl-script-runtime-options*
+  '("--noinform" "--disable-ldb" "--lose-on-corruption" "--end-runtime-options")
+  "What --script implies as a runtime option. Once a toplevel --eval precedes
+   it, --script is only a toplevel option, so these are given explicitly.")
+
+(defun sbcl-startup (form args)
+  "ARGS with --eval FORM after SBCL's leading runtime options (#130): after
+   --eval, --noinform is a fatal \"runtime option in the middle of Lisp
+   options\" and --script no longer implies --noinform, so the banner reached
+   stdout. `--script FILE` keeps its meaning: its runtime implications, then
+   --eval FORM, then the toplevel `--script FILE` (no init files, debugger
+   off, script stream handling), which must stay last as it ends the
+   toplevel options."
+  (let ((runtime '()))
+    (loop
+      (let* ((arg (first args))
+             (entry (and (stringp arg) (assoc arg *sbcl-runtime-options* :test #'string=))))
+        (cond
+          ((equal arg "--end-runtime-options")
+           (return (append (reverse runtime) (list arg "--eval" form) (rest args))))
+          ((equal arg "--script")
+           (return (append (reverse runtime)
+                           (remove-if (lambda (o) (member o runtime :test #'equal))
+                                      *sbcl-script-runtime-options*)
+                           (list "--eval" form)
+                           args)))
+          ((and entry (> (length args) (cdr entry)))
+           (dotimes (i (1+ (cdr entry)))
+             (push (pop args) runtime)))
+          (t
+           (return (append (reverse runtime) (list "--eval" form) args))))))))
+
 (defun lisp-startup (program form rest)
-  (cond
-    ((string-equal program "ros") (append (list "-e" form) rest))
-    ((string-equal program "ecl") (append (list "-eval" form) rest))
-    ((member program '("sbcl" "ccl" "abcl") :test #'string-equal)
-     (append (list "--eval" form) rest))
-    (t rest)))
+  "REST, the arguments of PROGRAM, with FORM evaluated at startup."
+  (let ((name (pathname-name (uiop:parse-native-namestring program))))
+    (cond
+      ((string-equal name "ros") (append (list "-e" form) rest))
+      ((string-equal name "ecl") (append (list "-eval" form) rest))
+      ((string-equal name "sbcl") (sbcl-startup form rest))
+      ((member name '("ccl" "abcl") :test #'string-equal)
+       (append (list "--eval" form) rest))
+      (t rest))))
+
+(defun run-startup-form (directory)
+  "The form `cl-repo run` starts a lisp with: load ASDF, take cl-repo's fasl
+   root (OUTPUT-TRANSLATIONS-FORM), and the project's source registry."
+  (with-standard-io-syntax
+    (format nil "(progn (require \"asdf\") ~s (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s))"
+            (output-translations-form)
+            (namestrings (source-registry-form (project-registry-directories directory)
+                                               :locked (locked-versions directory)
+                                               :extra (explicit-source-registry-entries))))))
 
 (defun cmd-run (argv &key (directory (uiop:getcwd)) system overlay)
   "Sync (SYSTEM, else every project system), then exec ARGV. A lisp
    implementation is started with the source registry already configured.
    CL_SOURCE_REGISTRY is not exported. The startup form loads ASDF itself and
    names it only through FIND-SYMBOL, so it reads and runs whatever options
-   come before it (ros +Q starts without ASDF)."
+   come before it (ros +Q starts without ASDF). For sbcl it follows the runtime
+   options (SBCL-STARTUP). The sync's own messages go to stderr: stdout is the
+   command's, for stdio servers (ACP, MCP) started this way (#130)."
   (when (null argv)
     (error "cl-repo: run requires a command"))
-  (cmd-sync :directory directory :system system :overlay overlay)
-  (let* ((form (format nil "(progn (require \"asdf\") (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s))"
-                       (source-registry-form (project-registry-directories directory)
-                                             :locked (locked-versions directory)
-                                             :extra (explicit-source-registry-entries))))
+  (let ((*standard-output* *error-output*))
+    (cmd-sync :directory directory :system system :overlay overlay))
+  (let* ((form (run-startup-form directory))
          (args (lisp-startup (first argv) form (rest argv)))
          (code (nth-value 2 (uiop:run-program (cons (first argv) args)
                                               :ignore-error-status t

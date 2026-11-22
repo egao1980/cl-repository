@@ -34,6 +34,16 @@ exec ros +Q -- $0 "$@"
        `(:source-registry (:also-exclude ".qlot" ".cl-repository")
                           ,@(mapcar (lambda (tree) `(:tree ,(namestring tree))) trees)
                           :ignore-inherited-configuration))
+      ;; cl-repo's own fasl root, <XDG_CACHE_HOME>/common-lisp/cl-repo/<impl>/:
+      ;; fasls a Quicklisp image compiled (#+quicklisp code) broke cl-repo
+      ;; images through the shared cache (#121). Same form as
+      ;; cl-repository-client/asdf-integration:output-translations-form.
+      (unless (or (member :quicklisp *features*)
+                  (uiop:getenvp "ASDF_OUTPUT_TRANSLATIONS"))
+        (asdf:initialize-output-translations
+         `(:output-translations
+           (t (,(uiop:xdg-cache-home "common-lisp" "cl-repo" :implementation) :**/ :*.*.*))
+           :inherit-configuration)))
       ;; Load chatter (cl-unicode prints at load) goes to stderr: stdout is
       ;; for command output such as V=$(cl-repo version).
       (let ((*standard-output* *error-output*))
