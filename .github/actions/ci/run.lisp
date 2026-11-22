@@ -82,6 +82,15 @@
    Checkout is added only after the client is loaded, then cleared so the
    next find-system re-reads the system under test."
   (let ((client (cl-repository-ci-lib:nonempty-env "CL_REPOSITORY_DEST")))
+    ;; cl-repo's fasl root (cl-repository#121), as roswell/cl-repo.ros sets it.
+    ;; A Quicklisp image keeps ASDF's default. docker/ci-base/install.sh bakes
+    ;; the client's fasls with this same form.
+    (unless (or (member :quicklisp *features*)
+                (uiop:getenvp "ASDF_OUTPUT_TRANSLATIONS"))
+      (asdf:initialize-output-translations
+       `(:output-translations
+         (t (,(uiop:xdg-cache-home "common-lisp" "cl-repo" :implementation) :**/ :*.*.*))
+         :inherit-configuration)))
     (when client
       (format t "~&; ci: load client from ~a~%" client)
       (asdf:initialize-source-registry (%registry-form (list client))))

@@ -5,7 +5,8 @@
   (:export #:configure-asdf-source-registry
            #:preferred-install-trees
            #:*locked-versions*
-           #:load-system-init-files))
+           #:load-system-init-files
+           #:output-translations-form))
 (in-package :cl-repository-client/asdf-integration)
 
 (defun registry-mentions-p (parameter directory)
@@ -20,6 +21,24 @@
                     (uiop:pathname-equal (uiop:ensure-directory-pathname (second entry))
                                          (uiop:ensure-directory-pathname directory))))
              (rest parameter))))
+
+(defun output-translations-form ()
+  "A form, readable before ASDF or UIOP is loaded (it names them only through
+   FIND-SYMBOL), that gives the image cl-repo's own fasl root:
+   <XDG_CACHE_HOME>/common-lisp/cl-repo/<implementation>/. cl-repo images
+   run without Quicklisp; fasls compiled where Quicklisp was loaded
+   (#+quicklisp code, rove) broke them through the shared ~/.cache/common-lisp
+   (#121). An image that has Quicklisp, or that ASDF_OUTPUT_TRANSLATIONS
+   configures, keeps ASDF's default. roswell/cl-repo.ros and the ci action's
+   run.lisp inline the same form for the client image."
+  '(unless (or (member :quicklisp *features*)
+               (funcall (find-symbol "GETENVP" "UIOP") "ASDF_OUTPUT_TRANSLATIONS"))
+     (funcall (find-symbol "INITIALIZE-OUTPUT-TRANSLATIONS" "ASDF")
+              (list :output-translations
+                    (list t (list (funcall (find-symbol "XDG-CACHE-HOME" "UIOP")
+                                           "common-lisp" "cl-repo" :implementation)
+                                  :**/ :*.*.*))
+                    :inherit-configuration))))
 
 (defvar *locked-versions* nil
   "Alist system → version from the project's cl-repo.lock (REGISTER-PROJECT

@@ -116,11 +116,22 @@ if [[ -n "${GITHUB_TOKEN:-}" ]] && grep -rqsF -- "${GITHUB_TOKEN}" "${CI_HOME}" 
   exit 1
 fi
 
-# Prove the baked client loads without the checkout tree.
+# cl-repo's fasl root (cl-repository#121): roswell/cl-repo.ros and the ci
+# action's run.lisp put the client's fasls under
+# ${XDG_CACHE_HOME}/common-lisp/cl-repo/<impl>/ unless Quicklisp is loaded.
+# Bake with the same form, so jobs find them. dep-cache caches
+# ${XDG_CACHE_HOME}/common-lisp, which holds both roots.
+fasl_root_form='(unless (or (member :quicklisp *features*) (uiop:getenvp "ASDF_OUTPUT_TRANSLATIONS")) (asdf:initialize-output-translations (list :output-translations (list t (list (uiop:xdg-cache-home "common-lisp" "cl-repo" :implementation) :**/ :*.*.*)) :inherit-configuration)))'
+
+# Prove the baked client loads without the checkout tree (the run.lisp load).
 CL_REPOSITORY_DEST="${CLIENT_DEST}" ros \
+  -e "${fasl_root_form}" \
   -e '(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:ensure-directory-pathname (uiop:getenv "CL_REPOSITORY_DEST"))) :ignore-inherited-configuration))' \
   -e '(asdf:load-system "cl-repository-client")' \
   -e '(format t "~&ci-base client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' \
   -q
-# The load above compiled the client; jobs only load these fasls.
+# The cl-repo command (ros +Q, no Quicklisp): its own fasl root.
+CL_REPOSITORY_DEST="${CLIENT_DEST}" CL_REPOSITORY_CLIENT_DIR="${client_dir}" \
+  ros +Q -- "${client_dir}/roswell/cl-repo.ros" --help >/dev/null
+# The loads above compiled the client; jobs only load these fasls.
 ls -d "${XDG_CACHE_HOME}"/common-lisp/*/ >/dev/null

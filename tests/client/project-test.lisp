@@ -549,3 +549,58 @@
       (asdf:clear-system "cl-repo-99-side")
       (asdf:initialize-source-registry saved)
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest sbcl-startup-eval-follows-the-runtime-options
+  "#130: the startup --eval goes after SBCL's runtime options; --script keeps
+   its runtime implications and stays last."
+  (let ((f "F"))
+    (flet ((start (&rest args) (cl-repository-client/project::lisp-startup "sbcl" f args)))
+      (ok (equal (start "--script" "x.lisp")
+                 '("--noinform" "--disable-ldb" "--lose-on-corruption" "--end-runtime-options"
+                   "--eval" "F" "--script" "x.lisp")))
+      (ok (equal (start "--dynamic-space-size" "4GB" "--noinform" "--script" "x.lisp" "a")
+                 '("--dynamic-space-size" "4GB" "--noinform" "--disable-ldb"
+                   "--lose-on-corruption" "--end-runtime-options"
+                   "--eval" "F" "--script" "x.lisp" "a")))
+      (ok (equal (start "--noinform" "--non-interactive" "--eval" "(x)")
+                 '("--noinform" "--eval" "F" "--non-interactive" "--eval" "(x)")))
+      (ok (equal (start "--core" "c.core" "--end-runtime-options" "--load" "y")
+                 '("--core" "c.core" "--end-runtime-options" "--eval" "F" "--load" "y")))
+      (ok (equal (start "--non-interactive") '("--eval" "F" "--non-interactive")))
+      (ok (equal (start) '("--eval" "F"))))
+    (ok (equal (cl-repository-client/project::lisp-startup "/usr/local/bin/sbcl" f '("--script" "x"))
+               (cl-repository-client/project::lisp-startup "sbcl" f '("--script" "x")))
+        "a path to sbcl is sbcl")
+    (ok (equal (cl-repository-client/project::lisp-startup "ros" f '("run"))
+               '("-e" "F" "run")))))
+
+#+sbcl
+(deftest run-script-stdout-is-the-script-only
+  "#130 + #121: `cl-repo run -- sbcl --script FILE` with the real startup form.
+   stdout carries only the script's output (no banner), ASDF and the project
+   registry are set up, and fasls go to cl-repo's own root."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-130-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (script (merge-pathnames "s.lisp" dir)))
+    (ensure-directories-exist dir)
+    (with-open-file (o script :direction :output)
+      (write-string "(format t \"out ~a~%\" (namestring (asdf:apply-output-translations \"/x/y.fasl\")))" o))
+    (unwind-protect
+         (let* ((form (cl-repository-client/project::run-startup-form dir))
+                (args (cl-repository-client/project::lisp-startup
+                       "sbcl" form
+                       (list "--core" (uiop:native-namestring sb-ext:*core-pathname*)
+                             "--script" (uiop:native-namestring script))))
+                (out (uiop:run-program (cons (uiop:native-namestring sb-ext:*runtime-pathname*) args)
+                                       :output :string :error-output nil
+                                       :ignore-error-status t)))
+           (ok (eql 0 (search "out " out)) "the script's line comes first")
+           (ok (search "/common-lisp/cl-repo/" out) "cl-repo's fasl root")
+           (ok (not (search "This is SBCL" out)) "no banner"))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest output-translations-form-reads-without-asdf
+  "#121: the child form prints and reads back with standard syntax."
+  (let ((form (cl-repository-client/asdf-integration:output-translations-form)))
+    (ok (equal form (with-standard-io-syntax
+                      (read-from-string (prin1-to-string form)))))))
