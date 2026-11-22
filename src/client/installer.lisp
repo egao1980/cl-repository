@@ -42,6 +42,9 @@
            #:*requested-overlay*
            #:create-provides-symlinks
            #:drop-sibling-asds
+           #:provides-link-target
+           #:claim-system-directory
+           #:drop-stale-provides-links
            #:parse-ocicl-layer-info))
 (in-package :cl-repository-client/installer)
 
@@ -166,7 +169,9 @@
            (version (or (and config (cl-oci/config:config-version config)) "latest"))
            (strip-prefix (compute-strip-prefix name version))
            (install-dir (system-install-path name version)))
-      ;; Ensure install directory
+      ;; A provides link systems/NAME -> systems/OTHER/ would put this install
+      ;; in OTHER's directory (#124, #128).
+      (claim-system-directory name)
       (ensure-directories-exist (merge-pathnames "x" install-dir))
       ;; Extract universal layers (strip OCICL-compatible prefix)
       (when universal-manifest
@@ -202,6 +207,7 @@
       ;; Create symlinks for provided system names
       (when config
         (drop-sibling-asds install-dir name (config-provides config))
+        (drop-stale-provides-links name (config-provides config))
         (create-provides-symlinks name (config-provides config)))
       (record-file-manifest install-dir)
       (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
@@ -227,11 +233,13 @@
          (version (or (cl-oci/config:config-version config) "latest"))
          (strip-prefix (compute-strip-prefix name version))
          (install-dir (system-install-path name version)))
+    (claim-system-directory name)
     (ensure-directories-exist (merge-pathnames "x" install-dir))
     (dolist (layer-desc (manifest-layers manifest))
       (let ((blob (pull-verified-blob registry repository layer-desc)))
         (extract-layer-stripping-prefix blob install-dir strip-prefix)))
     (drop-sibling-asds install-dir name (config-provides config))
+    (drop-stale-provides-links name (config-provides config))
     (create-provides-symlinks name (config-provides config))
     (record-file-manifest install-dir)
     (msg "~&Installed ~a ~a to ~a~%" name version install-dir)
@@ -276,6 +284,7 @@
       (let* ((name (or name (repository-basename repository)))
              (version (or version reference))
              (install-dir (system-install-path name version)))
+        (claim-system-directory name)
         (ensure-directories-exist (merge-pathnames "x" install-dir))
         (dolist (ld layers)
           (let ((blob (pull-verified-blob registry repository ld)))
@@ -329,6 +338,65 @@
     #-windows
     (uiop:run-program (list "ln" "-s" target link) :error-output t)))
 
+(defun system-name-directory (name)
+  "systems/NAME/ under *SYSTEMS-ROOT*, as named (links not followed)."
+  (merge-pathnames (format nil "~a/" name) *systems-root*))
+
+(defun provides-link-target (name)
+  "When systems/NAME is a link (a provides alias) to another directory, the
+   truename of that directory; NIL when it is a real directory or absent."
+  (let ((real (ignore-errors (truename (system-name-directory name))))
+        (root (ignore-errors (truename *systems-root*))))
+    (when (and real root
+               (not (uiop:pathname-equal
+                     real (merge-pathnames (format nil "~a/" name) root))))
+      real)))
+
+(defun remove-directory-link (name)
+  "Remove the link systems/NAME itself, never what it points at."
+  (let ((link (concatenate 'string (uiop:native-namestring *systems-root*) name)))
+    #+windows
+    (uiop:run-program (list "cmd" "/c" "rmdir" link) :error-output t)
+    #-windows
+    (uiop:run-program (list "rm" link) :error-output t)))
+
+(defun claim-system-directory (name)
+  "Make systems/NAME a directory of package NAME's own before installing into
+   it. A provides link left there by another package (json-backend-yason ->
+   json-protocol/, from a json-protocol that once carried yason) would send
+   this install into that package's version directory (#124, #128).
+   → the link's old target, or NIL when there was no link."
+  (check-path-component name "system name")
+  (let ((target (provides-link-target name)))
+    (when target
+      (remove-directory-link name)
+      (msg "~&  Removed provides link ~a -> ~a (~a is a package of its own)~%"
+           name (car (last (pathname-directory target))) name)
+      target)))
+
+(defun drop-stale-provides-links (canonical-name provides)
+  "Remove the links systems/X -> systems/CANONICAL-NAME/ for names X that this
+   version of the package no longer provides (an older version did, #128).
+   Only when PROVIDES is known. → the removed names."
+  (when provides
+    (let ((own (cons (string-downcase canonical-name)
+                     (mapcar #'string-downcase provides)))
+          (canonical (ignore-errors (truename (system-name-directory canonical-name))))
+          (removed nil))
+      (when canonical
+        (dolist (dir (ignore-errors (uiop:subdirectories *systems-root*)))
+          (let ((x (car (last (pathname-directory dir)))))
+            (when (and (stringp x)
+                       (safe-path-component-p x)
+                       (not (member (string-downcase x) own :test #'string=)))
+              (let ((target (provides-link-target x)))
+                (when (and target (uiop:pathname-equal target canonical))
+                  (remove-directory-link x)
+                  (push x removed)
+                  (msg "~&  Removed provides link ~a -> ~a (no longer provided)~%"
+                       x canonical-name)))))))
+      (nreverse removed))))
+
 (defun test-asd-name-p (name)
   "NAME (an .asd file name) looks like a test system's: never a package of its
    own, so the packager leaves it out of provides."
@@ -353,6 +421,13 @@
                     (mapcar #'string-downcase provides)))
          (asds (directory (merge-pathnames "*.asd" install-dir)))
          (deleted nil))
+    ;; A directory reached through another package's provides link holds that
+    ;; package's files: never delete there (#128).
+    (when (and (uiop:subpathp install-dir (system-name-directory name))
+               (provides-link-target name))
+      (msg "~&  Warning: ~a is reached through a provides link; keeping its .asd files~%"
+           install-dir)
+      (return-from drop-sibling-asds nil))
     (when (and provides
                (some (lambda (asd)
                        (member (string-downcase (pathname-name asd)) own :test #'string=))
