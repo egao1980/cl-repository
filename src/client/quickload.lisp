@@ -310,6 +310,14 @@
                                                      :with with :minimum minimum)))
          (dolist (entry plan)
            (let* ((name (car entry))
+                  ;; MINIMUM is what SYSTEMS were asked for at. The rest of
+                  ;; the plan is installed at the version resolved: an
+                  ;; installed compression-protocol 0.3.0 is not "new
+                  ;; enough" for a plan that upgrades it to 0.4.0 because
+                  ;; it is above http-encoding-snappy's minimum 0.1.1 (#149).
+                  (minimum (and (member name system-list
+                                        :key #'asdf-primary-system-name :test #'string=)
+                                minimum))
                   (ver (if minimum nil (cdr entry))))
              (when (and minimum (not force) (system-already-installed-p name)
                         (installed-new-enough-p name nil minimum))

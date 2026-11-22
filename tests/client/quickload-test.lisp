@@ -722,3 +722,36 @@
        (ok (search "package not found in registry" log))
        (ok (search "DENIED: requested access to the resource is denied" log))
        (ng (search "#(" log))))))
+
+(deftest test-minimum-applies-to-the-requested-system-only
+  "ensure-systems http149 :minimum 0.1.1 with a plan that upgrades an
+   installed x149 0.3.0 to 0.4.0: x149 is installed at 0.4.0. The root's
+   minimum made 0.3.0 \"new enough\" and the upgrade was skipped (#149)."
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "~a/cl-repo-min149-~36r/" (uiop:temporary-directory)
+                        (random (expt 36 8) (make-random-state t)))))
+         (plan-sym 'cl-repository-client/quickload::compute-install-plan)
+         (install-sym 'cl-repository-client/quickload::ensure-system-installed)
+         (orig-plan (fdefinition plan-sym))
+         (orig-install (fdefinition install-sym))
+         (installs '()))
+    (ensure-directories-exist (merge-pathnames "x149/0.3.0/" root))
+    (unwind-protect
+         (let ((cl-repository-client/installer::*systems-root* root)
+               (*standard-output* (make-broadcast-stream)))
+           (setf (fdefinition plan-sym)
+                 (lambda (&rest args)
+                   (declare (ignore args))
+                   (list (cons "x149" "0.4.0") (cons "http149" "0.1.1"))))
+           (setf (fdefinition install-sym)
+                 (lambda (name &key version minimum)
+                   (push (list name version minimum) installs)
+                   nil))
+           (cl-repository-client/quickload:ensure-systems '("http149") :minimum "0.1.1")
+           (ok (member '("x149" "0.4.0" nil) installs :test #'equal)
+               "the upgrade is installed at the planned version")
+           (ok (member '("http149" nil "0.1.1") installs :test #'equal)
+               "the requested system keeps its minimum"))
+      (setf (fdefinition plan-sym) orig-plan
+            (fdefinition install-sym) orig-install)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))
