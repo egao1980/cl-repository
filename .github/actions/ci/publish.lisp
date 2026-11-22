@@ -19,6 +19,13 @@
             (error (e)
               (format t "~&  Warning: system-name anchor ~a failed: ~A~%" sys-repo e))))))))
 
+(defun %move-file (from to)
+  "Move FROM to TO. RENAME-FILE fails with EXDEV when they are on different
+   mounts (RUNNER_TEMP vs the workspace in a container job), so copy and
+   delete instead."
+  (uiop:copy-file from to)
+  (delete-file from))
+
 (defun %stash-sibling-asds (files)
   "Move FILES out of the checkout for the build. → ((stashed . original) …)."
   (when files
@@ -31,14 +38,14 @@
       (loop for file in files
             for dest = (merge-pathnames (file-namestring file) dir)
             do (when (probe-file dest) (delete-file dest))
-               (rename-file file dest)
+               (%move-file file dest)
                (format t "~&; ci: not packaging sibling ~a (a package of its own)~%"
                        (file-namestring file))
             collect (cons dest file)))))
 
 (defun %restore-sibling-asds (stashed)
   (loop for (dest . file) in stashed
-        do (rename-file dest file)))
+        do (%move-file dest file)))
 
 (defun %checkout-system (system)
   "SYSTEM as defined by the checkout. An installed copy that provides the same
