@@ -54,8 +54,8 @@
     (lambda ()
       (ok (cl-oci-client/http:ensure-http-backend))
       (ok (member (cl-oci-client/http:http-backend-kind) '(:async :dexador)))))
-  ;; unset: the same as auto
-  (ok (eq :auto (cl-oci-client/http::%default-backend-choice)))
+  ;; unset: the same as auto, except on ABCL (no socket fd for libuv)
+  (ok (eq #+abcl :dexador #-abcl :auto (cl-oci-client/http::%default-backend-choice)))
   (%with-backend-env "bogus"
     (lambda ()
       (ok (signals (cl-oci-client/http:ensure-http-backend) 'error)))))

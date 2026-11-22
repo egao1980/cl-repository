@@ -41,8 +41,13 @@
    where cl+ssl could open an OpenSSL other than cl-stack-ssl's (tests run in
    a fresh image since 0.27.12; http-backend-async 0.2.16 loads cl-stack-ssl
    before cl+ssl). The checkout-client-async CI job runs this default on
-   Linux, macOS and Windows."
-  :auto)
+   Linux, macOS and Windows.
+   ABCL gets :DEXADOR: its sockets are Java objects with no OS descriptor, so
+   the async backend loads but every request fails in register-io (\"cannot
+   extract socket fd\"), which the load-failure fallback cannot catch
+   (cl-repository#144)."
+  #+abcl :dexador
+  #-abcl :auto)
 
 (defun %env-backend ()
   (let ((v (uiop:getenv "CL_REPO_HTTP_BACKEND")))
