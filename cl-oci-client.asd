@@ -18,6 +18,7 @@
   :serial t
   :components ((:file "registry-test")
                (:file "pin-test")
+               (:file "transport-test")
                (:file "all"))
   :perform (test-op (o c)
             (unless (symbol-call :rove :run c)

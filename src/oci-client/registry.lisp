@@ -1,7 +1,7 @@
 (defpackage :cl-oci-client/registry
   (:use :cl)
-  (:import-from :cl-oci-client/conditions #:registry-error #:auth-error #:not-found-error)
-  (:import-from :babel #:octets-to-string)
+  (:import-from :cl-oci-client/conditions #:registry-error #:auth-error #:not-found-error
+                #:error-body-text)
   (:import-from :cl-oci-client/auth
                 #:auth-config #:auth-config-token #:make-auth-config
                 #:obtain-token #:make-auth-headers)
@@ -57,13 +57,6 @@
             (setf (registry-auth registry) (make-auth-config :token token)))
         t))))
 
-(defun error-body-text (body)
-  "BODY of a failed registry response as text. Registries answer errors with a
-   JSON document; a request that forces binary hands back octets."
-  (if (typep body '(vector (unsigned-byte 8)))
-      (octets-to-string body :encoding :utf-8 :errorp nil)
-      body))
-
 (defun signal-registry-error (status url body)
   "Signal the REGISTRY-ERROR subtype for HTTP STATUS: AUTH-ERROR for 401/403,
    NOT-FOUND-ERROR for 404, REGISTRY-ERROR otherwise."
@@ -81,7 +74,7 @@
                        :headers (make-auth-headers (registry-auth registry))
                        :force-binary nil
                        :verify (%verify registry))
-      (declare (ignore body))
+      (declare (ignorable body))
       (cond
         ((<= 200 status 299) t)
         ((= status 401)

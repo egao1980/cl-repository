@@ -5,7 +5,7 @@
   (:import-from :cl-base64)
   (:import-from :babel #:octets-to-string)
   (:import-from :quri #:url-encode)
-  (:import-from :cl-oci-client/conditions #:auth-error)
+  (:import-from :cl-oci-client/conditions #:auth-error #:error-body-text)
   (:import-from :cl-oci-client/http #:http-exchange)
   (:export #:auth-config
            #:auth-config-username
@@ -57,7 +57,7 @@
                                     :force-binary nil
                                     :verify (not insecure))
                    (unless (<= 200 status 299)
-                     (error 'auth-error :status status :url url :body resp))
+                     (error 'auth-error :status status :url url :body (error-body-text resp)))
                    resp))
            (text (etypecase body
                    (string body)

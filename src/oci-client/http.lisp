@@ -18,13 +18,26 @@
                 #:make-http-client
                 #:response-status
                 #:response-headers
-                #:response-body)
+                #:response-body
+                #:http-connection-error
+                #:http-timeout-error
+                #:http-tls-error
+                #:http-protocol-error
+                #:unsupported-operation
+                #:unsupported-content-coding
+                #:http-retry
+                #:make-http-retry
+                #:retry-should-retry-p
+                #:retry-delay-seconds)
   (:import-from :http #:request)
   (:import-from :cl-oci-client/pin #:with-loaded-systems-pinned)
+  (:import-from :cl-oci-client/conditions #:registry-transport-error)
   (:export #:ensure-http-backend
            #:http-backend-kind
            #:http-exchange
-           #:response-header-value))
+           #:response-header-value
+           #:transport-failure-p
+           #:*transport-retry*))
 (in-package :cl-oci-client/http)
 
 (defvar *http-backend-kind* nil
@@ -143,14 +156,72 @@ CL_REPO_HTTP_BACKEND=async)."
    :DEFAULT would probe every coding, load native codecs (brotli, zstd)
    mid-sync when the install tree has them, and warn about the others.")
 
+(defun transport-failure-p (condition)
+  "True when CONDITION means the request got no complete response: a
+   connection, TLS or timeout failure, a truncated response (http-backend-async
+   signals \"incomplete HTTP response\" as an HTTP-PROTOCOL-ERROR), or, on the
+   dexador backend, a socket or stream error it lets through unwrapped. Not an
+   unsupported operation or coding: retrying those cannot help."
+  (flet ((named-type-p (package name)
+           (let ((type (and (find-package package) (find-symbol name package))))
+             (and type (typep condition type)))))
+    (or (typep condition '(or http-connection-error http-timeout-error http-tls-error))
+        (and (typep condition 'http-protocol-error)
+             (not (typep condition '(or unsupported-operation unsupported-content-coding))))
+        (typep condition 'stream-error)
+        (named-type-p "USOCKET" "SOCKET-ERROR")
+        (named-type-p "USOCKET" "NS-ERROR")
+        (named-type-p "CL+SSL" "SSL-ERROR"))))
+
+(defclass transport-retry (http-retry) ()
+  (:documentation
+   "http-protocol's retry policy, also retrying every TRANSPORT-FAILURE-P
+    condition (a truncated response is an HTTP-PROTOCOL-ERROR, which the base
+    policy does not retry) as a connection failure."))
+
+(defmethod retry-should-retry-p ((retry transport-retry) attempt method
+                                 &key status condition response)
+  (if (and condition
+           (transport-failure-p condition)
+           (not (typep condition '(or http-connection-error http-timeout-error http-tls-error))))
+      (call-next-method retry attempt method
+                        :status status :response response
+                        :condition (make-condition 'http-connection-error
+                                                   :message (princ-to-string condition)))
+      (call-next-method)))
+
+(defvar *transport-retry*
+  (make-instance 'transport-retry :total 3 :backoff-factor 1 :status nil
+                                  :allowed-methods '(:get :head))
+  "Retry policy HTTP-EXCHANGE applies to transport failures: three retries of a
+   GET or HEAD after 1, 2 and 4 seconds. Response statuses are not retried
+   here; callers decide what a 5xx means. NIL disables retries.")
+
+(defun %send-with-retry (method url retry thunk)
+  "Call THUNK, retrying transport failures per RETRY. When they persist,
+   signal REGISTRY-TRANSPORT-ERROR naming METHOD, URL and the last cause."
+  (loop for attempt from 1
+        do (handler-case (return (funcall thunk))
+             ;; Other errors are not caught: they keep their restarts.
+             ((and error (satisfies transport-failure-p)) (e)
+               (unless (and retry (retry-should-retry-p retry attempt method :condition e))
+                 (error 'registry-transport-error
+                        :method method :url url :cause e :attempts attempt))
+               (sleep (retry-delay-seconds retry attempt))))))
+
 (defun http-exchange (method url &key headers content (force-binary t) (verify t)
-                             (decompress t) timeout)
+                             (decompress t) timeout (retry *transport-retry*))
   "Perform METHOD on URL via http-protocol.
 
    Returns (values body status response-headers) on any completed response
    (including 4xx/5xx) — call sites decide whether to challenge/auth or error.
    This matches Dexador's multi-value shape while using httpx-style non-raising
    defaults (:raise-for-status nil).
+
+   A request that gets no complete response (TRANSPORT-FAILURE-P) is retried
+   per RETRY (*TRANSPORT-RETRY*: GET and HEAD) and then signals
+   REGISTRY-TRANSPORT-ERROR: callers must not read it as \"not found\"
+   (#120, #132).
 
    TIMEOUT (seconds, a plist or an HTTP-TIMEOUT) overrides the client's default
    for this request; http-backend-async applies it to the whole exchange, body
@@ -161,15 +232,18 @@ CL_REPO_HTTP_BACKEND=async)."
   (with-loaded-systems-pinned ()
     (ensure-http-backend)
     (let* ((client (%http-client verify))
-           (res (request method url
-                         :client client
-                         :headers headers
-                         :content content
-                         :force-binary force-binary
-                         :decompress decompress
-                         :accept-encoding *accept-encoding*
-                         :timeout timeout
-                         :raise-for-status nil)))
+           (res (%send-with-retry
+                 method url retry
+                 (lambda ()
+                   (request method url
+                            :client client
+                            :headers headers
+                            :content content
+                            :force-binary force-binary
+                            :decompress decompress
+                            :accept-encoding *accept-encoding*
+                            :timeout timeout
+                            :raise-for-status nil)))))
       (values (response-body res)
               (response-status res)
               (response-headers res)))))
