@@ -25,6 +25,7 @@
   (:import-from :cl-repository-client/source-policy
                 #:system-denied-p #:registry-allowed-p #:oci-allowed-p)
   (:import-from :cl-repository-client/protected-systems #:implementation-system-p)
+  (:import-from :cl-repository-client/dep-satisfy #:system-satisfied-p)
   (:import-from :cl-repository-client/config-store #:stored-entry #:store-entry)
   (:import-from :cl-oci/media-types #:+oci-image-manifest-v1+)
   (:export #:build-install-plan
@@ -538,13 +539,21 @@
 ;;; so the newest version satisfies whatever an older one does, and the
 ;;; widening is needed only around exact versions (the root's, the installed
 ;;; pins). A package's KNOWN versions (every version it has, or its pin)
-;;; decide, as before, whether a constraint can be met at all: one no version
-;;; meets adds no clause.
+;;; decide, as before, whether a constraint can be met at all.
+;;;
+;;; An installed package is pinned at its installed version only while that
+;;; version meets every minimum asked of it. A dependent asking for more (a
+;;; new cl-stack-snappy needing compression-protocol 0.4.0 over an installed
+;;; 0.3.0) releases the pin: the package is looked up like any other and the
+;;; plan upgrades it (#149). A minimum that no version meets, in the registry
+;;; or in a copy ASDF finds, forbids the dependent version: resolution fails
+;;; rather than plan an image that cannot load.
 
-(defstruct (pkg-state (:constructor make-pkg-state (name known cands)))
+(defstruct (pkg-state (:constructor make-pkg-state (name known cands &optional pin)))
   name
   known                                 ; versions that exist, newest first
   cands                                 ; versions that may be loaded, newest first
+  pin                                   ; the installed version it is held at, or NIL
   (entries nil))                        ; loaded (version . config), newest first
 
 (defun newest-first (versions)
@@ -631,30 +640,79 @@
                                     name dn)))
           (push (cons (asdf-primary-system-name dn) (dep-version dep)) requests))))))
 
+(defun pin-meets-p (pin minimum)
+  (or (null minimum) (version-satisfies-p pin minimum)))
+
+(defun installed-pin (name requests installed force)
+  "The installed version of NAME to hold it at: it meets every minimum
+   REQUESTS ((name . minimum) ...) ask of NAME. NIL when FORCE, when NAME is
+   not installed, or when a request asks for more."
+  (let ((pin (and (not force) (cdr (assoc name installed :test #'string=)))))
+    (and pin
+         (every (lambda (r)
+                  (or (string/= name (car r)) (pin-meets-p pin (cdr r))))
+                requests)
+         pin)))
+
+(defun outgrown-pins (states requests)
+  "((state . minimum) ...): the pinned states of STATES that a request in
+   REQUESTS asks more of than the pin, each once, with its highest minimum."
+  (let ((out nil))
+    (dolist (r requests (nreverse out))
+      (let ((state (gethash (car r) states)))
+        (when (and state (pkg-state-pin state)
+                   (not (pin-meets-p (pkg-state-pin state) (cdr r))))
+          (let ((old (assoc state out)))
+            (cond ((null old) (push (cons state (cdr r)) out))
+                  ((version< (cdr old) (cdr r)) (setf (cdr old) (cdr r))))))))))
+
+(defun release-pin (state minimum registries)
+  "Let STATE, pinned at its installed version, take any version: KNOWN
+   becomes every version the registries have (and the installed one).
+   Returns the versions to load: the newest that meets MINIMUM, or none."
+  (let* ((pin (pkg-state-pin state))
+         (known (newest-first
+                 (adjoin pin (fetch-available-versions (pkg-state-name state) registries)
+                         :test #'string=))))
+    (msg "~&; cl-repo: installed ~a ~a is below the ~a a dependent needs; resolving it again~%"
+         (pkg-state-name state) pin minimum)
+    (setf (pkg-state-pin state) nil
+          (pkg-state-known state) known
+          (pkg-state-cands state) known)
+    (let ((newest (first (unloaded-candidates state minimum))))
+      (and newest (list newest)))))
+
 (defun expand-universe (states requests registries installed force)
   "Add the packages of REQUESTS ((name . minimum) ...) and everything they
    reach to STATES, one candidate each, level by level: the version lists of
-   a level are fetched in one batch, then the configs of their candidates."
+   a level are fetched in one batch, then the configs of their candidates.
+   A request asking more of a pinned package than its installed version
+   releases the pin (RELEASE-PIN)."
   (loop while requests
-        do (let ((fresh (remove-duplicates
+        do (let ((outgrown (outgrown-pins states requests))
+                 (fresh (remove-duplicates
                          (remove-if (lambda (r) (gethash (car r) states)) requests)
-                         :key #'car :test #'string= :from-end t)))
+                         :key #'car :test #'string= :from-end t))
+                 (level requests))
              (setf requests nil)
              (fetch-versions-batch
-              (loop for (name) in fresh
-                    unless (and (not force) (assoc name installed :test #'string=))
-                      collect name)
+              (nconc (mapcar (lambda (o) (pkg-state-name (car o))) outgrown)
+                     (loop for (name) in fresh
+                           unless (installed-pin name level installed force)
+                             collect name))
               registries)
              (let ((plan nil))
+               (loop for (state . minimum) in outgrown
+                     do (let ((versions (release-pin state minimum registries)))
+                          (when versions (push (cons state versions) plan))))
                (loop for (name . minimum) in fresh
-                     do (let* ((pinned (and (not force)
-                                            (cdr (assoc name installed :test #'string=))))
+                     do (let* ((pinned (installed-pin name level installed force))
                                (versions (cond (pinned (list pinned))
                                                ((fetch-available-versions name registries))
                                                (minimum (list minimum))))
                                (known (newest-first versions)))
                           (when known
-                            (let ((state (make-pkg-state name known known)))
+                            (let ((state (make-pkg-state name known known pinned)))
                               (setf (gethash name states) state)
                               ;; the newest that meets this first request; the
                               ;; newest of all when none does
@@ -785,6 +843,19 @@
 
 ;;; Formula building
 
+(defvar *unmet-minimums* nil
+  "((dependent version dependency minimum) ...) seen by LOCALLY-MET-P in this
+   resolution: a minimum no known version meets, nor a copy ASDF finds.")
+
+(defun locally-met-p (name minimum)
+  "True when MINIMUM of NAME, which no version in the registries meets, is met
+   by a copy ASDF finds that a fresh image loads too (SYSTEM-SATISFIED-P): an
+   unpublished checkout on the source registry. Only then is the requirement
+   left to ASDF; otherwise it forbids the dependent version (#149)."
+  (or (null minimum)
+      (ignore-errors (system-satisfied-p name minimum))))
+
+
 (defun build-formula (root-name root-version universe installed &key force known)
   "Build SAT formula from the package universe.
    KNOWN: function of a package name → the versions it has, which decide
@@ -792,7 +863,7 @@
   (let ((terms nil))
     ;; Root must be true
     (push (sat-var (pkg-var root-name root-version)) terms)
-    ;; Pin installed systems
+    ;; Pin installed systems (INSTALLED: the pins that hold)
     (unless force
       (dolist (pair installed)
         (let* ((name (car pair))
@@ -819,16 +890,22 @@
                         (dv (dep-version dep))
                         (dep-entries (gethash dn universe)))
                    (when (and dep-entries
-                              (satisfying (if known
-                                              (funcall known dn)
-                                              (mapcar #'car dep-entries))
-                                          dv))
+                              (or (satisfying (if known
+                                                  (funcall known dn)
+                                                  (mapcar #'car dep-entries))
+                                              dv)
+                                  (and (not (locally-met-p dn dv))
+                                       ;; No version meets DV anywhere: the
+                                       ;; OR is empty and forbids ENTRY-VAR.
+                                       (pushnew (list name ver dn dv) *unmet-minimums*
+                                                :test #'equal))))
                      (push (sat-imply (sat-var entry-var)
                                       (sat-or (mapcar #'sat-var
                                                       (matching-versions dep-entries dn dv))))
                            terms)))))))))
      universe)
     (sat-and terms)))
+
 
 (defun matching-versions (entries dep-name version-constraint)
   "Return list of pkg-var strings for versions of DEP-NAME that satisfy VERSION-CONSTRAINT."
@@ -865,14 +942,28 @@
 
 ;;; Main entry point
 
+(defun held-pins (root-name root-pin installed states)
+  "The pairs of INSTALLED still held at their installed version: the root's
+   ROOT-PIN, and each package whose pin no dependent outgrew."
+  (loop for pair in installed
+        for (name . version) = pair
+        for state = (gethash name states)
+        when (if (string= name root-name)
+                 (equal version root-pin)
+                 (and state (equal version (pkg-state-pin state))))
+          collect pair))
+
 (defun solve-lazily (root-name root-version registries installed force)
   "Solve newest first, widening around conflicts. Returns
    (values solution universe), SOLUTION NIL when unsatisfiable."
-  (let ((states (make-hash-table :test 'equal))
-        (pinned (and (not force) (cdr (assoc root-name installed :test #'string=)))))
-    ;; The root is wanted at ROOT-VERSION exactly (its pin when installed);
-    ;; its other versions only tell a dependent asking for more that it can
-    ;; exist, which forbids that dependent's version.
+  (let* ((states (make-hash-table :test 'equal))
+         (installed-root (and (not force) (cdr (assoc root-name installed :test #'string=))))
+         ;; An installed root is kept only at the version asked for: a
+         ;; caller re-resolves an installed root because it is too old.
+         (pinned (and installed-root (string= installed-root root-version) installed-root)))
+    ;; The root is wanted at ROOT-VERSION exactly; its other versions only
+    ;; tell a dependent asking for more that it can exist, which forbids that
+    ;; dependent's version.
     (let* ((known (newest-first
                    (if pinned
                        (list pinned)
@@ -888,7 +979,8 @@
     (loop
       (let* ((universe (universe-table states))
              (solution (sat-solve
-                        (build-formula root-name root-version universe installed
+                        (build-formula root-name root-version universe
+                                       (held-pins root-name pinned installed states)
                                        :force force
                                        :known (lambda (name)
                                                 (let ((s (gethash name states)))
@@ -921,16 +1013,20 @@
           (error 'dependency-resolution-error
                  :message (format nil "~a not found in any registry" root-name)))
         (setf root-version (select-preferred-version versions))))
-    (let ((installed (scan-installed-systems)))
+    (let ((installed (scan-installed-systems))
+          (*unmet-minimums* nil))
       (multiple-value-bind (solution universe)
           (solve-lazily root-name root-version registries installed force)
         (unless solution
           (error 'dependency-resolution-error
-                 :message (format nil "Cannot satisfy dependencies for ~a ~a~@[ (conflicts with installed systems; try :force t)~]"
-                                  root-name root-version (and (not force) installed))))
+                 :message (format nil "Cannot satisfy dependencies for ~a ~a~:[~; (conflicts with installed systems; try :force t)~]~:{; ~a ~a needs ~a ~a, which no registry has~}"
+                                  root-name root-version (and (not force) installed t)
+                                  (reverse *unmet-minimums*))))
         (let ((reached (reachable-solution root-name solution universe))
               (plan nil))
-          ;; Extract install plan: true bindings, exclude already-installed
+          ;; Extract install plan: true bindings, except versions installed
+          ;; (an installed package a dependent outgrew is planned at its
+          ;; new version)
           (dolist (binding solution)
             (when (cdr binding)
               (let ((parsed (parse-pkg-var (car binding))))
@@ -939,6 +1035,7 @@
                         (version (cdr parsed)))
                     (unless (or (not (gethash name reached))
                                 (and (not force)
-                                     (assoc name installed :test #'string=)))
+                                     (member version (installed-versions name)
+                                             :test #'string=)))
                       (push (cons name version) plan)))))))
           (values (nreverse plan) (find-missing-deps universe reached)))))))

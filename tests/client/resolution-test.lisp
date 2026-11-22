@@ -155,6 +155,65 @@
     (ok (equal '(("app" . "1.0")) (plan "app")))
     (ok (not (fetched-p fake "lib" "3.0")) "a pinned package is not looked up")))
 
+;;; An installed pin gives way to a dependent's minimum (#149). Names are
+;;; unlikely to be findable through ASDF here: LOCALLY-MET-P asks it.
+
+(deftest installed-pin-is-released-for-a-new-transitive-minimum
+  "Installed x149 0.3.0; app149 → a149 (new) → x149 >= 0.4.0: the plan
+   upgrades x149 to 0.4.0."
+  (with-fake (fake '(("app149" ("1.0" "a149"))
+                     ("a149" ("1.0" ("x149" . "0.4.0")))
+                     ("x149" ("0.3.0") ("0.4.0")))
+                   :installed '(("x149" . "0.3.0")))
+    (ok (equal '(("a149" . "1.0") ("app149" . "1.0") ("x149" . "0.4.0")) (plan "app149")))))
+
+(deftest installed-pin-is-released-for-a-direct-minimum
+  (with-fake (fake '(("app149" ("1.0" ("x149" . "0.4.0")))
+                     ("x149" ("0.3.0") ("0.4.0") ("0.5.0")))
+                   :installed '(("x149" . "0.3.0")))
+    (ok (equal '(("app149" . "1.0") ("x149" . "0.5.0")) (plan "app149")))))
+
+(deftest installed-pin-is-released-when-a-later-dependent-outgrows-it
+  "x149 is pinned when first reached (a149 asks for any), then b149 a level
+   down asks for 0.4.0."
+  (with-fake (fake '(("app149" ("1.0" "a149" "c149"))
+                     ("a149" ("1.0" "x149"))
+                     ("c149" ("1.0" "b149"))
+                     ("b149" ("1.0" ("x149" . "0.4.0")))
+                     ("x149" ("0.3.0") ("0.4.0")))
+                   :installed '(("x149" . "0.3.0")))
+    (ok (equal '(("a149" . "1.0") ("app149" . "1.0") ("b149" . "1.0") ("c149" . "1.0")
+                 ("x149" . "0.4.0"))
+               (plan "app149")))))
+
+(deftest installed-root-below-the-newest-is-planned
+  "A root re-resolved because its install is too old is planned at the
+   newest version, not kept at the installed one."
+  (with-fake (fake '(("x149" ("0.3.0") ("0.4.0")))
+                   :installed '(("x149" . "0.3.0")))
+    (ok (equal '(("x149" . "0.4.0")) (plan "x149")))))
+
+(deftest unmet-minimum-of-an-installed-package-fails
+  "Installed x149 0.3.0, and no version meets a149's 0.4.0: resolution
+   fails, naming the requirement, instead of planning an image that cannot
+   load."
+  (with-fake (fake '(("app149" ("1.0" "a149"))
+                     ("a149" ("1.0" ("x149" . "0.4.0")))
+                     ("x149" ("0.2.0") ("0.3.0")))
+                   :installed '(("x149" . "0.3.0")))
+    (let ((e (handler-case (progn (plan "app149") nil)
+               (dependency-resolution-error (e) e))))
+      (ok e "signals DEPENDENCY-RESOLUTION-ERROR")
+      (ok (and e (search "a149 1.0 needs x149 0.4.0" (princ-to-string e)))
+          "names the unmet minimum"))))
+
+(deftest unmet-minimum-picks-an-older-dependent-that-fits
+  "a149 2.0 needs x149 0.9.0, which no registry has; a149 1.0 fits."
+  (with-fake (fake '(("app149" ("1.0" "a149"))
+                     ("a149" ("1.0" "x149") ("2.0" ("x149" . "0.9.0")))
+                     ("x149" ("0.3.0") ("0.4.0"))))
+    (ok (equal '(("a149" . "1.0") ("app149" . "1.0") ("x149" . "0.4.0")) (plan "app149")))))
+
 ;;; One cache per operation
 
 (deftest cache-is-shared-across-top-level-dependencies
