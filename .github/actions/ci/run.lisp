@@ -48,32 +48,32 @@
    and thus cffi-abcl — loads. abcl-asdf's maven fallback stopped resolving
    JNA on runner images shipping Maven 3.10 (Class not found: com.sun.jna.Pointer).
 
-   Do NOT (require :abcl-contrib) here: its first REQUIRE registers the contrib
-   systems (jna, jss, abcl-asdf) in the *current* ASDF source registry, and
-   %load-client re-initialises that registry with :ignore-inherited-configuration
-   — cffi-abcl's (require :jna) would then fail with \"Don't know how to REQUIRE JNA\"."
-  (dolist (entry (cl-repository-ci-lib:classpath-entries))
-    (format t "~&; ci: abcl add-to-classpath ~a~%" entry)
-    (java:add-to-classpath entry)))
+   cffi-abcl resolves 'com.sun.jna.CallbackReference (reader-upcased) through
+   JSS's case-insensitive class table. JSS fills that table from
+   java.class.path when it loads (abcl.jar only, under `java -jar`) and from
+   an ADD-TO-CLASSPATH :after method it defines. So JSS must be loaded
+   BEFORE the jars are added; otherwise the client load dies in cl+ssl with
+   ClassNotFoundException COM.SUN.JNA.CALLBACKREFERENCE (cl-repository#122).
+   Importing the jars after %load-client is too late: cl-stack-ssl needs
+   the class while the client loads.
 
-#+abcl
-(defun %abcl-import-classpath-jars ()
-  "cffi-abcl resolves 'com.sun.jna.CallbackReference (reader-upcased) through
-   JSS's case-insensitive class table. JSS fills it from an ADD-TO-CLASSPATH
-   :after method, which did not exist yet when %abcl-honour-classpath ran, so
-   import the jars explicitly once the client (and thus cffi → jss) is loaded.
-   Otherwise the HTTP stack dies with ClassNotFoundException COM.SUN.JNA.CALLBACKREFERENCE."
-  (let ((jars (remove-if-not (lambda (e) (string-equal (pathname-type e) "jar"))
-                             (cl-repository-ci-lib:classpath-entries))))
-    (when jars
-      (unless (find-package :jss)
-        (handler-case (progn (require :abcl-contrib) (require :jss))
-          (error (e) (format t "~&; ci: abcl jss unavailable: ~a~%" e))))
-      (let ((jar-import (and (find-package :jss) (find-symbol "JAR-IMPORT" :jss))))
-        (when (and jar-import (fboundp jar-import))
-          (dolist (jar jars)
-            (format t "~&; ci: abcl jss:jar-import ~a~%" jar)
-            (funcall jar-import jar)))))))
+   Require abcl-contrib, jss and jna here, all three: the first REQUIRE of
+   abcl-contrib registers the contrib systems in the *current* ASDF source
+   registry, which %load-client then replaces (:ignore-inherited-configuration).
+   cffi-abcl's own (require :jss) / (require :jna) are no-ops once the modules
+   are in *MODULES*, and fail with \"Don't know how to REQUIRE JNA\" otherwise.
+   JNA comes last, after the jars, so abcl-asdf finds com.sun.jna.Native on
+   the class path and does not go to Maven."
+  (let ((entries (cl-repository-ci-lib:classpath-entries)))
+    (when entries
+      (require :abcl-contrib)
+      (require :jss)
+      (dolist (entry entries)
+        (format t "~&; ci: abcl add-to-classpath ~a~%" entry)
+        (java:add-to-classpath entry))
+      (when (find-if (lambda (e) (search "jna" (pathname-name e) :test #'char-equal))
+                     entries)
+        (require :jna)))))
 
 #+abcl (%abcl-honour-classpath)
 
@@ -98,7 +98,6 @@
       (cl-repository-ci-lib:clear-checkout-systems))))
 
 (%load-client)
-#+abcl (%abcl-import-classpath-jars)
 
 (defun %env (name &optional default)
   (or (cl-repository-ci-lib:nonempty-env name) default))

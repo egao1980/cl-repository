@@ -263,3 +263,75 @@ jobs:
           key: ${{ steps.dep-cache.outputs.key }}
           fasl: ${{ steps.dep-cache.outputs.fasl }}
           cache-hit: ${{ steps.dep-cache.outputs.cache-hit }}
+
+  # ci action on ABCL (cl-repository#122): the test-system-impl.yml lane with
+  # this checkout's ci action, so a PR proves the client loads on ABCL
+  # (cffi-abcl + JSS + JNA from CLASSPATH) before consumers pick it up.
+  ci-action-abcl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-lisp
+        with:
+          install-sbcl: "false"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache Roswell impl
+        uses: actions/cache@v5
+        with:
+          path: ~/.roswell/impls/*/*/abcl-bin
+          key: ${{ runner.os }}-${{ runner.arch }}-ros-impl-abcl-bin-default-v1
+
+      - name: Install abcl-bin
+        run: |
+          set -euo pipefail
+          if ! ros use abcl-bin 2>/dev/null; then
+            for attempt in 1 2 3 4; do
+              if ros install abcl-bin && ros use abcl-bin; then break; fi
+              sleep $((5 * 2 ** attempt))
+            done
+          fi
+          ros -e '(format t "~&lisp ~A ~A~%" (lisp-implementation-type) (lisp-implementation-version))' -q
+
+      - name: Install JNA (CFFI on ABCL)
+        run: |
+          JNA_VER=5.14.0
+          mkdir -p "$HOME/jna"
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$HOME/jna/jna-${JNA_VER}.jar" \
+            "https://repo1.maven.org/maven2/net/java/dev/jna/jna/${JNA_VER}/jna-${JNA_VER}.jar"
+          curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 -o "$HOME/jna/jna-platform-${JNA_VER}.jar" \
+            "https://repo1.maven.org/maven2/net/java/dev/jna/jna-platform/${JNA_VER}/jna-platform-${JNA_VER}.jar"
+          {
+            echo "CLASSPATH=$HOME/jna/jna-${JNA_VER}.jar:$HOME/jna/jna-platform-${JNA_VER}.jar${CLASSPATH:+:$CLASSPATH}"
+            echo "JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED ${JAVA_TOOL_OPTIONS:-}"
+          } >> "$GITHUB_ENV"
+
+      - name: Make a demo project
+        run: |
+          mkdir -p ci-abcl-demo
+          printf '%s\n' '(defsystem "ci-abcl-demo" :version "0.0.1" :depends-on ("alexandria"))' \
+            > ci-abcl-demo/ci-abcl-demo.asd
+
+      - name: ci phase install
+        uses: ./.github/actions/ci
+        with:
+          phase: install
+          working-directory: ci-abcl-demo
+
+      - name: ci phase test
+        uses: ./.github/actions/ci
+        with:
+          phase: test
+          working-directory: ci-abcl-demo
