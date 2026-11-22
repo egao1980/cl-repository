@@ -21,6 +21,9 @@ esac
 
 mkdir -p "${CI_HOME}" "${CLIENT_DEST}"
 export HOME="${CI_HOME}"
+# ASDF fasl cache. Jobs get XDG_CACHE_HOME from activate.sh, so the client
+# fasls compiled below are reused instead of rebuilt per job (cl-repository#136).
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${CI_HOME}/.cache}"
 export ROSWELL_INSTALL_DIR="${PREFIX}"
 
 # Release downloads: retries, and GITHUB_TOKEN (a build secret) for github.com.
@@ -103,6 +106,7 @@ CL_CI_ROSWELL_DIR=${ros_home}
 CL_REPOSITORY_CLIENT_VERSION=${resolved}
 CL_REPOSITORY_DEST=${CLIENT_DEST}
 CL_REPOSITORY_CLIENT_DIR=${client_dir}
+CL_CI_XDG_CACHE_HOME=${XDG_CACHE_HOME}
 EOF
 touch "${CI_HOME}/ok"
 
@@ -118,3 +122,5 @@ CL_REPOSITORY_DEST="${CLIENT_DEST}" ros \
   -e '(asdf:load-system "cl-repository-client")' \
   -e '(format t "~&ci-base client from ~a~%" (asdf:system-source-directory "cl-repository-client"))' \
   -q
+# The load above compiled the client; jobs only load these fasls.
+ls -d "${XDG_CACHE_HOME}"/common-lisp/*/ >/dev/null

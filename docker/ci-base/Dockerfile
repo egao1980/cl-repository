@@ -15,6 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/opt/cl-ci \
     ROSWELL_INSTALL_DIR=/usr/local \
     CL_CI_HOME=/opt/cl-ci \
+    XDG_CACHE_HOME=/opt/cl-ci/.cache \
     PATH="/usr/local/bin:/opt/cl-ci/.roswell/bin:${PATH}"
 
 RUN apt-get update \
@@ -29,6 +30,7 @@ RUN apt-get update \
       python3 \
       tar \
       unzip \
+      zstd \
  && rm -rf /var/lib/apt/lists/*
 
 # Current git from the git-core PPA: noble ships 2.43, the VM runners 2.56

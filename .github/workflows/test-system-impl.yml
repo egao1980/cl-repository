@@ -57,6 +57,13 @@ on:
         required: false
         type: string
         default: "latest"
+      dep-cache:
+        description: >-
+          Cache installed systems + fasls between runs (one cache per UTC day
+          and .asd hash; cl-repository#136). "false" installs cold every run.
+        required: false
+        type: string
+        default: "true"
 
 jobs:
   test:
@@ -143,7 +150,14 @@ jobs:
             echo "JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED ${JAVA_TOOL_OPTIONS:-}"
           } >> "$GITHUB_ENV"
 
-      - uses: egao1980/cl-repository/.github/actions/ci@main
+      - uses: egao1980/cl-repository/.github/actions/dep-cache@main
+        id: dep-cache
+        with:
+          impl: ${{ inputs.lisp }}-${{ env.LISP_IMPL_VERSION || 'default' }}
+          enabled: ${{ inputs.dep-cache }}
+
+      - id: install
+        uses: egao1980/cl-repository/.github/actions/ci@main
         with:
           phase: install
           system: ${{ inputs.system }}
@@ -153,3 +167,13 @@ jobs:
         with:
           phase: test
           system: ${{ inputs.system }}
+
+      - uses: egao1980/cl-repository/.github/actions/dep-cache@main
+        if: always() && steps.install.outcome == 'success'
+        with:
+          mode: save
+          impl: ${{ inputs.lisp }}-${{ env.LISP_IMPL_VERSION || 'default' }}
+          enabled: ${{ inputs.dep-cache }}
+          key: ${{ steps.dep-cache.outputs.key }}
+          fasl: ${{ steps.dep-cache.outputs.fasl }}
+          cache-hit: ${{ steps.dep-cache.outputs.cache-hit }}

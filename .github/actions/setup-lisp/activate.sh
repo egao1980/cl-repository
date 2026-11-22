@@ -47,6 +47,10 @@ if [[ -f "${CI_HOME}/ok" && -f "${CI_HOME}/image.env" ]]; then
     printf 'CL_REPOSITORY_CLIENT_DIR=%s\n' "${client_dir}"
     printf 'CL_REPOSITORY_CLIENT_VERSION=%s\n' "${CL_REPOSITORY_CLIENT_VERSION}"
     printf 'CL_REPOSITORY_DEST=%s\n' "${dest}"
+    # ASDF fasl cache baked at image build (HOME=/opt/cl-ci). GHA remaps HOME
+    # to /github/home, so without this every job recompiled the client and
+    # its bootstrap deps (cl-repository#136).
+    printf 'XDG_CACHE_HOME=%s\n' "${CL_CI_XDG_CACHE_HOME:-${CI_HOME}/.cache}"
   } >> "${GITHUB_ENV}"
 
   {
