@@ -477,3 +477,55 @@
       (dolist (s '("cl-ld-root" "cl-ld-demo"))
         (asdf:clear-system s))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest test-newer-installed-copy-contributes-its-new-dependencies
+  "#129: the image runs cl-nd-demo 0.1.0 (no deps); the project needs 0.2.0,
+   which depends on cl-nd-new. ASDF answers for cl-nd-demo with the loaded
+   copy, so the walk read 0.1.0's :depends-on and never installed cl-nd-new;
+   the fresh test image then failed: component cl-nd-new not found."
+  (let* ((dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-nd-~36r/" (uiop:temporary-directory) (random (expt 36 6)))))
+         (root (merge-pathnames "systems/" dir))
+         (sym 'cl-repository-client/quickload::ensure-systems)
+         (orig (fdefinition sym))
+         (installs '())
+         (write-file (lambda (path text)
+                       (ensure-directories-exist path)
+                       (with-open-file (out path :direction :output :if-exists :supersede)
+                         (write-string text out)))))
+    (funcall write-file (merge-pathnames "cl-nd-demo.asd" dir)
+             "(defsystem \"cl-nd-demo\" :version \"0.1.0\")")
+    (funcall write-file (merge-pathnames "cl-nd-root.asd" dir)
+             "(defsystem \"cl-nd-root\" :depends-on ((:version \"cl-nd-demo\" \"0.2.0\")))")
+    (push dir asdf:*central-registry*)
+    (unwind-protect
+         (let ((*standard-output* (make-broadcast-stream))
+               (cl-repository-client/installer::*systems-root* root))
+           (asdf:load-system "cl-nd-demo")
+           (setf (fdefinition sym)
+                 (lambda (systems &rest keys)
+                   (declare (ignore keys))
+                   (dolist (s systems)
+                     (push s installs)
+                     (cond
+                       ((string= s "cl-nd-demo")
+                        (funcall write-file (merge-pathnames "cl-nd-demo/0.2.0/cl-nd-demo.asd" root)
+                                 "(in-package :asdf-user)
+(defsystem \"cl-nd-demo\" :version \"0.2.0\"
+  :depends-on (\"cl-nd-new\" (:feature :cl-nd-never \"cl-nd-off\")))"))
+                       (t
+                        (funcall write-file (merge-pathnames (format nil "~a.asd" s) dir)
+                                 (format nil "(defsystem ~s :version \"0.1.0\")" s)))))))
+           (ok (null (handler-case
+                         (progn (cl-repository-client/quickload:ensure-system-dependencies
+                                 "cl-nd-root" :also-tests nil)
+                                nil)
+                       (error (e) (princ-to-string e)))))
+           (ok (equal '("cl-nd-new" "cl-nd-demo") installs)
+               "the installed 0.2.0's dependency is installed too")
+           (ok (asdf:component-loaded-p "cl-nd-demo") "the running copy stays registered"))
+      (setf (fdefinition sym) orig)
+      (setf asdf:*central-registry* (remove dir asdf:*central-registry* :test #'equal))
+      (dolist (s '("cl-nd-root" "cl-nd-demo" "cl-nd-new"))
+        (asdf:clear-system s))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))

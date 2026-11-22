@@ -27,7 +27,7 @@
                 #:list-tags/retry)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version #:version<)
   (:import-from :cl-repository-client/dep-satisfy
-                #:system-direct-dep-specs #:system-satisfied-p #:note-minimum
+                #:asdf-dep-spec #:system-direct-dep-specs #:system-satisfied-p #:note-minimum
                 #:quicklisp-source-p)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/lockfile
@@ -383,6 +383,66 @@
                   (loaded-copy-satisfied-p name minimum))
               nil))))
 
+(defun installed-asd-file (name)
+  "The .asd defining NAME in the newest installed copy of its primary system,
+   or NIL."
+  (let* ((primary (asdf:primary-system-name (string-downcase (string name))))
+         (version (installed-system-version primary))
+         (dir (and version
+                   (merge-pathnames (format nil "~a/~a/" primary version) (systems-root))))
+         (file (format nil "~a.asd" primary)))
+    (when dir
+      (or (probe-file (merge-pathnames file dir))
+          (ignore-errors
+           (block found
+             (uiop:collect-sub*directories
+              dir (constantly t) (constantly t)
+              (lambda (sub)
+                (let ((asd (probe-file (merge-pathnames file sub))))
+                  (when asd (return-from found asd)))))
+             nil))))))
+
+(defun asd-literal-dep-specs (file name)
+  "(name . minimum) specs of system NAME's literal :DEPENDS-ON in FILE, read
+   without evaluating anything. Second value NIL when no DEFSYSTEM form for
+   NAME could be read."
+  (let ((*read-eval* nil)
+        (*package* (make-package (gensym "DEPS-ASD-") :use '(:cl))))
+    (unwind-protect
+         (let ((form (ignore-errors
+                      (with-open-file (in file :external-format :utf-8)
+                        (loop for form = (read in nil in)
+                              until (eq form in)
+                              when (and (consp form) (symbolp (first form))
+                                        (string= "DEFSYSTEM" (symbol-name (first form)))
+                                        (or (stringp (second form)) (symbolp (second form)))
+                                        (string-equal name (string (second form))))
+                                return form)))))
+           (if (and form (listp (getf (cddr form) :depends-on)))
+               (values (loop for dep in (getf (cddr form) :depends-on)
+                             for (dep-name minimum) = (multiple-value-list (asdf-dep-spec dep))
+                             when dep-name collect (cons dep-name minimum))
+                       t)
+               (values nil nil)))
+      (delete-package *package*))))
+
+(defun shadowed-installed-dep-specs (name)
+  "When this image runs NAME and a newer NAME is installed, the dep specs of
+   the installed copy: the project is tested in a fresh image, which loads
+   that one, so its new dependencies must be installed too (#129). ASDF
+   answers for NAME with the loaded copy, whose :depends-on are older.
+   Second value NIL when the loaded copy is what the project gets."
+  (let* ((n (string-downcase (string name)))
+         (sys (and (asdf:component-loaded-p n) (asdf:registered-system n)))
+         (loaded (and sys (ignore-errors (asdf:component-version sys))))
+         (have (and loaded (installed-system-version (asdf:primary-system-name n))))
+         (file (and have
+                    (version< (princ-to-string loaded) (princ-to-string have))
+                    (installed-asd-file n))))
+    (if file
+        (asd-literal-dep-specs file n)
+        (values nil nil))))
+
 (defun collect-missing-asdf-deps (local-roots &optional extras)
   "Walk ASDF :depends-on from LOCAL-ROOTS. Return names that are not satisfied.
    A system is unsatisfied when it is missing, older than its :version minimum,
@@ -402,7 +462,11 @@
                         (tag-older-than-p (princ-to-string checked)
                                           (princ-to-string minimum)))))
              (walk-specs (sys)
-               (dolist (spec (system-direct-dep-specs sys))
+               (dolist (spec (multiple-value-bind (specs newer-p)
+                                 (if (typep sys 'asdf:system)
+                                     (values nil nil)
+                                     (shadowed-installed-dep-specs sys))
+                               (if newer-p specs (system-direct-dep-specs sys))))
                  (walk (car spec) (cdr spec))))
              (walk (name minimum)
                (let* ((n (string-downcase (string name)))
