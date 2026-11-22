@@ -304,6 +304,37 @@
                "no own .asd: nothing is a sibling"))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
+(deftest stash-files-round-trip-across-mounts
+  "cl-repository#126: rename(2) fails with EXDEV from /__w/<repo> to
+   /__w/_temp in container jobs; the stash copies instead."
+  (let* ((dir (make-temp-dir))
+         (stash (merge-pathnames "stash/" dir))
+         (a (merge-pathnames "a.asd" dir))
+         (b (merge-pathnames "b.asd" dir)))
+    (unwind-protect
+         (progn
+           (dolist (f (list a b))
+             (with-open-file (s f :direction :output :if-exists :supersede)
+               (format s "(defsystem \"~a\")" (pathname-name f))))
+           ;; plain rename path
+           (let ((stashed (cl-repository-ci-lib:stash-files (list a b) stash)))
+             (ok (= 2 (length stashed)))
+             (ok (null (probe-file a)))
+             (ok (probe-file (merge-pathnames "a.asd" stash)))
+             (cl-repository-ci-lib:restore-files stashed)
+             (ok (probe-file a))
+             (ok (probe-file b))
+             (ok (null (probe-file (merge-pathnames "a.asd" stash)))))
+           ;; a rename that cannot cross mounts: copy + delete
+           (let ((to (merge-pathnames "moved.asd" stash)))
+             (cl-repository-ci-lib:move-file
+              a to :rename (lambda (from to)
+                             (declare (ignore to))
+                             (error 'file-error :pathname from)))
+             (ok (null (probe-file a)) "source deleted")
+             (ok (string= "(defsystem \"a\")" (uiop:read-file-string to)) "content copied")))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
 (deftest ci-action-has-run-phase
   "cl-repository#103: phase run = cl-repo run -- <command> in working-directory."
   (let* ((root (uiop:pathname-directory-pathname

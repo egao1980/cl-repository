@@ -21,24 +21,20 @@
 
 (defun %stash-sibling-asds (files)
   "Move FILES out of the checkout for the build. → ((stashed . original) …)."
-  (when files
-    (let ((dir (uiop:ensure-directory-pathname
-                (merge-pathnames "cl-repo-sibling-asds/"
-                                 (uiop:ensure-directory-pathname
-                                  (or (uiop:getenv "RUNNER_TEMP")
-                                      (namestring (uiop:temporary-directory))))))))
-      (ensure-directories-exist dir)
-      (loop for file in files
-            for dest = (merge-pathnames (file-namestring file) dir)
-            do (when (probe-file dest) (delete-file dest))
-               (rename-file file dest)
-               (format t "~&; ci: not packaging sibling ~a (a package of its own)~%"
-                       (file-namestring file))
-            collect (cons dest file)))))
+  (dolist (file files)
+    (format t "~&; ci: not packaging sibling ~a (a package of its own)~%"
+            (file-namestring file)))
+  ;; RUNNER_TEMP is another mount in container jobs: STASH-FILES copies
+  ;; when a rename cannot cross it (#126).
+  (cl-repository-ci-lib:stash-files
+   files
+   (merge-pathnames "cl-repo-sibling-asds/"
+                    (uiop:ensure-directory-pathname
+                     (or (uiop:getenv "RUNNER_TEMP")
+                         (namestring (uiop:temporary-directory)))))))
 
 (defun %restore-sibling-asds (stashed)
-  (loop for (dest . file) in stashed
-        do (rename-file dest file)))
+  (cl-repository-ci-lib:restore-files stashed))
 
 (defun %checkout-system (system)
   "SYSTEM as defined by the checkout. An installed copy that provides the same

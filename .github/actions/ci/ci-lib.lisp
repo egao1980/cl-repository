@@ -31,6 +31,9 @@
            #:primary-asd-files
            #:own-provides
            #:sibling-asd-files
+           #:move-file
+           #:stash-files
+           #:restore-files
            #:check-publish-version
            #:publish-version-mismatch
            #:*extra-with*
@@ -201,6 +204,34 @@
             unless (or (funcall own-p asd)
                        (test-system-name-p (pathname-name asd)))
               collect asd))))
+
+(defun move-file (from to &key (rename (function rename-file)))
+  "Move FROM to TO. RENAME first; when it signals FILE-ERROR (EXDEV: FROM and
+   TO on different mounts, as /__w/<repo> and /__w/_temp are in a container
+   job, cl-repository#126) copy FROM to TO and delete FROM. RENAME is a
+   parameter for tests. Returns TO."
+  (handler-case (funcall rename from to)
+    (file-error ()
+      (uiop:copy-file from to)
+      (delete-file from)))
+  to)
+
+(defun stash-files (files dir)
+  "Move FILES into DIR (created when missing), replacing files of the same
+   name there. Returns ((stashed . original) ...) for RESTORE-FILES."
+  (when files
+    (let ((dir (uiop:ensure-directory-pathname dir)))
+      (ensure-directories-exist dir)
+      (loop for file in files
+            for dest = (merge-pathnames (file-namestring file) dir)
+            do (when (probe-file dest) (delete-file dest))
+               (move-file file dest)
+            collect (cons dest file)))))
+
+(defun restore-files (stashed)
+  "Move each file STASH-FILES moved back to where it was."
+  (loop for (dest . file) in stashed
+        do (move-file dest file)))
 
 (define-condition publish-version-mismatch (error)
   ((system :initarg :system :reader publish-version-mismatch-system)
