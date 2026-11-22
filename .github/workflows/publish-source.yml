@@ -56,10 +56,18 @@ on:
         required: false
         type: string
         default: "ghcr.io/egao1980/cl-repository/ci-base:latest"
+      timeout-minutes:
+        description: >-
+          Job time limit. A normal publish takes a few minutes; a hung one
+          (cl-repository#135) fails here instead of running for 6 hours.
+        required: false
+        type: number
+        default: 30
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     # Image string or null. No `secrets` in this expression (reusable-workflow parse).
     container: ${{ inputs.ci-image != '' && inputs.ci-image || fromJSON('null') }}
     defaults:

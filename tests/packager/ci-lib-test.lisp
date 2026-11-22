@@ -314,3 +314,28 @@
     (ok (search "CL_REPO_RUN_ARGV_FILE" run))
     (ok (search "working-directory: ${{ inputs.working-directory }}" action))
     (ok (search "CL_REPO_RUN_COMMAND: ${{ inputs.command }}" action))))
+
+(deftest publish-stages-are-logged
+  "cl-repository#135: a hung publish printed nothing for 30 minutes. Each
+   stage prints a timestamped line, so the log shows where it stopped."
+  (let ((line (cl-repository-ci-lib:stage-line
+               "build layers" :detail "x" :since (encode-universal-time 0 54 16 22 11 2026 0)
+               :time (encode-universal-time 12 54 16 22 11 2026 0))))
+    (ok (string= line "; ci: [2026-11-22T16:54:12Z] stage build layers (x), previous stage took 12s")))
+  (ok (string= (cl-repository-ci-lib:stage-line
+                "push" :time (encode-universal-time 5 4 3 2 1 2026 0))
+               "; ci: [2026-01-02T03:04:05Z] stage push"))
+  (let* ((root (uiop:pathname-directory-pathname
+                (asdf:system-source-file "cl-repository-packager")))
+         (run (uiop:read-file-string (merge-pathnames ".github/actions/ci/run.lisp" root)))
+         (publish (uiop:read-file-string (merge-pathnames ".github/actions/ci/publish.lisp" root))))
+    (dolist (stage '("load client" "resolve" "install packager" "install deps" "load packager"))
+      (ok (search (format nil "(cl-repository-ci-lib:log-stage ~s" stage) run) stage))
+    (dolist (stage '("package spec" "build layers" "push" "done"))
+      (ok (search (format nil "(cl-repository-ci-lib:log-stage ~s" stage) publish) stage)))
+  (let* ((root (uiop:pathname-directory-pathname
+                (asdf:system-source-file "cl-repository-packager"))))
+    (dolist (wf '("publish-source.yml" "publish-native-package.yml"))
+      (ok (search "timeout-minutes: ${{ inputs.timeout-minutes }}"
+                  (uiop:read-file-string (merge-pathnames (format nil ".github/workflows/~a" wf) root)))
+          wf))))

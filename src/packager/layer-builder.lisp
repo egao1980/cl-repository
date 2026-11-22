@@ -15,7 +15,9 @@
            #:layer-result-digest
            #:layer-result-size
            #:layer-result-role
-           #:layer-result-title))
+           #:layer-result-title
+           #:tar-entry-name-too-long
+           #:tar-entry-name-too-long-name))
 (in-package :cl-repository-packager/layer-builder)
 
 (defclass layer-result ()
@@ -37,13 +39,34 @@
   (let ((name (car (last (pathname-directory dir)))))
     (member name *excluded-dirs* :test #'string=)))
 
+(defun symlinked-directory-p (dir)
+  "T when DIR (found under a truename root) is reached through a symlink, or
+   cannot be resolved at all. Its truename then differs from DIR itself."
+  (let ((true (ignore-errors (truename dir))))
+    (or (null true)
+        (string/= (namestring true) (namestring dir)))))
+
+(defun packable-subdirectory-p (dir)
+  "T when the walker should descend into DIR. Directory symlinks are never
+   followed: a self-referencing one (trivial-glob's test-fixtures/circular-link)
+   recursed until the tar entry name overflowed ustar (cl-repository#133), and
+   one pointing outside the checkout would pack foreign files. The client's
+   extractor skips symlink entries, so the link is left out with a note."
+  (cond ((excluded-dir-p dir) nil)
+        ((symlinked-directory-p dir)
+         (format *error-output* "~&;; Packager: not following directory symlink ~a~%"
+                 (uiop:native-namestring dir))
+         nil)
+        (t t)))
+
 (defun collect-files (directory &key (strip-prefix directory))
-  "Recursively collect files under DIRECTORY. Returns list of (relative-path . absolute-path)."
+  "Recursively collect files under DIRECTORY (a truename). Directory symlinks
+   are not followed. Returns list of (relative-path . absolute-path)."
   (let ((files nil))
     (uiop:collect-sub*directories
      directory
      (lambda (d) (not (excluded-dir-p d)))
-     (lambda (d) (not (excluded-dir-p d)))
+     #'packable-subdirectory-p
      (lambda (subdir)
        (dolist (f (uiop:directory-files subdir))
          (let ((rel (enough-namestring f strip-prefix)))
@@ -116,6 +139,14 @@ fails this must never be published."
       (read-sequence buf s)
       buf)))
 
+(define-condition tar-entry-name-too-long (error)
+  ((name :initarg :name :reader tar-entry-name-too-long-name))
+  (:report (lambda (c s)
+             (format s "Tar entry name ~s (~d bytes) does not fit the ustar prefix(155)/name(100) fields. The client extractor reads no PAX/GNU long names, so the packager refuses the path instead of truncating it: shorten or exclude it."
+                     (tar-entry-name-too-long-name c)
+                     (length (babel:string-to-octets (tar-entry-name-too-long-name c)
+                                                     :encoding :utf-8))))))
+
 (defun split-tar-name (name)
   "Split NAME into (prefix . name) for ustar format.
    Name field max 100 bytes, prefix field max 155 bytes.
@@ -129,8 +160,7 @@ fails this must never be published."
         (if (and slash-pos (<= (- (length name) slash-pos 1) 100))
             (cons (subseq name 0 slash-pos) (subseq name (1+ slash-pos)))
             ;; Truncating would silently corrupt the archive; refuse instead.
-            (error "Tar entry name ~s cannot be split into ustar prefix(155)/name(100) fields"
-                   name)))))
+            (error 'tar-entry-name-too-long :name name)))))
 
 (defun write-tar-entry (stream name content)
   "Write a single tar entry (POSIX ustar header + data)."

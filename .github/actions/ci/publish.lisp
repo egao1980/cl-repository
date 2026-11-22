@@ -72,6 +72,7 @@
        (reg (cl-oci-client/registry:make-registry
              (format nil "https://~a" registry-url) :auth auth)))
   (format t "~&; ci: publish ~a:~a~%" system version)
+  (cl-repository-ci-lib:log-stage "package spec" (format nil "~a:~a" system version))
   (%maybe-load-hook "pre-publish")
   (%hide-bootstrap (asdf:system-source-directory system))
   (let ((spec (cl-repository-packager/asdf-plugin:auto-package-spec system))
@@ -110,15 +111,19 @@
                     (cl-repository-ci-lib:sibling-asd-files
                      (uiop:getcwd)
                      (cl-repository-packager/build-matrix:package-spec-provides spec)))))
+      (cl-repository-ci-lib:log-stage "build layers")
       (unwind-protect
            (setf result (cl-repository-packager/build-matrix:build-package spec))
         (%restore-sibling-asds stashed)))
+    (cl-repository-ci-lib:log-stage "push" (format nil "~a/~a:~a" namespace system version))
     (format t "~&Publishing ~a/~a:~a~%" namespace system version)
     (cl-repository-packager/publisher:publish-package
      reg namespace version result spec :skip-catalog t)
     ;; Packager 0.16.0 treated skip-catalog as "also skip :latest". The
     ;; package repo is writable by this workflow — write anchors here so
     ;; canned publish works before a newer packager image is pinned.
+    (cl-repository-ci-lib:log-stage "anchors")
     (%write-system-name-anchors reg namespace version spec)
     (format t "~&Published ~a/~a:~a~%" namespace system version))
-  (%maybe-load-hook "post-publish"))
+  (%maybe-load-hook "post-publish")
+  (cl-repository-ci-lib:log-stage "done"))

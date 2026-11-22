@@ -33,6 +33,8 @@
            #:sibling-asd-files
            #:check-publish-version
            #:publish-version-mismatch
+           #:stage-line
+           #:log-stage
            #:*extra-with*
            #:*extra-sources*))
 (in-package :cl-repository-ci-lib)
@@ -42,6 +44,25 @@
 
 (defvar *extra-sources* nil
   "Hook-supplied source pins, merged into :ci :sources.")
+
+(defvar *stage-start* nil
+  "Universal time of the previous LOG-STAGE call, for its elapsed seconds.")
+
+(defun stage-line (stage &key detail (time (get-universal-time)) since)
+  "One log line for the start of CI STAGE: UTC timestamp, the stage, DETAIL,
+   and the seconds since SINCE (the previous stage) when given. A hung job
+   then shows in its log where it stopped (cl-repository#135)."
+  (multiple-value-bind (s m h day mon year) (decode-universal-time time 0)
+    (format nil "; ci: [~4,'0d-~2,'0d-~2,'0dT~2,'0d:~2,'0d:~2,'0dZ] stage ~a~@[ (~a)~]~@[, previous stage took ~ds~]"
+            year mon day h m s stage detail (and since (- time since)))))
+
+(defun log-stage (stage &optional detail)
+  "Print STAGE-LINE for STAGE and flush, so the line is in the job log
+   before the stage starts its work."
+  (let ((now (get-universal-time)))
+    (format t "~&~a~%" (stage-line stage :detail detail :time now :since *stage-start*))
+    (setf *stage-start* now)
+    (finish-output)))
 
 (defun nonempty-env (name)
   (let ((v (uiop:getenv name)))
