@@ -17,6 +17,9 @@ github egao1980/rove
 github egao1980/encoding-protocol
 github egao1980/compression-protocol
 github egao1980/http-protocol
+# http-protocol 0.4.1+ depends on mime-protocol (→ serdes-protocol)
+github egao1980/mime-protocol
+github egao1980/serdes-protocol
 github egao1980/http-encoding-chipz
 github egao1980/http-backend-dexador
 github egao1980/cl-stack-ssl
