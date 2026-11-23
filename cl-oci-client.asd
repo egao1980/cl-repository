@@ -9,7 +9,7 @@
   ;; cl+ssl. The primary system, not cl-stack-ssl/paths: setup-client skips
   ;; "foo/bar" dependencies.
   ;; http-backend-dexador: fallback when the async/libuv stack cannot load.
-  :depends-on ("cl-stack-ssl" "cl-oci-client/all" "http-backend-dexador")
+  :depends-on ((:version "cl-stack-ssl" "3.5.9.4") "cl-oci-client/all" "http-backend-dexador")
   :in-order-to ((test-op (test-op "cl-oci-client/tests"))))
 
 (defsystem "cl-oci-client/tests"

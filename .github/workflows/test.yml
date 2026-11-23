@@ -176,6 +176,23 @@ jobs:
             exit 1
           fi
 
+      - name: Launcher survives an inherited exception port (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # An editor with a crash reporter (Zed) hands its Mach exception port
+          # to the processes it starts; SBCL then blocks on its first trap.
+          # roswell/cl-repo clears the port before Roswell starts.
+          unset CL_REPOSITORY_CLIENT_DIR CL_REPO_HTTP_BACKEND
+          spawn="python3 -I $GITHUB_WORKSPACE/scripts/spawn-with-exception-port.py"
+          # control: a plain SBCL trap under the port must hang, or this step proves nothing
+          if $spawn 30 ros +Q -e '(print (handler-case (funcall (compile nil (quote (lambda (x) (car x)))) 1) (error () :trapped)))'; then
+            echo "::error::the harness did not reproduce the inherited-port hang" >&2
+            exit 1
+          fi
+          cd "$RUNNER_TEMP/async-probe"
+          $spawn 600 sh "$GITHUB_WORKSPACE/roswell/cl-repo" sync
+
   setup-lisp-action:
     strategy:
       fail-fast: false

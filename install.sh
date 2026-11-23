@@ -52,9 +52,15 @@ if [ -z "$client" ] || [ ! -f "${client}roswell/cl-repo.ros" ]; then
   echo "cl-repo: no client under $dest (run cl-repository's install.sh)" >&2
   exit 1
 fi
-CL_REPOSITORY_CLIENT_DIR="${CL_REPOSITORY_CLIENT_DIR:-$client}" \
-CL_REPOSITORY_DEST="$dest" \
-  exec ros +Q -- "${client}roswell/cl-repo.ros" "$@"
+export CL_REPOSITORY_CLIENT_DIR="${CL_REPOSITORY_CLIENT_DIR:-$client}"
+export CL_REPOSITORY_DEST="$dest"
+# The client's own launcher when it has one (0.27.31+): it prepares the
+# process before Roswell starts (macOS: clears inherited Mach exception
+# ports), and it updates with the client.
+if [ -f "${client}roswell/cl-repo" ]; then
+  exec /bin/sh "${client}roswell/cl-repo" "$@"
+fi
+exec ros +Q -- "${client}roswell/cl-repo.ros" "$@"
 WRAPPER
 chmod +x "$BIN_DIR/cl-repo"
 
