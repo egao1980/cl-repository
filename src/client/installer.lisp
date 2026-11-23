@@ -39,6 +39,7 @@
            #:compute-strip-prefix
            #:systems-root
            #:system-install-path
+           #:installed-package
            #:*requested-overlay*
            #:create-provides-symlinks
            #:drop-sibling-asds
@@ -76,6 +77,17 @@
   (check-path-component name "system name")
   (check-path-component version "version")
   (merge-pathnames (format nil "~a/~a/" name version) *systems-root*))
+
+(defun installed-package (file)
+  "(values package version) of the install directory systems/PACKAGE/VERSION/
+   that FILE lies in, reached through a provides link or not. NIL for a file
+   outside the install tree."
+  (let ((root (uiop:truename* (systems-root)))
+        (true (and file (uiop:truename* file))))
+    (when (and root true (uiop:subpathp true root))
+      (let ((below (nthcdr (length (pathname-directory root)) (pathname-directory true))))
+        (when (and (stringp (first below)) (stringp (second below)))
+          (values (first below) (second below)))))))
 
 (defstruct install-result
   "Result of installing a system, carrying path and digest info for lockfile."

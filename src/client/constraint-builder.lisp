@@ -29,6 +29,8 @@
   (:import-from :cl-repository-client/config-store #:stored-entry #:store-entry)
   (:import-from :cl-oci/media-types #:+oci-image-manifest-v1+)
   (:export #:build-install-plan
+           #:fetch-available-versions
+           #:fetch-versions-batch
            #:list-tags/retry
            #:*tag-list-attempts*
            #:scan-installed-systems

@@ -552,7 +552,8 @@
 
 (deftest sbcl-startup-eval-follows-the-runtime-options
   "#130: the startup --eval goes after SBCL's runtime options; --script keeps
-   its runtime implications and stays last."
+   its runtime implications and stays last. #166: ros starts with +Q, and a
+   -Q of the user's comes later, so it still wins."
   (let ((f "F"))
     (flet ((start (&rest args) (cl-repository-client/project::lisp-startup "sbcl" f args)))
       (ok (equal (start "--script" "x.lisp")
@@ -572,7 +573,10 @@
                (cl-repository-client/project::lisp-startup "sbcl" f '("--script" "x")))
         "a path to sbcl is sbcl")
     (ok (equal (cl-repository-client/project::lisp-startup "ros" f '("run"))
-               '("-e" "F" "run")))))
+               '("+Q" "-e" "F" "run")))
+    (ok (equal (cl-repository-client/project::lisp-startup "ros" f '("-Q" "-l" "x.lisp"))
+               '("+Q" "-e" "F" "-Q" "-l" "x.lisp"))
+        "the user's -Q comes after the +Q")))
 
 #+sbcl
 (deftest run-script-stdout-is-the-script-only
@@ -682,11 +686,81 @@
                                         :validate t :if-does-not-exist :ignore)
             (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
 
+(deftest every-image-cl-repo-starts-takes-the-fasl-lock
+  "cl-repository#162: the test image loads roswell/fasl-lock.lisp before its
+   source registry (so before anything compiles), and so does the startup
+   form of `cl-repo run`."
+  (let ((lock (cl-repository-client/asdf-integration:fasl-lock-form))
+        (forms (cl-repository-client/project::test-image-forms "x" nil nil)))
+    (ok lock "this client has roswell/fasl-lock.lisp")
+    (let ((at (position (with-standard-io-syntax (format nil "~S" lock)) forms :test #'equal))
+          (registry (position-if (lambda (f)
+                                   (search "initialize-source-registry" f :test #'char-equal))
+                                 forms)))
+      (ok (and at registry (< at registry))
+          (format nil "test image: before the source registry (~a, ~a)" at registry)))
+    (let ((dir (uiop:ensure-directory-pathname
+                (format nil "~a/cl-repo-162f-~36r/" (uiop:temporary-directory)
+                        (random (expt 36 6) (make-random-state t))))))
+      (ensure-directories-exist dir)
+      (unwind-protect
+          (ok (search "CL-REPO-FASL-LOCK" (cl-repository-client/project::run-startup-form dir))
+              "run startup form")
+        (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
+
+#+(and sbcl (not win32))
+(deftest a-fasl-lock-holds-off-another-image
+  "cl-repository#162: an image that compiles a fasl (exclusive lock, here
+   with a nested shared one on the same fasl, which must not wait on it)
+   keeps another image's load of that fasl (shared lock) waiting until it
+   is done."
+  (let* ((command (cl-repository-client/project::test-image-command))
+         (source (cl-repository-client/asdf-integration::fasl-lock-source))
+         (dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-162l-~36r/" (uiop:temporary-directory)
+                       (random (expt 36 6) (make-random-state t)))))
+         (fasl (merge-pathnames "x.fasl" dir))
+         (marker (merge-pathnames "held" dir)))
+    (if (null command)
+        (skip "needs an SBCL whose core is a separate file")
+        (progn
+          (ensure-directories-exist dir)
+          (unless (find-package "CL-REPO-FASL-LOCK")
+            (load source :verbose nil :print nil))
+          (let ((child (uiop:launch-program
+                        (append command
+                                (list "--eval" (cl-repository-client/project::asdf-require-form)
+                                      "--eval" (format nil "(load ~s)" (namestring source))
+                                      "--eval"
+                                      (with-standard-io-syntax
+                                          (format nil "(funcall (find-symbol \"CALL-WITH-FASL-LOCK\" \"CL-REPO-FASL-LOCK\") ~s t (lambda () (funcall (find-symbol \"CALL-WITH-FASL-LOCK\" \"CL-REPO-FASL-LOCK\") ~:*~s nil (lambda () (with-open-file (o ~s :direction :output :if-exists :supersede)) (sleep 3)))))"
+                                                  (namestring fasl) (namestring marker)))))
+                        :output nil :error-output nil)))
+            (unwind-protect
+                (let ((deadline (+ (get-internal-real-time)
+                                   (* 20 internal-time-units-per-second))))
+                  (loop until (or (probe-file marker) (> (get-internal-real-time) deadline))
+                        do (sleep 0.05))
+                  (ok (probe-file marker) "the other image holds the lock (no self-deadlock)")
+                  (when (probe-file marker)
+                    (let ((start (get-internal-real-time)))
+                      (uiop:symbol-call "CL-REPO-FASL-LOCK" "CALL-WITH-FASL-LOCK" fasl nil
+                                        (lambda () nil))
+                      (let ((waited (/ (- (get-internal-real-time) start)
+                                       internal-time-units-per-second)))
+                        (ok (> waited 1.5) (format nil "the load waited (~,1fs)" waited)))))
+                  (ok (probe-file (merge-pathnames "x.fasl.lock" dir))
+                      "the lock file is beside the fasl"))
+              (when (uiop:process-alive-p child) (uiop:terminate-process child :urgent t))
+              (uiop:wait-process child)
+              (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))))
+
 (deftest issue-166-cl-repo-ros-starts-without-quicklisp
   "cl-repository#166: `cl-repo ros -l tool.lisp -q` (README) ran Roswell's
    default init, which loads Roswell's Quicklisp, so a system the project
    registry lacks (a missing :depends-on) loaded from the Quicklisp dist
-   without a word. The image cl-repo starts for `ros` must have no Quicklisp."
+   without a word. The image cl-repo starts for `ros` must have no Quicklisp,
+   unless the user asks for it with -Q."
   (let ((probe "(format t \"~&QL=~:[NIL~;T~]~%\" (find-package \"QL\"))"))
     (flet ((quicklisp-p (args)
              (let ((out (ignore-errors
@@ -707,10 +781,15 @@
                               (random (expt 36 6) (make-random-state t))))))
             (ensure-directories-exist dir)
             (unwind-protect
-                (let ((got (quicklisp-p (cl-repository-client/project::lisp-startup
-                                         "ros" (cl-repository-client/project::run-startup-form dir)
-                                         (list "-e" probe "-q")))))
-                  (ok (null got)
-                      (format nil "no Quicklisp in the image `cl-repo ros -e … -q` starts (got ~a)"
-                              got)))
+                (flet ((started (&rest args)
+                         (quicklisp-p (cl-repository-client/project::lisp-startup
+                                       "ros" (cl-repository-client/project::run-startup-form dir)
+                                       args))))
+                  (let ((got (started "-e" probe "-q")))
+                    (ok (null got)
+                        (format nil "no Quicklisp in the image `cl-repo ros -e … -q` starts (got ~a)"
+                                got)))
+                  (let ((got (started "-Q" "-e" probe "-q")))
+                    (ok (eq got t)
+                        (format nil "`cl-repo ros -Q …` has Quicklisp (got ~a)" got))))
               (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))))))

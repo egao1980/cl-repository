@@ -4,9 +4,10 @@
   (:import-from :cl-oci/system-names #:oci-package-name)
   (:import-from :cl-oci-client/registry #:make-registry)
   (:import-from :cl-oci-client/pull #:head-manifest)
-  (:import-from :cl-oci-client/conditions #:registry-error #:registry-transport-error)
+  (:import-from :cl-oci-client/conditions #:registry-error #:registry-transport-error
+                #:not-found-error)
   (:import-from :cl-repository-client/installer
-                #:systems-root #:system-install-path #:install-system
+                #:systems-root #:system-install-path #:install-system #:installed-package
                 #:install-result-path #:install-result-name #:install-result-version
                 #:install-result-index-digest #:install-result-source-digest
                 #:install-result-overlay-digest #:install-result-overlay-digests
@@ -31,6 +32,7 @@
            #:closure-lock-entries
            #:lockfile-closure-gap
            #:lockfile-policy-gap
+           #:lockfile-reproduction-gap
            #:install-lockfile-entries))
 (in-package :cl-repository-client/sync-lock)
 
@@ -75,17 +77,6 @@
           (and newer (format nil "~a is newer" (file-namestring newer)))))))
 
 ;;; The closure's packages
-
-(defun installed-package (file)
-  "(values package version) of the install directory systems/PACKAGE/VERSION/
-   that FILE lies in, reached through a provides link or not. NIL for a file
-   outside the install tree."
-  (let ((root (uiop:truename* (systems-root)))
-        (true (and file (uiop:truename* file))))
-    (when (and root true (uiop:subpathp true root))
-      (let ((below (nthcdr (length (pathname-directory root)) (pathname-directory true))))
-        (when (and (stringp (first below)) (stringp (second below)))
-          (values (first below) (second below)))))))
 
 (defun closure-packages (names)
   "Alist (package . version), sorted by package, of the installed packages a
@@ -225,6 +216,26 @@
     (when denied
       (format nil "source policy does not allow ~{~a~^, ~}" denied))))
 
+(defun unreproducible-entry-p (entry)
+  "True when ENTRY records neither an index digest nor a registry: nothing
+   says where its version came from. A local-only install writes one
+   (`cl-repo install cl-utilities` put its only tag, a commit, in
+   cl-utilities/latest/, and no registry has a tag latest: #163)."
+  (and (zerop (length (or (lockfile-entry-index-digest entry) "")))
+       (zerop (length (or (lockfile-entry-registry entry) "")))))
+
+(defun lockfile-reproduction-gap (entries)
+  "NIL when every entry of ENTRIES that is not installed can be installed
+   from what it records. Otherwise which cannot, a phrase. An entry like that
+   which is installed is no gap: this machine needs nothing from a registry."
+  (let ((lost (loop for entry in entries
+                    when (and (unreproducible-entry-p entry)
+                              (not (lock-entry-installed-p entry)))
+                      collect (format nil "~a ~a" (lockfile-entry-system entry)
+                                      (lockfile-entry-version entry)))))
+    (when lost
+      (format nil "it records no registry or digest for ~{~a~^, ~}, not installed here" lost))))
+
 ;;; Installing a lock
 
 (defun entry-source (entry)
@@ -246,11 +257,30 @@
    (system-install-path (lockfile-entry-system entry)
                         (princ-to-string (lockfile-entry-version entry)))))
 
+(defun entry-reference (entry registry repository version)
+  "The reference to pull ENTRY by: VERSION, its tag, once the registry has
+   shown that the tag still names the digest ENTRY records
+   (LOCKFILE-DIGEST-MISMATCH otherwise). When the registry has no such tag and
+   ENTRY records a digest, the digest itself: a package whose .asd has no
+   :version is installed as \"latest\", which need not be a tag (#163)."
+  (let ((digest (or (lockfile-entry-index-digest entry) "")))
+    (block found
+      (handler-bind ((not-found-error
+                      (lambda (e)
+                        (declare (ignore e))
+                        (when (plusp (length digest))
+                          (msg "~&; cl-repo: no tag ~a for ~a; pulling ~a~%"
+                               version (lockfile-entry-system entry) digest)
+                          (return-from found digest)))))
+        (verify-lockfile-entry-digest entry registry repository version)
+        version))))
+
 (defun install-lockfile-entries (entries)
   "Install each entry of ENTRIES whose version is not in the install tree, by
    its tag, once the registry has shown that the tag still names the digest
-   the entry records (LOCKFILE-DIGEST-MISMATCH otherwise). Nothing is
-   resolved and no tag is listed. → the INSTALL-RESULTs."
+   the entry records (LOCKFILE-DIGEST-MISMATCH otherwise), or by the digest
+   when there is no such tag (ENTRY-REFERENCE). Nothing is resolved and no
+   tag is listed. → the INSTALL-RESULTs."
   (loop for entry in entries
         unless (lock-entry-installed-p entry)
           collect (multiple-value-bind (url repo type) (entry-source entry)
@@ -258,8 +288,9 @@
                           (registry (make-registry url)))
                       (msg "~&; cl-repo: installing ~a ~a from cl-repo.lock~%"
                            (lockfile-entry-system entry) version)
-                      (verify-lockfile-entry-digest entry registry repo version)
-                      (let ((result (install-system url repo version :type type)))
+                      (let ((result (install-system url repo
+                                                    (entry-reference entry registry repo version)
+                                                    :type type)))
                         (when (install-result-index-digest result)
                           (record-installed-digest (install-result-index-digest result)
                                                    (install-result-path result)))

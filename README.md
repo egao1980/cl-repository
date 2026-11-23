@@ -33,7 +33,7 @@ If you're familiar with qlot, cl-repo shares the same per-project dependency phi
 
 **HTTP.** Registry traffic goes through `http-protocol` on the cl-stack async backend (`http-backend-async` × `event-backend-libuv`, TLS via `cl-stack-ssl`) whenever that stack loads; otherwise `http-backend-dexador`. `CL_REPO_HTTP_BACKEND=async|dexador|auto` forces a choice. CI images still carry dexador until `setup-client` installs native overlays.
 
-**Resolution.** Dependency resolution starts from the newest acceptable version of each package and fetches older versions only around a conflict. One sync or install shares one cache of tag lists, configs, manifests and tokens. On the async backend, registry lookups go out up to 8 at a time on one event loop (`CL_REPO_FETCH_JOBS`, 1 for one at a time). Package configs are kept between runs under `$XDG_CACHE_HOME/cl-repository/configs/` (`CL_REPO_CONFIG_CACHE=<dir>` moves it, `off` disables it). An entry is used only after a HEAD of its tag returns the digest it was stored under. `CL_REPO_TRACE_HTTP=1` logs every registry request to stderr.
+**Resolution.** Dependency resolution starts from the newest acceptable version of each package and fetches older versions only around a conflict. One sync or install shares one cache of tag lists, configs, manifests and tokens. On the async backend, registry lookups go out up to 8 at a time on one event loop (`CL_REPO_FETCH_JOBS`, 1 for one at a time). Package configs are kept between runs under `$XDG_CACHE_HOME/cl-repository/configs/` (`CL_REPO_CONFIG_CACHE=<dir>` moves it, `off` disables it). An entry is used only after a HEAD of its tag returns the digest it was stored under. `CL_REPO_TRACE_HTTP=1` logs every registry request to stderr. A sync resolves a package its lock does not hold to the newest published version, not the newest installed one: an older installed copy is upgraded. A package the lock holds keeps its version, and when no registry can be asked the installed versions stay. A `(:version name min)` that only older published versions miss fails with `cl-repo: agent-tools 0.4.1 or later is required; the registry has 0.4.0 (published versions: 0.3.2, 0.4.0)` (condition `unsatisfied-dependencies`), and nothing of the older version is installed.
 
 ## Systems
 
@@ -63,11 +63,12 @@ cl-repo test
 cl-repo publish
 ```
 
-A stock `.asd` is enough. `qlfile` / `qlfile.lock` in the same directory are installed too.
+A stock `.asd` is enough. `qlfile` / `qlfile.lock` in the same directory are installed too, each entry with its dependencies; a directory with only a `qlfile` is a project as well.
 The registry defaults to `https://ghcr.io` / `egao1980/cl-systems`. Source-registry configuration files (`~/.config/common-lisp/source-registry.conf.d`) are not read. The `:tree` / `:directory` entries of a `CL_SOURCE_REGISTRY` you pass are kept, after the project, for sync, test and run alike.
 `cl-repo test` runs the suite in a fresh image of the same SBCL that only gets the source registry, so none of the client's own systems (dexador, cl+ssl, its OpenSSL) are loaded there. `CL_REPO_TEST_IN_PROCESS=1` runs it in the client's image instead.
+Every image cl-repo starts (the client, the test image, the Lisp of `cl-repo run`) compiles into one fasl root, `$XDG_CACHE_HOME/common-lisp/cl-repo/<impl>/`. On SBCL each compile there holds an exclusive lock on its fasl (`<fasl>.lock` beside it) and each load a shared one, so parallel runs do not delete each other's fasls mid-load.
 
-`cl-repo sync` (and so `test` and `run`) records the project's dependency closure in `cl-repo.lock`: each package with its version, index digest and registry, the versions the project registry then loads. While the lock is current (no `.asd` or `qlfile` is newer, and it locks everything the dependency walk reaches), sync installs from it: no resolution and no tag listing, and only a version missing locally is pulled, after a digest check. Otherwise sync resolves and rewrites the lock. `--locked` fails instead of resolving when the lock is not current. `--no-lock` resolves and neither reads nor writes the lock. `cl-repo restore` installs every lock entry again.
+`cl-repo sync` (and so `test` and `run`) records the project's dependency closure in `cl-repo.lock`: each package with its version, index digest and registry, the versions the project registry then loads. While the lock is current (no `.asd` or `qlfile` is newer, and it locks everything the dependency walk reaches), sync installs from it: no resolution and no tag listing, and only a version missing locally is pulled, after a digest check. Otherwise sync resolves and rewrites the lock. `--locked` fails instead of resolving when the lock is not current. `--no-lock` resolves and neither reads nor writes the lock. `cl-repo restore` installs every lock entry again. An entry with neither registry nor digest (a local-only install) that is not installed makes the lock not current, so `--locked` fails on it. An entry whose version is no tag (a package without a `:version` installs as `latest`) is pulled by its digest.
 
 ### CLI
 
@@ -85,7 +86,7 @@ cl-repo install alexandria
 
 ### Run a Lisp
 
-`cl-repo run -- <command…>` syncs, then runs the command. A Lisp (ros, sbcl, ccl, ecl, abcl) starts with the source registry already set; `CL_SOURCE_REGISTRY` is not exported. `cl-repo ros …` is short for `cl-repo run -- ros …`, and the same goes for the other Lisps. Leading `--system NAME` / `--overlay NAME` are cl-repo's; everything after goes to the Lisp unchanged, `--help` and `ros run` included.
+`cl-repo run -- <command…>` syncs, then runs the command. A Lisp (ros, sbcl, ccl, ecl, abcl) starts with the source registry already set; `CL_SOURCE_REGISTRY` is not exported. `cl-repo ros …` is short for `cl-repo run -- ros …`, and the same goes for the other Lisps. Leading `--system NAME` / `--overlay NAME` are cl-repo's; everything after goes to the Lisp unchanged, `--help` and `ros run` included. `cl-repo ros` starts Roswell with `+Q`, without Quicklisp: a system the project registry lacks fails to load instead of coming from Roswell's Quicklisp dist. A `-Q` among the arguments turns Quicklisp on again.
 
 ### Versions
 

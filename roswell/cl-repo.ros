@@ -44,6 +44,13 @@ exec ros +Q -- $0 "$@"
          `(:output-translations
            (t (,(uiop:xdg-cache-home "common-lisp" "cl-repo" :implementation) :**/ :*.*.*))
            :inherit-configuration)))
+      ;; A lock per fasl in that root, so parallel cl-repo images do not
+      ;; delete each other's fasls mid-load (#162). The file beside this
+      ;; script; cl-repository-client/asdf-integration:fasl-lock-form loads it
+      ;; into the images cl-repo starts.
+      (let ((lock (and *load-pathname* (merge-pathnames "fasl-lock.lisp" *load-pathname*))))
+        (when (and lock (probe-file lock))
+          (load lock :verbose nil :print nil)))
       ;; Load chatter (cl-unicode prints at load) goes to stderr: stdout is
       ;; for command output such as V=$(cl-repo version).
       (let ((*standard-output* *error-output*))
@@ -84,7 +91,8 @@ exec ros +Q -- $0 "$@"
   (format t "  sync                  Install the .asd and qlfile dependencies, from cl-repo.lock when current~%")
   (format t "  test                  Sync, then run the system test-op~%")
   (format t "  run -- <command...>   Sync, then run a command~%")
-  (format t "  ros <args...>         Same as run -- ros <args...> (also sbcl, ccl, ecl, abcl)~%")
+  (format t "  ros <args...>         Same as run -- ros <args...> (also sbcl, ccl, ecl, abcl);~%")
+  (format t "                        ros starts without Quicklisp unless <args> give -Q~%")
   (format t "  grovel                Sync, load the system, write the grovel overlay~%")
   (format t "  publish               Push the source and overlays whose files exist~%")
   (format t "  publish --overlay     Push one overlay. A name selects that overlay.~%")

@@ -453,3 +453,173 @@
             (format nil "lk-b is installed (installs: ~s)" (calls-installs calls)))
         (ok (equal '("cl-repo-lk-a" "cl-repo-lk-b") (mapcar #'first (lock-of dir)))
             (format nil "and locked beside lk-a (lock: ~s)" (lock-of dir)))))))
+
+;;; Edge cases of the fixes for #163, #165, #167 and #170
+
+(defun lock-entry-for (system version digest registry)
+  (make-instance 'lockfile-entry :system system :version version
+                                 :index-digest digest :registry registry))
+
+(defun add-lock-entry (dir entry)
+  (let ((lock (merge-pathnames "cl-repo.lock" dir)))
+    (write-lockfile (append (read-lockfile lock) (list entry)) lock)))
+
+(defun write-asd (dir depends-on)
+  (with-open-file (o (merge-pathnames (format nil "~a.asd" *project*) dir)
+                     :direction :output :if-exists :supersede)
+    (format o "(defsystem ~s :depends-on ~s)~%" *project* depends-on)))
+
+(defun preinstall (name version)
+  "Install NAME VERSION as an earlier sync or `cl-repo install` would have,
+   its digest recorded."
+  (let ((result (fake-install "https://fake.test" (format nil "ns/~a" name) version)))
+    (cl-repository-client/digest-cache:record-installed-digest
+     (cl-repository-client/installer:install-result-index-digest result)
+     (cl-repository-client/installer:install-result-path result))))
+
+(defun not-found-for-latest (registry repository reference)
+  "PULL-MANIFEST-RAW of a registry that has no tag latest."
+  (if (string= reference "latest")
+      (error 'cl-oci-client/conditions:not-found-error
+             :url (format nil "https://fake.test/v2/~a/manifests/latest" repository))
+      (fake-manifest registry repository reference)))
+
+(deftest a-locked-latest-with-a-digest-is-pulled-by-its-digest
+  "cl-repository#163: a package with no :version installs as \"latest\" from
+   another tag (cl-utilities: its one tag is a commit). Once the install
+   recorded its digest the lock entry has one, and a fresh machine, which has
+   no tag latest to pull, pulls the digest. Nothing is resolved."
+  (with-fake-registry (dir)
+    (sync dir)
+    (add-lock-entry dir (lock-entry-for "cl-repo-lk-u" "latest"
+                                        (fake-digest "cl-repo-lk-u" "latest") "https://fake.test"))
+    (let ((pulled '()))
+      (with-stubs ((cl-oci-client/pull:pull-manifest-raw #'not-found-for-latest)
+                   (cl-repository-client/installer:install-system
+                    (lambda (url repository reference &key type)
+                      (push reference pulled)
+                      ;; installed under the config's version, as the installer does
+                      (fake-install url repository
+                                    (if (search "sha256:" reference) "latest" reference)
+                                    :type type))))
+        (let ((calls (sync dir)))
+          (ok (quiet-p calls) "the lock is current: nothing resolved")
+          (ok (equal (list (fake-digest "cl-repo-lk-u" "latest")) pulled)
+              (format nil "pulled by its digest: ~s" pulled))
+          (ok (uiop:directory-exists-p (system-install-path "cl-repo-lk-u" "latest"))))))))
+
+(deftest an-installed-entry-without-a-source-keeps-the-lock-current
+  "cl-repository#163: the machine that has cl-utilities/latest/ installed
+   needs nothing from a registry, so the entry without registry or digest is
+   no reason to resolve there."
+  (with-fake-registry (dir)
+    (sync dir)
+    (fake-install "https://fake.test" "ns/cl-repo-lk-u" "latest")
+    (add-lock-entry dir (lock-entry-for "cl-repo-lk-u" "latest" "" ""))
+    (let ((calls (sync dir)))
+      (ok (quiet-p calls) "nothing resolved, listed or requested")
+      (ok (null (calls-installs calls)) "nothing installed"))))
+
+(deftest locked-fails-on-an-entry-it-cannot-install
+  "cl-repository#163: under --locked an entry with no registry or digest that
+   is not installed makes the lock not current, and says which; it is not
+   pulled as a tag."
+  (with-fake-registry (dir)
+    (sync dir)
+    (add-lock-entry dir (lock-entry-for "cl-repo-lk-u" "latest" "" ""))
+    (let ((e (handler-case (progn (sync dir :locked t) nil)
+               (lockfile-not-current (e) e))))
+      (ok e "LOCKFILE-NOT-CURRENT")
+      (ok (and e (search "no registry or digest for cl-repo-lk-u latest" (princ-to-string e)))
+          (format nil "says why: ~a" e))
+      (ok (quiet-p *calls*) "nothing resolved or pulled"))))
+
+(deftest cl-repo-install-records-the-digest-it-installed
+  "cl-repository#163: CMD-INSTALL (`cl-repo install`, qlfile entries)
+   recorded no digest, so a lock written later had none for its packages and
+   asked the registry by tag, which for a \"latest\" install has no answer."
+  (with-fake-registry (dir)
+    (declare (ignore dir))
+    (cl-repository-client/commands:cmd-install "cl-repo-lk-c")
+    (ok (equal (namestring (system-install-path "cl-repo-lk-c" "1.0"))
+               (gethash (fake-digest "cl-repo-lk-c" "1.0")
+                        cl-repository-client/digest-cache:*installed-digests*)))))
+
+(deftest a-missing-minimum-installs-nothing-of-an-older-version
+  "cl-repository#165: the project needs lk-a >= 2.0 and only lk-a 1.0, which
+   needs lk-b, is published. The sync installed lk-b, a dependency of the
+   version it then rejected, before it failed. It signals
+   UNSATISFIED-DEPENDENCIES and installs nothing."
+  (with-fake-registry (dir)
+    (write-asd dir '((:version "cl-repo-lk-a" "2.0")))
+    (let ((e (handler-case (progn (sync dir) nil)
+               (cl-repository-client/quickload:unsatisfied-dependencies (e) e))))
+      (ok e "UNSATISFIED-DEPENDENCIES")
+      (ok (and e (equal '(("cl-repo-lk-a" . "2.0"))
+                        (cl-repository-client/quickload:unsatisfied-dependencies-systems e)))
+          "names the system and its minimum")
+      (ok (and e (search "cl-repo-lk-a 2.0 or later is required; the registry has 1.0"
+                         (princ-to-string e)))
+          (format nil "~a" e))
+      (ok (null (calls-installs *calls*))
+          (format nil "nothing installed: ~s" (calls-installs *calls*)))))
+  (testing "a system with no published version at all is not in the registry"
+    (with-fake-registry (dir)
+      (write-asd dir '((:version "cl-repo-lk-zz" "1.0")))
+      (let ((message (handler-case (progn (sync dir) nil)
+                       (error (e) (princ-to-string e)))))
+        (ok (and message (search "system cl-repo-lk-zz is not in the registry" message))
+            (format nil "~a" message))))))
+
+(deftest a-locked-older-version-stays-when-the-lock-is-stale
+  "cl-repository#167: the newest published version is for packages the lock
+   does not hold. A lock that holds lk-b 1.0 and goes stale (the .asd
+   changed) resolves again, and lk-b stays at 1.0."
+  (with-fake-registry (dir)
+    (sync dir)
+    (write-lockfile (mapcar (lambda (e)
+                              (if (string= (lockfile-entry-system e) "cl-repo-lk-b")
+                                  (lock-entry-for "cl-repo-lk-b" "1.0"
+                                                  (fake-digest "cl-repo-lk-b" "1.0")
+                                                  "https://fake.test")
+                                  e))
+                            (read-lockfile (merge-pathnames "cl-repo.lock" dir)))
+                    (merge-pathnames "cl-repo.lock" dir))
+    (sync dir)
+    (touch-project dir)
+    (let ((calls (sync dir)))
+      (ok (resolved-p calls) "resolved")
+      (ok (equal '("cl-repo-lk-b" "1.0" "sha256:cl-repo-lk-b-1.0" "https://fake.test")
+                 (assoc "cl-repo-lk-b" (lock-of dir) :test #'string=))
+          (format nil "lk-b stays locked at 1.0: ~s" (assoc "cl-repo-lk-b" (lock-of dir)
+                                                           :test #'string=))))))
+
+(deftest an-unreachable-registry-keeps-the-installed-version
+  "cl-repository#167: when no registry can be asked for lk-b's versions, the
+   installed 1.0 stays, as before, and the sync succeeds."
+  (with-fake-registry (dir)
+    (dolist (name *fake-systems*)
+      (preinstall name "1.0"))
+    (let ((cl-repository-client/constraint-builder::*version-lister*
+            (lambda (name registries)
+              (declare (ignore registries))
+              (error 'cl-repository-client/constraint-builder:system-lookup-error
+                     :name name :failures nil))))
+      (sync dir))
+    (ok (equal "1.0" (second (assoc "cl-repo-lk-b" (lock-of dir) :test #'string=)))
+        (format nil "lk-b 1.0 kept: ~s" (lock-of dir)))))
+
+(deftest a-qlfile-entry-beside-an-asd-gets-its-closure
+  "cl-repository#170: the project's .asd needs lk-c, and its qlfile adds lk-a,
+   which needs lk-b. lk-b is installed and locked too, and the next sync
+   installs from that lock."
+  (with-fake-registry (dir)
+    (write-asd dir '("cl-repo-lk-c"))
+    (with-open-file (o (merge-pathnames "qlfile" dir) :direction :output :if-exists :supersede)
+      (write-line "ql cl-repo-lk-a" o))
+    (let ((calls (sync dir)))
+      (ok (assoc "cl-repo-lk-b" (calls-installs calls) :test #'string=)
+          (format nil "lk-b is installed (installs: ~s)" (calls-installs calls)))
+      (ok (equal '("cl-repo-lk-a" "cl-repo-lk-b" "cl-repo-lk-c") (mapcar #'first (lock-of dir)))
+          (format nil "and locked (lock: ~s)" (lock-of dir))))
+    (ok (quiet-p (sync dir)) "the next sync installs from the lock")))

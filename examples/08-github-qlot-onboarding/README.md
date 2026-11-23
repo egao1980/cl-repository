@@ -12,7 +12,8 @@ Onboard projects into an OCI registry from either GitHub repos or `qlot` metadat
 
 A directory with an `.asd`, a `qlfile`, or both is a project. `qlfile.lock` wins when it is present.
 Missing `ql`, `github`, `git`, and `http` entries are published, then installed. Defaults are
-`https://ghcr.io` and `egao1980/cl-systems`.
+`https://ghcr.io` and `egao1980/cl-systems`. Each entry is installed with its dependencies, and
+`cl-repo.lock` records them all.
 
 ```text
 ql alexandria

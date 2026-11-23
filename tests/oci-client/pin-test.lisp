@@ -101,9 +101,11 @@
       (uiop:delete-directory-tree live :validate t :if-does-not-exist :ignore)
       (uiop:delete-directory-tree other :validate t :if-does-not-exist :ignore))))
 
-(defun %shadow-warnings (loaded-version registry-version)
+(defun %shadow-warnings (loaded-version registry-version &key (warn-shadowing t) inner)
   "Load pin-demo LOADED-VERSION, put REGISTRY-VERSION first in the registry,
-   resolve it twice under the pin: the warnings signalled and the version used."
+   resolve it twice under the pin: the warnings signalled and the version used.
+   WARN-SHADOWING is the scope's; INNER resolves inside a nested scope that
+   asks for the opposite."
   (let ((live (%tmp-tree "sh-live")) (other (%tmp-tree "sh-other"))
         (saved asdf:*source-registry-parameter*)
         (seen '()))
@@ -117,10 +119,15 @@
             `(:source-registry (:directory ,other) (:directory ,live) :ignore-inherited-configuration))
            (handler-bind ((loaded-system-shadows-newer
                             (lambda (w) (push w seen) (muffle-warning w))))
-             (with-loaded-systems-pinned ()
-               (%find "pin-demo")
-               (values (reverse seen)
-                       (asdf:component-version (%find "pin-demo"))))))
+             (with-loaded-systems-pinned (:warn-shadowing warn-shadowing)
+               (flet ((resolve ()
+                        (%find "pin-demo")
+                        (values (reverse seen)
+                                (asdf:component-version (%find "pin-demo")))))
+                 (if inner
+                     (with-loaded-systems-pinned (:warn-shadowing (not warn-shadowing))
+                       (resolve))
+                     (resolve))))))
       (asdf:clear-system "pin-demo")
       (when (find-package "PIN-DEMO") (delete-package "PIN-DEMO"))
       (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
@@ -137,6 +144,19 @@
   (testing "same or older versions in the registry are quiet"
     (ok (null (%shadow-warnings "1.0.0" "1.0.0")))
     (ok (null (%shadow-warnings "2.0.0" "1.0.0")))))
+
+(deftest-unpinned a-scope-that-prepares-another-image-does-not-warn
+  "cl-repository#169: the sync before `cl-repo ros`, `run` or `test` pins the
+   client's systems, but the project then runs in a fresh image that loads
+   the newer copy. That scope keeps the loaded copy and says nothing; a nested
+   scope is the outer one, whatever it asks."
+  (multiple-value-bind (warnings used) (%shadow-warnings "1.0.0" "2.0.0" :warn-shadowing nil)
+    (ok (equal "1.0.0" used) "still pinned")
+    (ok (null warnings) "no warning"))
+  (ok (null (%shadow-warnings "1.0.0" "2.0.0" :warn-shadowing nil :inner t))
+      "a nested scope asking for warnings stays quiet")
+  (ok (= 1 (length (%shadow-warnings "1.0.0" "2.0.0" :warn-shadowing t :inner t)))
+      "a nested quiet scope inside a warning one warns"))
 
 (deftest-unpinned pinning-skips-systems-the-checkout-defines
   "A checkout of a system the client runs (http-backend-async) is tested from
