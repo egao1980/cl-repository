@@ -51,6 +51,11 @@
            #:find-system-in-registry
            #:ensure-systems
            #:ensure-system-dependencies
+           #:dependency-roots
+           #:dependency-closure
+           #:collect-missing-asdf-deps
+           #:installed-satisfies-p
+           #:*install-recorder*
            #:installed-system-version
            #:load-system))
 (in-package :cl-repository-client/quickload)
@@ -120,26 +125,37 @@
                  (remove name cl-repository-client/asdf-integration:*locked-versions*
                          :key #'car :test #'string-equal)))))
 
+(defun add-install-to-lockfile (result)
+  "Add the system of the INSTALL-RESULT RESULT to cl-repo.lock in the current
+   directory: the default *INSTALL-RECORDER*."
+  (add-lockfile-entry
+   (make-instance 'lockfile-entry
+                  :system (install-result-name result)
+                  :version (install-result-version result)
+                  :index-digest (or (install-result-index-digest result) "")
+                  :source-digest (install-result-source-digest result)
+                  :overlay-digest (install-result-overlay-digest result)
+                  :overlay-digests (install-result-overlay-digests result)
+                  :registry (or (install-result-registry-url result) ""))))
+
+(defvar *install-recorder* 'add-install-to-lockfile
+  "Function of the INSTALL-RESULT of each system ENSURE-SYSTEMS installs. The
+   default adds it to cl-repo.lock in the current directory (`cl-repo load`,
+   `cl-repo install`). CMD-SYNC binds it to collect the results: a sync writes
+   the project's whole dependency closure to its lock, or nothing (--no-lock).")
+
 (defun record-lockfile-entry (result)
-  "Create a lockfile entry from an INSTALL-RESULT and append it to cl-repo.lock."
-  (handler-case
-      (when (and (install-result-name result)
-                 (install-result-version result))
-        (add-lockfile-entry
-         (make-instance 'lockfile-entry
-                        :system (install-result-name result)
-                        :version (install-result-version result)
-                        :index-digest (or (install-result-index-digest result) "")
-                        :source-digest (install-result-source-digest result)
-                        :overlay-digest (install-result-overlay-digest result)
-                        :overlay-digests (install-result-overlay-digests result)
-                        :registry (or (install-result-registry-url result) "")))
-        ;; The registry prefers locked versions; the lock read when the
-        ;; project was registered still named the old ones, so a version
-        ;; installed now must replace them or the rescan keeps the old copy.
-        (prefer-installed-version (install-result-name result) (install-result-version result)))
-    (error (e)
-      (msg "~&; cl-repo: warning: could not update lockfile: ~a~%" e))))
+  "Note a system ENSURE-SYSTEMS installed: the registry prefers its version
+   from now on, and *INSTALL-RECORDER* gets RESULT."
+  (when (and (install-result-name result)
+             (install-result-version result))
+    ;; The registry prefers locked versions; the lock read when the
+    ;; project was registered still named the old ones, so a version
+    ;; installed now must replace them or the rescan keeps the old copy.
+    (prefer-installed-version (install-result-name result) (install-result-version result))
+    (handler-case (funcall *install-recorder* result)
+      (error (e)
+        (msg "~&; cl-repo: warning: could not update lockfile: ~a~%" e)))))
 
 ;;; Direct system install (for single system, bypasses SAT)
 
@@ -489,6 +505,8 @@
   "Walk ASDF :depends-on from LOCAL-ROOTS. Return names that are not satisfied.
    A system is unsatisfied when it is missing, older than its :version minimum,
    or found under a Quicklisp tree. Second value is an alist of (name . minimum).
+   Third value: every name the walk reached, LOCAL-ROOTS and EXTRAS included
+   (the dependency closure, once nothing is missing).
    Does not return LOCAL-ROOTS themselves.
    Every (:version name min) in the closure counts, not only the first one
    met: a name seen again with a higher minimum (the test system or a :with
@@ -543,7 +561,8 @@
       (values (nreverse missing)
               (loop for k being the hash-key of mins
                     when (gethash k mins)
-                      collect (cons k (gethash k mins)))))))
+                      collect (cons k (gethash k mins)))
+              (loop for k being the hash-key of seen collect k)))))
 
 (defun test-op-delegates (system-name)
   "Systems SYSTEM-NAME's TEST-OP runs through :in-order-to, transitively among
@@ -565,6 +584,51 @@
                                                (push n queue))))))))))
     (nreverse seen)))
 
+(defun dependency-roots (system-name &key (also-tests t) with)
+  "Where ENSURE-SYSTEM-DEPENDENCIES walks from for the local SYSTEM-NAME:
+   (values local-roots extras unfindable). LOCAL-ROOTS: SYSTEM-NAME, with
+   ALSO-TESTS its test system (SYSTEM-NAME/tests, or ALSO-TESTS when a name)
+   and the systems its TEST-OP delegates to, and the secondary systems of
+   SYSTEM-NAME among WITH. EXTRAS: the other WITH names. UNFINDABLE: the
+   secondary systems among WITH that ASDF does not find."
+  (let ((name (string-downcase (string system-name)))
+        (local-roots '())
+        (extras '())
+        (unfindable '()))
+    (push name local-roots)
+    (dolist (e (extra-with-install-names with))
+      (if (string= (asdf:primary-system-name e) name)
+          (if (asdf:find-system e nil)
+              (pushnew e local-roots :test #'string=)
+              (push e unfindable))
+          (push e extras)))
+    (when also-tests
+      (let ((ts (if (stringp also-tests)
+                    (string-downcase also-tests)
+                    (format nil "~a/tests" name))))
+        (when (asdf:find-system ts nil)
+          (push ts local-roots))
+        (dolist (d (test-op-delegates name))
+          (when (and (asdf:find-system d nil)
+                     (not (member d local-roots :test #'string=)))
+            (push d local-roots)))))
+    (values local-roots (nreverse extras) (nreverse unfindable))))
+
+(defun dependency-closure (system-name &key (also-tests t) with)
+  "The walk of ENSURE-SYSTEM-DEPENDENCIES from the same roots, installing
+   nothing: (values closure missing). CLOSURE is every system name reached,
+   the local roots included; MISSING the names not satisfied (absent, older
+   than a minimum, or from a Quicklisp tree)."
+  (let ((name (string-downcase (string system-name))))
+    (if (asdf:find-system name nil)
+        (multiple-value-bind (local-roots extras)
+            (dependency-roots name :also-tests also-tests :with with)
+          (multiple-value-bind (missing minimums closure)
+              (collect-missing-asdf-deps local-roots extras)
+            (declare (ignore minimums))
+            (values closure missing)))
+        (values nil (list name)))))
+
 (defun ensure-system-dependencies (system-name &key (also-tests t) with silent version force
                                                     sources deny allow default-source
                                                     config-path)
@@ -581,7 +645,8 @@
    Always installed from OCI even when ASDF already finds a QL dummy of the same name.
    Secondary systems of SYSTEM-NAME itself (\"foo/capability\" for \"foo\") are local
    roots: their deps are walked, but they are never installed — otherwise an older
-   published FOO would be pulled next to the checkout and could shadow it."
+   published FOO would be pulled next to the checkout and could shadow it.
+   The roots are DEPENDENCY-ROOTS; DEPENDENCY-CLOSURE walks them without installing."
   (let* ((name (string-downcase (string system-name)))
          ;; one registry cache for every target of the walk: they share
          ;; most of their transitive dependencies
@@ -590,27 +655,12 @@
          (sys (or (asdf:find-system name nil)
                   (error "cl-repo: system ~a is not findable. The .asd must be the project file."
                          name)))
-         (test-name (format nil "~a/tests" name))
-         (local-roots (list name))
-         (extras '()))
+         (roots (multiple-value-list (dependency-roots name :also-tests also-tests :with with)))
+         (local-roots (first roots))
+         (extras (second roots)))
     (declare (ignore sys))
-    (dolist (e (extra-with-install-names with))
-      (if (string= (asdf:primary-system-name e) name)
-          (if (asdf:find-system e nil)
-              (pushnew e local-roots :test #'string=)
-              (msg "~&; cl-repo: :with ~a is a secondary of ~a but not findable; skipping~%" e name))
-          (push e extras)))
-    (setf extras (nreverse extras))
-    (when also-tests
-      (let ((ts (if (stringp also-tests)
-                    (string-downcase also-tests)
-                    test-name)))
-        (when (asdf:find-system ts nil)
-          (push ts local-roots))
-        (dolist (d (test-op-delegates name))
-          (when (and (asdf:find-system d nil)
-                     (not (member d local-roots :test #'string=)))
-            (push d local-roots)))))
+    (dolist (e (third roots))
+      (msg "~&; cl-repo: :with ~a is a secondary of ~a but not findable; skipping~%" e name))
     ;; :with pins (mgl-pax / dref / autoload) must overlay QL dummies before the
     ;; missing-deps walk, or collect-missing treats extras as already present.
     (when extras

@@ -11,7 +11,8 @@
            #:lockfile-entry-registry
            #:read-lockfile
            #:write-lockfile
-           #:add-lockfile-entry))
+           #:add-lockfile-entry
+           #:lockfile-path))
 (in-package :cl-repository-client/lockfile)
 
 (defclass lockfile-entry ()
