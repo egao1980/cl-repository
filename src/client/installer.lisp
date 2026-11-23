@@ -46,7 +46,8 @@
            #:provides-link-target
            #:claim-system-directory
            #:drop-stale-provides-links
-           #:parse-ocicl-layer-info))
+           #:parse-ocicl-layer-info
+           #:client-tree-package))
 (in-package :cl-repository-client/installer)
 
 (defvar *systems-root*
@@ -88,6 +89,46 @@
       (let ((below (nthcdr (length (pathname-directory root)) (pathname-directory true))))
         (when (and (stringp (first below)) (stringp (second below)))
           (values (first below) (second below)))))))
+
+(defun split-package-directory (name directory)
+  "(values package version) of the client-tree directory NAME,
+   \"<package>-<version>\" as setup-client.sh extracts a package tarball (the
+   packager's prefix, COMPUTE-STRIP-PREFIX). The version starts with a digit
+   or is latest. A package name can hold a hyphen and a digit
+   (trivial-utf-8-0.1), so the split whose package has an .asd in DIRECTORY
+   wins, else the first one. NIL when NAME has no such split."
+  (let ((splits (loop for i = (position #\- name) then (position #\- name :start (1+ i))
+                      while i
+                      for package = (subseq name 0 i)
+                      for version = (subseq name (1+ i))
+                      when (and (plusp (length package))
+                                (plusp (length version))
+                                (or (digit-char-p (char version 0))
+                                    (string= version "latest")))
+                        collect (cons package version))))
+    (let ((split (or (find-if (lambda (split)
+                                (uiop:probe-file*
+                                 (merge-pathnames (format nil "~a.asd" (car split)) directory)))
+                              splits)
+                     (first splits))))
+      (when split
+        (values (car split) (cdr split))))))
+
+(defun client-tree-package (file)
+  "(values package version) of the directory CL_REPOSITORY_DEST/PACKAGE-VERSION/
+   that FILE lies in: the client's own tree, where install.sh (setup-client.sh)
+   puts the client's dependencies (~/.cl-repository-client/http-protocol-0.4.2/).
+   The project registry searches it after the install tree. NIL for a file
+   outside that tree, or in the install tree (INSTALLED-PACKAGE)."
+  (let* ((dest (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST"))
+         (root (and dest (uiop:truename* dest)))
+         (true (and root file (uiop:truename* file))))
+    (when (and true (uiop:subpathp true root) (not (installed-package file)))
+      (let ((top (nth (length (pathname-directory root)) (pathname-directory true))))
+        (when (stringp top)
+          (split-package-directory
+           top (make-pathname :directory (append (pathname-directory root) (list top))
+                              :name nil :type nil :version nil :defaults root)))))))
 
 (defstruct install-result
   "Result of installing a system, carrying path and digest info for lockfile."

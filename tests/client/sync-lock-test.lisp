@@ -419,6 +419,31 @@
                         (asdf/source-registry:sysdef-source-registry-search "cl-repo-lk-b"))))
         (setf (uiop:getenv "CL_REPOSITORY_DEST") (or old-dest ""))))))
 
+(deftest issue-167-a-client-tree-package-at-the-newest-version-is-not-installed-again
+  "cl-repository#167, the other side: the client's tree has lk-b 2.0, the
+   newest the registry publishes. The sync uses that copy and installs
+   nothing of lk-b (locking such copies is #172)."
+  (with-fake-registry (dir)
+    (write-asd dir '("cl-repo-lk-b"))
+    (let* ((dest (merge-pathnames "client-dest/" (uiop:pathname-parent-directory-pathname dir)))
+           (lk-b (merge-pathnames "cl-repo-lk-b-2.0/" dest))
+           (old-dest (uiop:getenv "CL_REPOSITORY_DEST")))
+      (ensure-directories-exist lk-b)
+      (with-open-file (o (merge-pathnames "cl-repo-lk-b.asd" lk-b)
+                         :direction :output :if-exists :supersede)
+        (format o "(defsystem \"cl-repo-lk-b\" :version \"2.0\")~%"))
+      (setf (uiop:getenv "CL_REPOSITORY_DEST") (namestring dest))
+      (unwind-protect
+          (let ((calls (sync dir)))
+            (ok (null (assoc "cl-repo-lk-b" (calls-installs calls) :test #'string=))
+                (format nil "lk-b is not installed: ~s" (calls-installs calls)))
+            (ok (uiop:pathname-equal
+                 (merge-pathnames "cl-repo-lk-b.asd" (uiop:truename* lk-b))
+                 (uiop:truename* (asdf/source-registry:sysdef-source-registry-search
+                                  "cl-repo-lk-b")))
+                "the project registry still finds the client's copy"))
+        (setf (uiop:getenv "CL_REPOSITORY_DEST") (or old-dest ""))))))
+
 (deftest issue-169-a-sync-for-a-fresh-image-does-not-say-it-runs-the-client-copy
   "cl-repository#169: the client image runs lk-b 1.0, the project needs
    lk-b >= 2.0 and its lock has 2.0. `cl-repo ros`, `run` and `test` sync in

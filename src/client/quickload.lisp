@@ -19,7 +19,8 @@
                 #:install-result-index-digest #:install-result-source-digest
                 #:install-result-overlay-digest #:install-result-overlay-digests
                 #:install-result-registry-url
-                #:systems-root #:system-install-path #:installed-package)
+                #:systems-root #:system-install-path #:installed-package
+                #:client-tree-package)
   (:import-from :cl-repository-client/digest-cache
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
@@ -437,37 +438,45 @@
 
 (defun outdated-installs (names &key keep)
   "(package . newest) for each package a fresh image under the current source
-   registry loads one of NAMES from out of the install tree, at a version
-   older than the newest one the registries publish. Without a lock entry a
-   sync resolves to the newest published version, not the newest installed
-   one (#167), so two machines agree on one .asd. Left out: the packages
-   cl-repo.lock or this sync's installs hold (*LOCKED-VERSIONS*) and those
-   named in KEEP (qlfile entries, installed at the reference they give). The
-   version lists come in one batch. When no registry can be asked
-   (SYSTEM-LOOKUP-ERROR), the installed versions stay."
-  (let ((installed '()))
+   registry loads one of NAMES from, out of the install tree or the client's
+   own tree (CL_REPOSITORY_DEST, CLIENT-TREE-PACKAGE: alexandria,
+   http-protocol, ...), at a version older than the newest one the registries
+   publish. Without a lock entry a sync resolves to the newest published
+   version, not the newest installed one or the one the client happens to
+   carry (#167), so two machines agree on one .asd. The newest version goes
+   into the install tree, which the project registry searches first, and so
+   into the lock. Left out: the packages cl-repo.lock or this sync's installs
+   hold (*LOCKED-VERSIONS*) and those named in KEEP (qlfile entries, installed
+   at the reference they give). The version lists come in one batch. When no
+   registry can be asked (SYSTEM-LOOKUP-ERROR), the installed versions stay."
+  (let ((found '()))
     (dolist (name names)
       (unless (implementation-system-p name)
-        (multiple-value-bind (package version)
-            (installed-package (asdf/source-registry:sysdef-source-registry-search name))
-          (when (and package
-                     (not (assoc package cl-repository-client/asdf-integration:*locked-versions*
-                                 :test #'string-equal))
-                     (not (member package keep :test #'string-equal))
-                     (not (assoc package installed :test #'string=)))
-            (push (cons package version) installed)))))
-    (when installed
-      (setf installed (nreverse installed))
+        (let ((file (asdf/source-registry:sysdef-source-registry-search name)))
+          (multiple-value-bind (package version where)
+              (multiple-value-bind (package version) (installed-package file)
+                (if package
+                    (values package version "installed")
+                    (multiple-value-bind (package version) (client-tree-package file)
+                      (values package version "in the client's tree"))))
+            (when (and package
+                       (not (assoc package cl-repository-client/asdf-integration:*locked-versions*
+                                   :test #'string-equal))
+                       (not (member package keep :test #'string-equal))
+                       (not (assoc package found :test #'string=)))
+              (push (list package version where) found))))))
+    (when found
+      (setf found (nreverse found))
       (with-resolution-cache ()
         (let ((outdated '()))
           (handler-case
               (progn
-                (fetch-versions-batch (mapcar #'car installed) *registries*)
-                (loop for (package . version) in installed
+                (fetch-versions-batch (mapcar #'first found) *registries*)
+                (loop for (package version where) in found
                       for newest = (newest-published-version package)
                       when (and newest (version< version newest))
-                        do (msg "~&; cl-repo: ~a ~a is installed and ~a is published; ~
-                                 resolving the newest~%" package version newest)
+                        do (msg "~&; cl-repo: ~a ~a is ~a and ~a is published; ~
+                                 resolving the newest~%" package version where newest)
                            (push (cons package newest) outdated)))
             (system-lookup-error (e)
               (msg "~&; cl-repo: keeping installed versions: ~a~%" e)))
@@ -749,8 +758,9 @@
    roots: their deps are walked, but they are never installed — otherwise an older
    published FOO would be pulled next to the checkout and could shadow it.
    The roots are DEPENDENCY-ROOTS; DEPENDENCY-CLOSURE walks them without installing.
-   NEWEST (a sync): an installed package the lock does not hold is upgraded
-   when the registries publish a newer version (OUTDATED-INSTALLS, #167);
+   NEWEST (a sync): a package the lock does not hold, found in the install
+   tree or in the client's own tree, is resolved again when the registries
+   publish a newer version (OUTDATED-INSTALLS, #167);
    KEEP names packages left at their installed version.
    What stays missing signals UNSATISFIED-DEPENDENCIES."
   (let* ((name (string-downcase (string system-name)))
