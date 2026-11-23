@@ -1,0 +1,16 @@
+#!/bin/sh
+# cl-repo launcher, shipped with the client. The wrapper install.sh writes
+# runs this when the client has it, so start-up fixes arrive with client
+# upgrades.
+#
+# macOS: an application with an in-process crash reporter hands its Mach
+# exception port to the processes it starts (Zed does, for its terminals and
+# agents). SBCL gets its traps (brk) as signals only when no port takes them;
+# with the inherited port the first trap repeats forever, and Roswell's own
+# start-up traps before cl-repo.ros runs. The -e form clears the ports for
+# the exception types SBCL handles as signals (BAD_ACCESS, BAD_INSTRUCTION,
+# ARITHMETIC, EMULATION, SOFTWARE, BREAKPOINT) before Roswell loads the
+# script; every Lisp cl-repo starts inherits the cleared ports. Elsewhere it
+# is (progn).
+here="$(cd "$(dirname "$0")" && pwd)"
+exec ros +Q -e '(progn #+(and sbcl darwin) (sb-alien:alien-funcall (sb-alien:extern-alien "task_set_exception_ports" (function sb-alien:int sb-alien:unsigned sb-alien:unsigned sb-alien:unsigned sb-alien:int sb-alien:int)) (sb-alien:extern-alien "mach_task_self_" sb-alien:unsigned) #x7e 0 1 #+arm64 5 #-arm64 13))' -- "$here/cl-repo.ros" "$@"
