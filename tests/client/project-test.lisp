@@ -604,3 +604,113 @@
   (let ((form (cl-repository-client/asdf-integration:output-translations-form)))
     (ok (equal form (with-standard-io-syntax
                       (read-from-string (prin1-to-string form)))))))
+
+(defun %race-system (dir files)
+  "Write DIR/cl-repo-race-162.asd, a serial system of FILES tiny files."
+  (ensure-directories-exist dir)
+  (dotimes (i files)
+    (with-open-file (o (merge-pathnames (format nil "f~d.lisp" i) dir)
+                       :direction :output :if-exists :supersede)
+      (format o "(defpackage :cl-repo-race-162-~d (:use :cl)) (in-package :cl-repo-race-162-~d) (defun f (x) (1+ x))~%"
+              i i)))
+  (with-open-file (o (merge-pathnames "cl-repo-race-162.asd" dir)
+                     :direction :output :if-exists :supersede)
+    (format o "(defsystem \"cl-repo-race-162\" :serial t :components (~{(:file \"f~d\")~^ ~}))~%"
+            (loop for i below files collect i))))
+
+#+sbcl
+(deftest issue-162-parallel-images-compile-into-the-shared-cache
+  "cl-repository#162: two cl-repo runs that compile the same files into the
+   shared fasl root (~/.cache/common-lisp/cl-repo/<impl>/) kill each
+   other's load: \"Couldn't load …fasl: file does not exist\". Here three
+   images started as cl-repo test starts its fresh image (TEST-IMAGE-COMMAND,
+   the TEST-IMAGE-FORMS before the project load) and three started as
+   `cl-repo run -- sbcl` (RUN-STARTUP-FORM) force-load one 120-file system
+   twenty times each, all at once. Every one must load it every time.
+   UIOP 3.3.1 COMPILE-FILE* deletes the fasl before it renames the staging
+   file over it and then takes its TRUENAME, so another image's delete
+   lands in that window; seeding *RANDOM-STATE* alone does not close it.
+   On 0.27.33 a run of this has a few failed loads (it is a race: a lucky
+   run can pass)."
+  (let ((command (cl-repository-client/project::test-image-command)))
+    (if (null command)
+        (skip "needs an SBCL whose core is a separate file")
+        (let* ((dir (uiop:ensure-directory-pathname
+                     (format nil "~a/cl-repo-162-~36r/" (uiop:temporary-directory)
+                             (random (expt 36 6) (make-random-state t)))))
+               (asd (uiop:native-namestring (merge-pathnames "cl-repo-race-162.asd" dir)))
+               (work (with-standard-io-syntax
+                         (format nil "(progn (setf *compile-verbose* nil *compile-print* nil) (asdf:load-asd ~s) (let ((fails 0)) (dotimes (i 20) (handler-case (asdf:load-system \"cl-repo-race-162\" :force t) (error (e) (incf fails) (format t \"~~&RACE-FAIL ~~a~~%\" e)))) (format t \"~~&RACE-DONE ~~d~~%\" fails)))"
+                                 asd)))
+               (test-image (append command
+                                   (loop for form in (butlast (cl-repository-client/project::test-image-forms
+                                                               "cl-repo-race-162" nil nil)
+                                                              2)
+                                         append (list "--eval" form))
+                                   (list "--eval" work)))
+               (run-image (cons (uiop:native-namestring sb-ext:*runtime-pathname*)
+                                (cl-repository-client/project::lisp-startup
+                                 "sbcl" (cl-repository-client/project::run-startup-form dir)
+                                 (list "--core" (uiop:native-namestring sb-ext:*core-pathname*)
+                                       "--noinform" "--non-interactive" "--no-sysinit" "--no-userinit"
+                                       "--eval" work))))
+               (images (list test-image run-image test-image run-image test-image run-image))
+               (logs (loop for i below (length images)
+                           collect (merge-pathnames (format nil "image-~d.log" i) dir))))
+          (%race-system dir 120)
+          (unwind-protect
+              (let* ((processes (loop for argv in images
+                                      for log in logs
+                                      collect (uiop:launch-program argv :output log
+                                                                        :if-output-exists :supersede
+                                                                        :error-output nil)))
+                     (outputs (progn (mapc #'uiop:wait-process processes)
+                                (mapcar #'uiop:read-file-string logs)))
+                     (failures (loop for out in outputs
+                                     for start = 0
+                                     append (loop for at = (search "RACE-FAIL" out :start2 start)
+                                                  while at
+                                                  collect (subseq out at (min (length out) (+ at 140)))
+                                                  do (setf start (1+ at))))))
+                (ok (every (lambda (out) (search "RACE-DONE" out)) outputs)
+                    "every image ran its twenty loads")
+                (ok (null failures)
+                    (format nil "no load failed (~d failed: ~{~a~^ | ~})"
+                            (length failures) (subseq failures 0 (min 3 (length failures))))))
+            (uiop:delete-directory-tree (uiop:ensure-directory-pathname
+                                         (asdf:apply-output-translations dir))
+                                        :validate t :if-does-not-exist :ignore)
+            (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
+
+(deftest issue-166-cl-repo-ros-starts-without-quicklisp
+  "cl-repository#166: `cl-repo ros -l tool.lisp -q` (README) ran Roswell's
+   default init, which loads Roswell's Quicklisp, so a system the project
+   registry lacks (a missing :depends-on) loaded from the Quicklisp dist
+   without a word. The image cl-repo starts for `ros` must have no Quicklisp."
+  (let ((probe "(format t \"~&QL=~:[NIL~;T~]~%\" (find-package \"QL\"))"))
+    (flet ((quicklisp-p (args)
+             (let ((out (ignore-errors
+                          (uiop:run-program (cons "ros" args) :output :string
+                                                              :error-output nil
+                                                              :ignore-error-status t))))
+               (cond ((null out) :no-ros)
+                     ((search "QL=T" out) t)
+                     ((search "QL=NIL" out) nil)
+                     (t :no-answer)))))
+      (let ((plain (quicklisp-p (list "-e" probe "-q"))))
+        (cond
+         ((eq plain :no-ros) (skip "needs Roswell (ros) on PATH"))
+         ((not (eq plain t)) (skip "this Roswell loads no Quicklisp by default: nothing to leak"))
+         (t
+          (let ((dir (uiop:ensure-directory-pathname
+                      (format nil "~a/cl-repo-166-~36r/" (uiop:temporary-directory)
+                              (random (expt 36 6) (make-random-state t))))))
+            (ensure-directories-exist dir)
+            (unwind-protect
+                (let ((got (quicklisp-p (cl-repository-client/project::lisp-startup
+                                         "ros" (cl-repository-client/project::run-startup-form dir)
+                                         (list "-e" probe "-q")))))
+                  (ok (null got)
+                      (format nil "no Quicklisp in the image `cl-repo ros -e … -q` starts (got ~a)"
+                              got)))
+              (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))))))

@@ -323,3 +323,133 @@
       (ok (equal "latest" (lockfile-entry-version e)))
       (ok (equal "" (lockfile-entry-index-digest e)))
       (ok (equal "" (lockfile-entry-registry e))))))
+
+(deftest issue-163-an-unreproducible-lock-entry-does-not-kill-a-fresh-sync
+  "cl-repository#163: `cl-repo install cl-utilities` pulls its only tag, a
+   commit sha, into cl-utilities/latest/, and the next sync locks it as
+   (:version \"latest\" :index-digest \"\" :registry \"\"). On a machine
+   without that directory the sync from the lock pulled the tag latest,
+   which no registry has, and NOT-FOUND killed the job (http-protocol CI)."
+  (with-fake-registry (dir)
+    (sync dir)
+    (let ((lock (merge-pathnames "cl-repo.lock" dir))
+          (pulled '()))
+      (write-lockfile (append (read-lockfile lock)
+                              (list (make-instance 'lockfile-entry
+                                                   :system "cl-repo-lk-u" :version "latest"
+                                                   :index-digest "" :registry "")))
+                      lock)
+      (with-stubs ((cl-repository-client/installer:install-system
+                    (lambda (url repository reference &key type)
+                      (push (cons (repository-name repository) reference) pulled)
+                      (if (string= reference "latest")
+                          (error 'cl-oci-client/conditions:not-found-error
+                                 :url (format nil "~a/v2/~a/manifests/latest" url repository))
+                          (fake-install url repository reference :type type)))))
+        (let ((err (handler-case (progn (sync dir) nil)
+                     (cl-oci-client/conditions:not-found-error (e) e))))
+          (ok (null err) (format nil "the sync does not die with ~a" err))
+          (ok (not (member '("cl-repo-lk-u" . "latest") pulled :test #'equal))
+              "the tag latest is not pulled"))))))
+
+(deftest issue-165-a-missing-minimum-is-not-reported-as-a-missing-system
+  "cl-repository#165: the project needs cl-repo-lk-b >= 3.0 and the registry
+   has 1.0 and 2.0. The sync fails, as it should, but it said the system is
+   not in the registry at all (cl-stack-code#52: agent-tools 0.4.1 required,
+   0.4.0 published)."
+  (with-fake-registry (dir)
+    (with-open-file (o (merge-pathnames (format nil "~a.asd" *project*) dir)
+                       :direction :output :if-exists :supersede)
+      (format o "(defsystem ~s :depends-on ((:version \"cl-repo-lk-b\" \"3.0\")))~%" *project*))
+    (let ((message (handler-case (progn (sync dir) nil)
+                     (error (e) (princ-to-string e)))))
+      (ok message "the sync fails")
+      (ok (and message (not (search "not in the registry" message)))
+          (format nil "not \"not in the registry\": ~a" message))
+      (ok (and message (search "3.0" message) (search "2.0" message))
+          "it names the minimum and the newest version the registry has"))))
+
+(deftest issue-167-sync-resolves-to-the-newest-published-version
+  "cl-repository#167: lk-b 1.0 is already installed (another project, a
+   `cl-repo install`), the registry has 1.0 and 2.0, there is no lock. The
+   sync kept 1.0, so two machines resolve one .asd differently. README:
+   resolution starts from the newest acceptable version of each package."
+  (with-fake-registry (dir)
+    (let ((old (fake-install "https://fake.test" "ns/cl-repo-lk-b" "1.0")))
+      (cl-repository-client/digest-cache:record-installed-digest
+       (cl-repository-client/installer:install-result-index-digest old)
+       (cl-repository-client/installer:install-result-path old)))
+    (sync dir)
+    (ok (equal '("cl-repo-lk-b" "2.0" "sha256:cl-repo-lk-b-2.0" "https://fake.test")
+               (assoc "cl-repo-lk-b" (lock-of dir) :test #'string=))
+        (format nil "the lock has the newest published lk-b: ~s"
+                (assoc "cl-repo-lk-b" (lock-of dir) :test #'string=)))
+    (ok (equal '(("cl-repo-lk-b" . "2.0")) (closure-packages '("cl-repo-lk-b")))
+        "and a fresh image loads it")))
+
+(deftest issue-169-a-sync-for-a-fresh-image-does-not-say-it-runs-the-client-copy
+  "cl-repository#169: the client image runs lk-b 1.0, the project needs
+   lk-b >= 2.0 and its lock has 2.0. `cl-repo ros`, `run` and `test` sync in
+   the client image, then start a fresh image, which loads the locked 2.0
+   (first check). The sync from the lock still warned
+   LOADED-SYSTEM-SHADOWS-NEWER: \"this image will not load 2.0. Code that
+   needs 2.0 runs against the older copy\", the opposite of what then
+   happens (second check)."
+  (with-fake-registry (dir)
+    (with-open-file (o (merge-pathnames (format nil "~a.asd" *project*) dir)
+                       :direction :output :if-exists :supersede)
+      (format o "(defsystem ~s :depends-on (\"cl-repo-lk-a\" (:version \"cl-repo-lk-b\" \"2.0\")))~%"
+              *project*))
+    (sync dir)
+    (let* ((client (merge-pathnames "client/" (uiop:pathname-parent-directory-pathname dir)))
+           (project-registry asdf:*source-registry-parameter*)
+           (warnings '())
+           (asdf/session:*asdf-session* nil))
+      ;; the client's own copy of lk-b, 1.0, loaded in this image from its tree
+      (ensure-directories-exist client)
+      (with-open-file (o (merge-pathnames "cl-repo-lk-b.asd" client)
+                         :direction :output :if-exists :supersede)
+        (format o "(defsystem \"cl-repo-lk-b\" :version \"1.0\")~%"))
+      (asdf:clear-system "cl-repo-lk-b")
+      (asdf:initialize-source-registry
+       `(:source-registry (:directory ,(namestring client)) :ignore-inherited-configuration))
+      (asdf:load-system "cl-repo-lk-b")
+      (asdf:initialize-source-registry project-registry)
+      (ok (equal "1.0" (asdf:component-version (asdf:registered-system "cl-repo-lk-b")))
+          "this image runs the client's lk-b 1.0")
+      (let ((cl-oci-client/pin::*pinned* nil)
+            (cl-oci-client/pin::*checked* nil))
+        (handler-bind ((cl-oci-client/pin:loaded-system-shadows-newer
+                        (lambda (w) (push w warnings) (muffle-warning w))))
+          (asdf:clear-system *project*)
+          (asdf:clear-system "cl-repo-lk-a")
+          (cmd-sync :directory dir)))
+      (ok (equal '(("cl-repo-lk-b" . "2.0")) (closure-packages '("cl-repo-lk-b")))
+          "the image cl-repo ros / run / test starts loads the locked 2.0")
+      (ok (null warnings)
+          (format nil "the sync does not warn that the project runs the client's 1.0: ~{~a~^; ~}"
+                  warnings)))))
+
+(deftest issue-170-a-qlfile-only-project-gets-the-closure-of-its-entries
+  "cl-repository#170: a directory with only a qlfile (`ql cl-repo-lk-a`) is a
+   project. The sync installed and locked lk-a alone, not lk-b it depends
+   on, and `cl-repo run` then failed with Component not found
+   (python-to-cl CI, `ql cl-blog`). A qlfile entry is installed by
+   CMD-INSTALL, which records no digest, so the lock asks the registry for
+   it with a HEAD: the fake registry answers that one."
+  (with-fake-registry (dir)
+    (delete-file (merge-pathnames (format nil "~a.asd" *project*) dir))
+    (with-open-file (o (merge-pathnames "qlfile" dir) :direction :output :if-exists :supersede)
+      (write-line "ql cl-repo-lk-a" o))
+    (with-stubs ((cl-oci-client/pull:head-manifest
+                  (lambda (registry repository reference)
+                    (declare (ignore registry))
+                    (let ((headers (make-hash-table :test 'equal)))
+                      (setf (gethash "docker-content-digest" headers)
+                            (fake-digest (repository-name repository) reference))
+                      (values 200 headers)))))
+      (let ((calls (sync dir)))
+        (ok (assoc "cl-repo-lk-b" (calls-installs calls) :test #'string=)
+            (format nil "lk-b is installed (installs: ~s)" (calls-installs calls)))
+        (ok (equal '("cl-repo-lk-a" "cl-repo-lk-b") (mapcar #'first (lock-of dir)))
+            (format nil "and locked beside lk-a (lock: ~s)" (lock-of dir)))))))
