@@ -193,6 +193,34 @@ jobs:
           cd "$RUNNER_TEMP/async-probe"
           $spawn 600 sh "$GITHUB_WORKSPACE/roswell/cl-repo" sync
 
+      - name: Launcher sets the client and test image heap (#175)
+        shell: bash
+        run: |
+          # roswell/cl-repo starts SBCL with CL_REPO_DYNAMIC_SPACE_MB (default
+          # 4096, as test-system.yml); cl-repo test's image gets the same size.
+          unset CL_REPOSITORY_CLIENT_DIR CL_REPO_HTTP_BACKEND CL_REPO_DYNAMIC_SPACE_MB
+          work="$RUNNER_TEMP/heap-probe"
+          mkdir -p "$work"
+          cd "$work" || exit 1
+          cat > heap-probe.asd <<'ASD'
+          (defsystem "heap-probe"
+            :perform (test-op (o c)
+                       (declare (ignore o c))
+                       (format t "~&HEAP-MB ~D~%" (floor (sb-ext:dynamic-space-size) (* 1024 1024)))))
+          ASD
+          check() {
+            local want=$1 log=test.log got
+            shift
+            env "$@" sh "$GITHUB_WORKSPACE/roswell/cl-repo" test > "$log" 2>&1 \
+              || { tail -40 "$log"; echo "::error::cl-repo test failed (${*:-default})"; return 1; }
+            got="$(tr -d '\r' < "$log" | sed -n 's/^HEAP-MB //p')"
+            echo "; ${*:-default}: ${got:-none} MB"
+            [[ "$got" == "$want" ]] || { echo "::error::heap ${got:-none} MB, expected ${want} MB (${*:-default})"; return 1; }
+          }
+          check 4096
+          check 4096 CL_REPO_TEST_IN_PROCESS=1
+          check 2048 CL_REPO_DYNAMIC_SPACE_MB=2048
+
   setup-lisp-action:
     strategy:
       fail-fast: false
