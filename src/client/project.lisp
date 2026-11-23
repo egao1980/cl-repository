@@ -1,18 +1,24 @@
 (defpackage :cl-repository-client/project
   (:use :cl)
-  (:import-from :cl-oci/runtime #:*quiet* #:msg)
+  (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
   (:import-from :cl-repository-client/commands
                 #:cmd-install #:cmd-restore
                 #:*default-registry* #:*default-namespace*)
   (:import-from :cl-repository-client/quickload
-                #:add-registry #:ensure-system-dependencies #:ensure-systems)
+                #:add-registry #:ensure-system-dependencies #:ensure-systems
+                #:dependency-closure #:collect-missing-asdf-deps #:installed-satisfies-p
+                #:*install-recorder*)
   (:import-from :cl-repository-client/asd-rewrite #:asd-defsystem-depends-on)
   (:import-from :cl-oci-client/conditions #:registry-error #:not-found-error #:auth-error)
   (:import-from :cl-oci-client/pin #:with-loaded-systems-pinned #:pinned-system-p #:unpin-system)
   (:import-from :cl-repository-client/dep-satisfy #:system-satisfied-p #:asdf-dep-spec #:note-minimum)
   (:import-from :cl-repository-client/version-utils #:version< #:select-preferred-version)
   (:import-from :cl-repository-client/lockfile
-                #:lockfile-path #:read-lockfile #:lockfile-entry-system #:lockfile-entry-version)
+                #:lockfile-path #:read-lockfile #:write-lockfile
+                #:lockfile-entry-system #:lockfile-entry-version)
+  (:import-from :cl-repository-client/sync-lock
+                #:lockfile-not-current #:lockfile-stale-reason #:closure-lock-entries
+                #:lockfile-closure-gap #:lockfile-policy-gap #:install-lockfile-entries)
   (:import-from :cl-repository-client/asdf-integration
                 #:configure-asdf-source-registry #:output-translations-form)
   (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*
@@ -25,6 +31,7 @@
   (:import-from :cl-repository-client/asd-rewrite #:read-system-overlays)
   (:export #:client-source-tree
            #:*sync-with*
+           #:*use-lockfile*
            #:ensure-default-registry
            #:register-project
            #:project-registry-directories
@@ -33,6 +40,7 @@
            #:discover-project-system
            #:ensure-defsystem-depends-on
            #:expand-ci-env
+           #:project-closure
            #:cmd-sync
            #:client-runs-older-system
            #:older-system-name
@@ -120,13 +128,18 @@
               when first append (copy-list extra))
       :ignore-inherited-configuration)))
 
+(defvar *use-lockfile* t
+  "NIL while a sync or test runs with --no-lock: cl-repo.lock is neither read
+   nor written, so the project registry prefers no locked version either.")
+
 (defun locked-versions (directory)
-  "Alist system → version from DIRECTORY's cl-repo.lock, or NIL."
+  "Alist system → version from DIRECTORY's cl-repo.lock, or NIL (always NIL
+   under --no-lock, *USE-LOCKFILE*)."
   (let ((path (lockfile-path directory)))
-    (when (probe-file path)
+    (when (and *use-lockfile* (probe-file path))
       (ignore-errors
-       (mapcar (lambda (e) (cons (lockfile-entry-system e) (lockfile-entry-version e)))
-               (read-lockfile path))))))
+        (mapcar (lambda (e) (cons (lockfile-entry-system e) (lockfile-entry-version e)))
+                (read-lockfile path))))))
 
 (defun project-registry-directories (directory)
   "Trees the project registry searches: DIRECTORY, the installed systems,
@@ -450,6 +463,8 @@
     (t (error "cl-repo: unsupported qlfile entry ~a" (qlot-entry-kind entry)))))
 
 (defun sync-qlfile (directory)
+  "Install the entries of DIRECTORY's qlfile (its qlfile.lock when there is
+   one). → T when there is a qlfile."
   (let* ((dir (uiop:ensure-directory-pathname directory))
          (qlfile (merge-pathnames "qlfile" dir))
          (lock (merge-pathnames "qlfile.lock" dir)))
@@ -461,7 +476,22 @@
         (if (eq (qlot-entry-kind entry) :dist)
             (when (qlot-entry-ref entry)
               (setf dist-url (qlot-entry-ref entry)))
-            (sync-qlot-entry entry dir dist-url))))))
+            (sync-qlot-entry entry dir dist-url)))
+      t)))
+
+(defun qlfile-system-names (directory)
+  "The systems DIRECTORY's qlfile (or qlfile.lock) installs by name: its ql,
+   http, github and git entries. NIL without a qlfile."
+  (let* ((dir (uiop:ensure-directory-pathname directory))
+         (qlfile (merge-pathnames "qlfile" dir))
+         (lock (merge-pathnames "qlfile.lock" dir)))
+    (when (probe-file qlfile)
+      (loop for entry in (if (probe-file lock) (read-qlfile-lock lock) (read-qlfile qlfile))
+            for name = (case (qlot-entry-kind entry)
+                         ((:ql :http) (qlot-entry-name entry))
+                         ((:github :git) (repo-system-name (qlot-entry-name entry))))
+            when (stringp name)
+              collect (string-downcase name)))))
 
 (defun overlay-request (overlay)
   "NIL for the automatic stack. A name selects that opt-in overlay."
@@ -584,14 +614,9 @@ image. CONTINUE uses the loaded copy.")
           (error 'extension-upgrade-failed :name name :minimum minimum
                                            :loaded (or after before)))))))
 
-(defun ensure-defsystem-depends-on (directory)
-  "Install the :defsystem-depends-on systems (asdf-native, cffi-grovel, ...) of
-the .asd files in DIRECTORY that ASDF can't find, or finds older than a
-(:version name min) entry asks for. ASDF loads them while reading the .asd,
-before any :depends-on walk can see them. → the names installed.
-An extension this image already runs below the minimum (the client's own
-asdf-native) is upgraded in place: unpinned, cleared and loaded from the
-install tree, since the project's .asd is read in this image."
+(defun defsystem-depends-on-requirements (directory)
+  "(name . minimum) per :defsystem-depends-on system of the top-level .asd
+   files in DIRECTORY, the highest (:version name min) asked for, or NIL."
   (let ((wanted '()) (minimums '()))
     (dolist (asd (top-level-asds (uiop:ensure-directory-pathname directory)))
       (multiple-value-bind (names mins) (asd-defsystem-depends-on asd)
@@ -601,91 +626,245 @@ install tree, since the project's .asd is read in this image."
             (if prev
                 (when (version< (cdr prev) (cdr m)) (setf (cdr prev) (cdr m)))
                 (push m minimums))))))
-    (let ((missing (remove-if (lambda (n)
-                                (system-satisfied-p n (cdr (assoc n minimums :test #'string=))))
-                              (reverse wanted))))
-      (dolist (n missing)
-        (let ((min (cdr (assoc n minimums :test #'string=))))
-          (msg "~&; cl-repo: installing :defsystem-depends-on ~a~@[ (>= ~a)~]~%" n min)
-          (apply #'ensure-systems (list n) :default-source :oci
-                 (when min (list :minimum min)))
-          (when min
-            (ensure-loaded-at-least n min))))
-      missing)))
+    (mapcar (lambda (n) (cons n (cdr (assoc n minimums :test #'string=))))
+            (reverse wanted))))
+
+(defun ensure-defsystem-depends-on (directory)
+  "Install the :defsystem-depends-on systems (asdf-native, cffi-grovel, ...) of
+the .asd files in DIRECTORY that ASDF can't find, or finds older than a
+(:version name min) entry asks for. ASDF loads them while reading the .asd,
+before any :depends-on walk can see them. → the names installed.
+An extension this image already runs below the minimum (the client's own
+asdf-native) is upgraded in place: unpinned, cleared and loaded from the
+install tree, since the project's .asd is read in this image."
+  (let ((missing (remove-if (lambda (requirement)
+                              (system-satisfied-p (car requirement) (cdr requirement)))
+                            (defsystem-depends-on-requirements directory))))
+    (loop for (n . min) in missing
+          do (msg "~&; cl-repo: installing :defsystem-depends-on ~a~@[ (>= ~a)~]~%" n min)
+             (apply #'ensure-systems (list n) :default-source :oci
+                    (when min (list :minimum min)))
+             (when min
+               (ensure-loaded-at-least n min)))
+    (mapcar #'car missing)))
+
+(defun locked-defsystem-depends-on-gap (directory)
+  "ENSURE-DEFSYSTEM-DEPENDS-ON for a sync from the lock, which installs
+   nothing: an extension this image runs below the minimum is upgraded from
+   the install tree. → the :defsystem-depends-on names that are not
+   installed new enough, NIL when none."
+  (let ((gap '()))
+    (loop for (n . min) in (defsystem-depends-on-requirements directory)
+          unless (system-satisfied-p n min)
+            do (if (and min (installed-satisfies-p n min))
+                   (ensure-loaded-at-least n min)
+                   (push n gap)))
+    (nreverse gap)))
 
 (defvar *sync-with* nil
   "Extra install roots for CMD-SYNC beyond the .asd :ci :with list: the CI
    action's `with:` input and what pre-install hooks push onto
    cl-repository-ci-lib:*extra-with* (an event backend chosen by env).")
 
-(defun cmd-sync (&key (directory (uiop:getcwd)) system overlay locked)
-  "Install what the .asd and qlfile ask for, and record the lock.
+(defun sync-system-names (dir system)
+  "The project systems a sync of DIR walks: SYSTEM, else every primary system
+   of the top-level .asd files. NIL for a qlfile-only project; an error when
+   DIR has neither .asd nor qlfile."
+  (cond (system (list system))
+        ((project-primary-systems dir))
+        (t (discover-project-system dir) nil)))
+
+(defun sync-walk-options (name dir system)
+  "Keyword arguments of the dependency walk for the project system NAME: its
+   :ci :with and :env installs, *SYNC-WITH*, and (a whole-project sync, no
+   SYSTEM) the secondary systems its .asd defines. Reads that .asd."
+  (asdf:find-system name nil)
+  (multiple-value-bind (env-install env-load)
+      (expand-ci-env (getf (ci-plist name) :env))
+    (declare (ignore env-load))
+    (list :with (append (project-with name) env-install *sync-with*
+                        (unless system
+                          (project-secondary-systems name dir)))
+          :also-tests (getf (ci-plist name) :also-tests t))))
+
+(defun project-closure (dir &optional system)
+  "(values closure missing) of the project in DIR, or of SYSTEM alone: every
+   system name the sync's dependency walk reaches from the project systems
+   and their extras, the .asd files' :defsystem-depends-on and the findable
+   qlfile entries; and the names it finds unsatisfied. Reads .asd files and
+   installs nothing."
+  (let ((closure '()) (missing '()))
+    (flet ((add (names unmet)
+             (setf closure (union closure names :test #'string=)
+                   missing (union missing unmet :test #'string=))))
+      (dolist (name (sync-system-names dir system))
+        (multiple-value-call #'add
+                             (apply #'dependency-closure name (sync-walk-options name dir system))))
+      (let ((extra (append (mapcar #'car (defsystem-depends-on-requirements dir))
+                           (remove-if-not (lambda (name) (asdf:find-system name nil))
+                                          (qlfile-system-names dir)))))
+        (when extra
+          (multiple-value-bind (unmet minimums names) (collect-missing-asdf-deps '() extra)
+            (declare (ignore minimums))
+            (add names unmet)))))
+    (values closure missing)))
+
+(defun sync-from-lockfile (dir system &key strict)
+  "Install the project in DIR from its cl-repo.lock when the lock is current:
+   no project .asd or qlfile is newer, source policy allows its entries, and
+   it locks every package the dependency walk (PROJECT-CLOSURE) reaches, at
+   the version the registry then resolves. A version not installed is pulled
+   by its tag after a digest check; nothing is resolved and no tag listed.
+   → T when the lock was used, NIL when it is not current. With STRICT
+   (--locked), a lock that is not current signals LOCKFILE-NOT-CURRENT."
+  (let* ((path (lockfile-path dir))
+         (reason (lockfile-stale-reason dir))
+         (entries '()))
+    (unless reason
+      (handler-case (setf entries (read-lockfile path))
+        (error (e)
+          (setf reason (format nil "it cannot be read (~a)" e)))))
+    (unless reason
+      (setf reason (lockfile-policy-gap entries)))
+    (unless reason
+      (when (install-lockfile-entries entries)
+        (register-project dir))
+      (let ((gap (locked-defsystem-depends-on-gap dir)))
+        (when gap
+          (setf reason (format nil "~{~a~^, ~} (:defsystem-depends-on) not installed" gap)))))
+    (unless reason
+      (multiple-value-bind (closure missing) (project-closure dir system)
+        (setf reason (if missing
+                         (format nil "~{~a~^, ~} not installed or too old" missing)
+                         (lockfile-closure-gap entries closure)))))
+    (cond ((null reason)
+           (msg "~&; cl-repo: dependencies from cl-repo.lock (~d package~:p)~%" (length entries))
+           t)
+          (strict
+           (error 'lockfile-not-current :path path :reason reason))
+          (t
+           (when (probe-file path)
+             (msg "~&; cl-repo: cl-repo.lock is not current (~a); resolving~%" reason))
+           nil))))
+
+(defun sync-resolving (dir system)
+  "Install what the .asd files and qlfile of DIR ask for (SYSTEM only, when
+   given), resolving what is missing against the registries."
+  (when (sync-qlfile dir)
+    ;; a local or git entry synced another project, which registered itself
+    (register-project dir))
+  (let ((names (sync-system-names dir system)))
+    (when names
+      (ensure-defsystem-depends-on dir))
+    (dolist (name names)
+      (apply #'ensure-system-dependencies name (sync-walk-options name dir system)))))
+
+(defun write-project-lock (dir system installs)
+  "Write DIR's cl-repo.lock: the packages the project's dependency closure is
+   loaded from, at the versions the registry resolves, which are the ones the
+   test image and `cl-repo run` load. Digests come from INSTALLS (this sync's
+   INSTALL-RESULTs) or the old lock where they can. With SYSTEM (a sync of one
+   system) the old entries outside its closure are kept. → the entries."
+  (let* ((path (lockfile-path dir))
+         (previous (and (probe-file path) (ignore-errors (read-lockfile path))))
+         (entries (closure-lock-entries (project-closure dir system)
+                                        :installs installs :previous previous)))
+    (when system
+      (dolist (old previous)
+        (unless (find (lockfile-entry-system old) entries
+                      :key #'lockfile-entry-system :test #'string=)
+          (push old entries)))
+      (setf entries (sort entries #'string< :key #'lockfile-entry-system)))
+    (write-lockfile entries path)
+    (setf cl-repository-client/asdf-integration:*locked-versions*
+          (mapcar (lambda (e) (cons (lockfile-entry-system e) (lockfile-entry-version e)))
+                  entries))
+    (msg "~&; cl-repo: wrote cl-repo.lock (~d package~:p)~%" (length entries))
+    entries))
+
+(defun cmd-sync (&key (directory (uiop:getcwd)) system overlay locked (lock t))
+  "Install what the .asd and qlfile ask for.
    Without SYSTEM, every system the project's top-level .asd files define:
    each primary system, with its secondary systems (\"foo/agent\") as local
    roots whose dependencies are walked too. SYSTEM limits the walk to it.
    OVERLAY names an opt-in overlay such as cuda, installed on top of the automatic stack.
-   LOCKED installs cl-repo.lock."
+   cl-repo.lock: when it is current (SYNC-FROM-LOCKFILE), the dependencies
+   are installed from it, with no resolution and no tag listing. Otherwise
+   they are resolved and the closure is written to it (WRITE-PROJECT-LOCK).
+   LOCKED T (--locked) installs from the lock and signals LOCKFILE-NOT-CURRENT
+   rather than resolve. LOCKED :RESTORE (`cl-repo restore`) installs every
+   entry of the lock again, current or not (CMD-RESTORE).
+   LOCK NIL (--no-lock) resolves and neither reads nor writes the lock.
+   A sync that another sync runs (a qlfile's local or git entry) resolves and
+   leaves its lock alone."
+  (when (and locked (not (and lock *use-lockfile*)))
+    (error "cl-repo: --locked and --no-lock exclude each other"))
   (let ((dir (uiop:ensure-directory-pathname directory))
         (*requested-overlay* (overlay-request overlay)))
     (when (member (namestring dir) *sync-stack* :test #'equal)
       (return-from cmd-sync nil))
-    ;; Pinned from the start: the walk's FIND-SYSTEM under the project registry
-    ;; would otherwise re-register a system this image runs (cl+ssl) from the
-    ;; install tree, and a later load would load it, and its library, again.
-    (with-loaded-systems-pinned (:except (list dir))
-      (let ((*sync-stack* (cons (namestring dir) *sync-stack*))
-            ;; one registry cache for the whole sync (CL-REPOSITORY#136)
-            (cl-repository-client/constraint-builder:*resolution-cache*
-              (or cl-repository-client/constraint-builder:*resolution-cache*
-                  (cl-repository-client/constraint-builder:make-resolution-cache)))
-            (cl-oci-client/pull:*pull-cache*
-              (or cl-oci-client/pull:*pull-cache* (make-hash-table :test 'equal))))
-        (ensure-default-registry)
-        (register-project dir)
-        (clear-project-systems dir)
-        (if locked
-            (cmd-restore :registry-url *default-registry* :namespace *default-namespace*)
-            (progn
-              (sync-qlfile dir)
-              (register-project dir)
-              (let ((names (cond (system (list system))
-                                 ((project-primary-systems dir))
-                                 ;; No .asd: NIL with a qlfile, an error without one.
-                                 (t (discover-project-system dir) nil))))
-                (when names
-                  (ensure-defsystem-depends-on dir))
-                (dolist (name names)
-                  (asdf:find-system name nil)
-                  (multiple-value-bind (env-install env-load)
-                      (expand-ci-env (getf (ci-plist name) :env))
-                    (declare (ignore env-load))
-                    (ensure-system-dependencies
-                     name
-                     :with (append (project-with name) env-install *sync-with*
-                                   (unless system
-                                     (project-secondary-systems name dir)))
-                     :also-tests (getf (ci-plist name) :also-tests t)))))))))))
+    (let* ((outer (null *sync-stack*))
+           (*use-lockfile* (and *use-lockfile* lock))
+           (installs '())
+           ;; the lock is written from the closure; no install adds to it
+           (*install-recorder* (if outer
+                                   (lambda (result) (push result installs))
+                                   *install-recorder*)))
+      ;; Pinned from the start: the walk's FIND-SYSTEM under the project registry
+      ;; would otherwise re-register a system this image runs (cl+ssl) from the
+      ;; install tree, and a later load would load it, and its library, again.
+      (with-loaded-systems-pinned (:except (list dir))
+        (let ((*sync-stack* (cons (namestring dir) *sync-stack*))
+              ;; one registry cache for the whole sync (CL-REPOSITORY#136)
+              (cl-repository-client/constraint-builder:*resolution-cache*
+               (or cl-repository-client/constraint-builder:*resolution-cache*
+                   (cl-repository-client/constraint-builder:make-resolution-cache)))
+              (cl-oci-client/pull:*pull-cache*
+               (or cl-oci-client/pull:*pull-cache* (make-hash-table :test 'equal))))
+          (ensure-default-registry)
+          (register-project dir)
+          (clear-project-systems dir)
+          (cond
+           ((eq locked :restore)
+            (cmd-restore :registry-url *default-registry* :namespace *default-namespace*))
+           ((and outer *use-lockfile* (sync-from-lockfile dir system :strict locked)))
+           (t
+            (sync-resolving dir system)
+            (when (and outer *use-lockfile* (not *dry-run*))
+              (write-project-lock dir system installs)))))))))
 
-(defun test-setup (directory system)
+(defun project-registered-p (directory)
+  "True when the source registry is already the one REGISTER-PROJECT gives
+   DIRECTORY, with the preferences its cl-repo.lock gives now. Every install
+   is followed by a rescan, so the registry's contents are current too."
+  (equal asdf/source-registry:*source-registry-parameter*
+         (source-registry-form (project-registry-directories directory)
+                               :locked (locked-versions directory)
+                               :extra (explicit-source-registry-entries))))
+
+(defun test-setup (directory system &key synced)
   "Put the project's install tree on the registry. Returns the system name and
-   the systems to load before it (:load-before-test, :ci :env loads)."
+   the systems to load before it (:load-before-test, :ci :env loads).
+   SYNCED: CMD-SYNC has just set the registry up for DIRECTORY. It is kept
+   when it is the one REGISTER-PROJECT would make (PROJECT-REGISTERED-P),
+   which saves a scan of the install tree."
   (let ((name (or system (discover-project-system directory))))
     (unless name
       (error "cl-repo: no system to test in ~a" directory))
-    (register-project directory)
-    (configure-asdf-source-registry)
+    (unless (and synced (project-registered-p directory))
+      (register-project directory))
     (multiple-value-bind (env-install env-load)
         (expand-ci-env (getf (ci-plist name) :env))
       (declare (ignore env-install))
       (values name (append (project-load-before-test name) env-load)))))
 
-(defun prepare-test (&key (directory (uiop:getcwd)) system)
+(defun prepare-test (&key (directory (uiop:getcwd)) system synced)
   "Make the project's install tree visible to ASDF, load init files and the
    :load-before-test systems. Returns the system name. After this, everything
    cl-repo sync installed (including :ci :with extras) can be loaded.
    Runs in this image, so a pinned system the project needs newer is upgraded
-   or reported first (ENSURE-PROJECT-REQUIREMENTS)."
-  (multiple-value-bind (name extras) (test-setup directory system)
+   or reported first (ENSURE-PROJECT-REQUIREMENTS). SYNCED: see TEST-SETUP."
+  (multiple-value-bind (name extras) (test-setup directory system :synced synced)
     (ensure-project-requirements
      (append (list name) extras
              (let ((tests (format nil "~a/tests" name)))
@@ -769,21 +948,26 @@ install tree, since the project's .asd is read in this image."
       (error 'tests-failed :system name :exit-code code))
     name))
 
-(defun cmd-test (&key (directory (uiop:getcwd)) system overlay (sync t) pre-test pre-test-file)
+(defun cmd-test (&key (directory (uiop:getcwd)) system overlay (sync t) pre-test pre-test-file
+                      locked (lock t))
   "Sync, then asdf:test-system. A system with no test-op still exits 0.
    The suite runs in a fresh image (*TEST-IN-SUBPROCESS*); a failure signals
    TESTS-FAILED. PRE-TEST-FILE is loaded there once the install tree is on
    the registry and before the system loads (CI pre-test hooks). PRE-TEST, a
    function of no arguments, runs at that point too, but a function cannot
-   cross into another image: passing one runs the suite in this image."
+   cross into another image: passing one runs the suite in this image.
+   LOCKED and LOCK are the sync's (--locked, --no-lock): with a current
+   cl-repo.lock the sync installs from it and resolves nothing."
   (let ((command (and *test-in-subprocess* (not pre-test) (test-image-command)))
-        (checkout (list (uiop:ensure-directory-pathname directory))))
+        (checkout (list (uiop:ensure-directory-pathname directory)))
+        (*use-lockfile* (and *use-lockfile* lock)))
     (if command
         (progn
           (when sync
             (with-loaded-systems-pinned (:except checkout)
-              (cmd-sync :directory directory :system system :overlay overlay)))
-          (multiple-value-bind (name extras) (test-setup directory system)
+              (cmd-sync :directory directory :system system :overlay overlay
+                        :locked locked :lock lock)))
+          (multiple-value-bind (name extras) (test-setup directory system :synced sync)
             (run-test-image command name extras pre-test-file)))
         ;; Systems this image already runs (the client's cl+ssl, cl-stack-ssl, ...)
         ;; stay where they were loaded from: a second copy from the install tree
@@ -792,8 +976,9 @@ install tree, since the project's .asd is read in this image."
         ;; The checkout itself is never pinned: its code is what is under test.
         (with-loaded-systems-pinned (:except checkout)
           (when sync
-            (cmd-sync :directory directory :system system :overlay overlay))
-          (let ((name (prepare-test :directory directory :system system)))
+            (cmd-sync :directory directory :system system :overlay overlay
+                      :locked locked :lock lock))
+          (let ((name (prepare-test :directory directory :system system :synced sync)))
             (when pre-test
               (funcall pre-test))
             (when pre-test-file

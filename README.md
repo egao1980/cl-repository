@@ -67,6 +67,8 @@ A stock `.asd` is enough. `qlfile` / `qlfile.lock` in the same directory are ins
 The registry defaults to `https://ghcr.io` / `egao1980/cl-systems`. Source-registry configuration files (`~/.config/common-lisp/source-registry.conf.d`) are not read. The `:tree` / `:directory` entries of a `CL_SOURCE_REGISTRY` you pass are kept, after the project, for sync, test and run alike.
 `cl-repo test` runs the suite in a fresh image of the same SBCL that only gets the source registry, so none of the client's own systems (dexador, cl+ssl, its OpenSSL) are loaded there. `CL_REPO_TEST_IN_PROCESS=1` runs it in the client's image instead.
 
+`cl-repo sync` (and so `test` and `run`) records the project's dependency closure in `cl-repo.lock`: each package with its version, index digest and registry, the versions the project registry then loads. While the lock is current (no `.asd` or `qlfile` is newer, and it locks everything the dependency walk reaches), sync installs from it: no resolution and no tag listing, and only a version missing locally is pulled, after a digest check. Otherwise sync resolves and rewrites the lock. `--locked` fails instead of resolving when the lock is not current. `--no-lock` resolves and neither reads nor writes the lock. `cl-repo restore` installs every lock entry again.
+
 ### CLI
 
 ```sh

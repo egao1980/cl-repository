@@ -81,7 +81,7 @@ exec ros +Q -- $0 "$@"
   (format t "~&cl-repo - OCI-based Common Lisp package manager~%~%")
   (format t "Usage: cl-repo <command> [options]~%~%")
   (format t "Commands:~%")
-  (format t "  sync                  Install the .asd and qlfile dependencies~%")
+  (format t "  sync                  Install the .asd and qlfile dependencies, from cl-repo.lock when current~%")
   (format t "  test                  Sync, then run the system test-op~%")
   (format t "  run -- <command...>   Sync, then run a command~%")
   (format t "  ros <args...>         Same as run -- ros <args...> (also sbcl, ccl, ecl, abcl)~%")
@@ -98,11 +98,13 @@ exec ros +Q -- $0 "$@"
   (format t "  search <query>        Search for systems~%")
   (format t "  info <ref>            Show system info~%")
   (format t "  lock                  Generate/update lockfile from installed systems~%")
+  (format t "  restore               Install every cl-repo.lock entry, current or not~%")
   (format t "  verify [name]         Verify installed systems against file manifests~%")
   (format t "  config init           Generate default cl-repo.conf in current directory~%")
   (format t "  config show           Print effective merged configuration~%")
   (format t "~%Options:~%")
-  (format t "  --locked              sync: install cl-repo.lock~%")
+  (format t "  --locked              sync, test: install cl-repo.lock; fail if it is not current~%")
+  (format t "  --no-lock             sync, test: resolve; neither read nor write cl-repo.lock~%")
   (format t "  --overlay [name]      publish only this overlay~%")
   (format t "  --os [--arch] [--lisp]  add-overlay key. A bare flag means this machine.~%")
   (format t "  --registry <url>      Registry URL (default: https://ghcr.io)~%")
@@ -136,7 +138,7 @@ exec ros +Q -- $0 "$@"
   (let ((cmd-args nil)
         (options nil)
         (boolean-flags '("quiet" "dry-run" "incremental" "remote" "force" "skip-catalog"
-                         "locked" "all-systems"))
+                         "locked" "no-lock" "all-systems"))
         (optional-flags '("os" "arch" "lisp" "overlay"))
         (accumulate-flags '("protect" "with" "deny" "deny-from" "allow-from" "source")))
     (loop with i = 0
@@ -347,11 +349,14 @@ exec ros +Q -- $0 "$@"
              (cmd-sync :directory (uiop:getcwd)
                        :system (getf opts :system)
                        :overlay (overlay-opt opts)
-                       :locked (getf opts :locked)))
+                       :locked (getf opts :locked)
+                       :lock (not (getf opts :no-lock))))
 
             ((string-equal command "test")
              (cmd-test :directory (uiop:getcwd) :system (getf opts :system)
-                       :overlay (overlay-opt opts)))
+                       :overlay (overlay-opt opts)
+                       :locked (getf opts :locked)
+                       :lock (not (getf opts :no-lock))))
 
             ((string-equal command "run")
              (unless cmd-args
@@ -383,7 +388,7 @@ exec ros +Q -- $0 "$@"
              (cmd-lock))
 
             ((string-equal command "restore")
-             (cmd-sync :locked t))
+             (cmd-sync :locked :restore))
 
             ((string-equal command "verify")
              (cmd-verify :system-name (first cmd-args)))

@@ -18,4 +18,5 @@
    :cl-repository-client/asd-version
    :cl-repository-client/project
    :cl-repository-client/quickload
-   :cl-repository-client/commands))
+   :cl-repository-client/commands
+   :cl-repository-client/sync-lock))

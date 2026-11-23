@@ -18,6 +18,7 @@
                 #:lockfile-entry-index-digest)
   (:import-from :cl-repository-client/constraint-builder #:scan-installed-systems
                 #:installed-versions)
+  (:import-from :cl-oci/system-names #:oci-package-name)
   (:import-from :cl-repository-client/asdf-integration #:configure-asdf-source-registry)
   (:import-from :cl-repository-client/quickload #:*registries* #:find-system-in-registry)
   (:import-from :cl-repository-client/source-policy
@@ -43,7 +44,9 @@
            #:cmd-verify
            #:cmd-sync-qlot
            #:*default-registry*
-           #:*default-namespace*))
+           #:*default-namespace*
+           #:verify-lockfile-entry-digest
+           #:lockfile-digest-mismatch))
 (in-package :cl-repository-client/commands)
 
 (defvar *default-registry* "https://ghcr.io"
@@ -285,7 +288,7 @@
                    (version (lockfile-entry-version entry))
                    (reg (or registry-url (lockfile-entry-registry entry)))
                    (ns (or namespace *default-namespace*))
-                   (repo (format nil "~a/~a" ns name)))
+                   (repo (format nil "~a/~a" ns (oci-package-name name))))
               (msg "~&  ~a ~a~%" name version)
               (handler-case
                   (progn
@@ -356,21 +359,37 @@ SOURCE-HANDLER is an optional function called for non-:ql entries."
                  :index-digest ""
                  :registry ""))
 
+(define-condition lockfile-digest-mismatch (error)
+  ((system :initarg :system :reader lockfile-digest-mismatch-system)
+   (version :initarg :version :reader lockfile-digest-mismatch-version)
+   (expected :initarg :expected :reader lockfile-digest-mismatch-expected)
+   (actual :initarg :actual :reader lockfile-digest-mismatch-actual))
+  (:documentation "The registry's tag for a cl-repo.lock entry names another
+    digest than the lock records: the version was published again.")
+  (:report (lambda (c s)
+             (format s "Digest mismatch for ~a ~a: lockfile=~a registry=~a"
+                     (lockfile-digest-mismatch-system c)
+                     (lockfile-digest-mismatch-version c)
+                     (lockfile-digest-mismatch-expected c)
+                     (lockfile-digest-mismatch-actual c)))))
+
 (defun verify-lockfile-entry-digest (entry reg repo version)
-  "Ensure lockfile digest matches remote digest when lockfile contains one."
+  "Ensure lockfile digest matches remote digest when lockfile contains one.
+   REG is a REGISTRY or its URL. A tag that now names another digest signals
+   LOCKFILE-DIGEST-MISMATCH."
   (let ((expected (lockfile-entry-index-digest entry)))
     (when (and expected (> (length expected) 0))
       (multiple-value-bind (body status headers)
-          (pull-manifest-raw reg repo version)
+          (pull-manifest-raw (if (stringp reg) (make-registry reg) reg) repo version)
         (declare (ignore status))
         (let ((actual (or (gethash "docker-content-digest" headers)
                           (format-digest (compute-digest body)))))
           (unless (string= expected actual)
-            (error "Digest mismatch for ~a ~a: lockfile=~a registry=~a"
-                   (lockfile-entry-system entry)
-                   (lockfile-entry-version entry)
-                   expected
-                   actual)))))))
+            (error 'lockfile-digest-mismatch
+                   :system (lockfile-entry-system entry)
+                   :version (lockfile-entry-version entry)
+                   :expected expected
+                   :actual actual)))))))
 
 (defun cmd-verify (&key system-name)
   "Verify installed systems against their file manifests.

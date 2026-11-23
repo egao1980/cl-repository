@@ -16,4 +16,5 @@
    :cl-repository-client/tests/stream-extract-test
    :cl-repository-client/tests/asd-rewrite-test
    :cl-repository-client/tests/project-test
-   :cl-repository-client/tests/resolution-test))
+   :cl-repository-client/tests/resolution-test
+   :cl-repository-client/tests/sync-lock-test))
