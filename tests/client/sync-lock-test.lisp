@@ -387,6 +387,38 @@
     (ok (equal '(("cl-repo-lk-b" . "2.0")) (closure-packages '("cl-repo-lk-b")))
         "and a fresh image loads it")))
 
+(deftest issue-167-a-client-tree-package-resolves-to-the-newest-published-version
+  "cl-repository#167, a copy in the client's tree: the project needs lk-b,
+   and lk-b 1.0 sits in CL_REPOSITORY_DEST (~/.cl-repository-client, where
+   the client keeps its own alexandria, http-protocol 0.4.2,
+   http-backend-async 0.2.27, ...). The registry has 1.0 and 2.0, there is
+   no lock. The sync installs and locks nothing of lk-b, and the fresh image
+   loads the client's 1.0. End to end with client 0.27.34 (PR 174) in a
+   fresh HOME, `(defsystem \"px167\" :depends-on (\"http-protocol\"))`:
+   `cl-repo sync` wrote cl-repo.lock (0 packages), and `cl-repo ros` loaded
+   http-protocol 0.4.2 from ~/.cl-repository-client/http-protocol-0.4.2/
+   while GHCR publishes 0.4.3."
+  (with-fake-registry (dir)
+    (write-asd dir '("cl-repo-lk-b"))
+    (let* ((dest (merge-pathnames "client-dest/" (uiop:pathname-parent-directory-pathname dir)))
+           (lk-b (merge-pathnames "cl-repo-lk-b-1.0/" dest))
+           (old-dest (uiop:getenv "CL_REPOSITORY_DEST")))
+      (ensure-directories-exist lk-b)
+      (with-open-file (o (merge-pathnames "cl-repo-lk-b.asd" lk-b)
+                         :direction :output :if-exists :supersede)
+        (format o "(defsystem \"cl-repo-lk-b\" :version \"1.0\")~%"))
+      (setf (uiop:getenv "CL_REPOSITORY_DEST") (namestring dest))
+      (unwind-protect
+          (progn
+            (sync dir)
+            (ok (equal '("cl-repo-lk-b" "2.0" "sha256:cl-repo-lk-b-2.0" "https://fake.test")
+                       (assoc "cl-repo-lk-b" (lock-of dir) :test #'string=))
+                (format nil "the lock has the newest published lk-b (lock: ~s)" (lock-of dir)))
+            (ok (equal '(("cl-repo-lk-b" . "2.0")) (closure-packages '("cl-repo-lk-b")))
+                (format nil "and a fresh image loads it, not ~a"
+                        (asdf/source-registry:sysdef-source-registry-search "cl-repo-lk-b"))))
+        (setf (uiop:getenv "CL_REPOSITORY_DEST") (or old-dest ""))))))
+
 (deftest issue-169-a-sync-for-a-fresh-image-does-not-say-it-runs-the-client-copy
   "cl-repository#169: the client image runs lk-b 1.0, the project needs
    lk-b >= 2.0 and its lock has 2.0. `cl-repo ros`, `run` and `test` sync in
