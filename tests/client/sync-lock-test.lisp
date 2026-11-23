@@ -309,3 +309,17 @@
                     (merge-pathnames "cl-repo.lock" dir))
     (ok (signals (sync dir) 'lockfile-digest-mismatch))
     (ok (null (calls-installs *calls*)))))
+
+(deftest a-package-no-registry-answers-for-gets-an-empty-digest
+  ;; REMOTE-DIGEST returns a single NIL when no registry has the tag (a
+  ;; quicklisp "latest" package): the entry still comes out, digest "".
+  ;; 0.27.32 failed every sync with "invalid number of arguments: 1" here.
+  (with-stubs ((cl-repository-client/sync-lock::local-digest
+                (lambda (package version) (declare (ignore package version)) nil))
+               (cl-repository-client/sync-lock::remote-digest
+                (lambda (package version) (declare (ignore package version)) nil)))
+    (let ((e (cl-repository-client/sync-lock::lock-entry "cl-utilities" "latest")))
+      (ok (equal "cl-utilities" (lockfile-entry-system e)))
+      (ok (equal "latest" (lockfile-entry-version e)))
+      (ok (equal "" (lockfile-entry-index-digest e)))
+      (ok (equal "" (lockfile-entry-registry e))))))

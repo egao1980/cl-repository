@@ -166,7 +166,8 @@
                         (and (equal (lockfile-entry-system e) package)
                              (same-version-p version (lockfile-entry-version e))))
                       previous)))
-    (flet ((entry (digest url)
+    ;; URL optional: REMOTE-DIGEST returns a single NIL when no registry answers
+    (flet ((entry (digest &optional url)
              (make-instance 'lockfile-entry
                             :system package :version version
                             :index-digest (or digest "") :registry (or url ""))))
