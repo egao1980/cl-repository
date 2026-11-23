@@ -56,6 +56,7 @@ cl-repo publish
 普通の `.asd` で足ります。同じディレクトリの `qlfile` / `qlfile.lock` も入ります。
 既定のレジストリは `https://ghcr.io` / `egao1980/cl-systems` です。
 `cl-repo test` は同じ SBCL の新しいイメージでテストを実行し、そこにはソースレジストリだけを渡す。クライアント自身のシステム（dexador、cl+ssl とその OpenSSL）はロードされない。`CL_REPO_TEST_IN_PROCESS=1` でクライアントのイメージ内で実行する。
+`cl-repo` コマンドは CI の `sbcl-dynamic-space-mb` と同じ 4096 MB のヒープで SBCL を起動する（macOS の SBCL の既定は 1 GB で、大きなテストスイートのコールドコンパイルで使い切ることがある）。テスト用イメージも同じサイズになる。`CL_REPO_DYNAMIC_SPACE_MB=<MB>` で別のサイズを指定し、空または `0` なら Roswell と SBCL に任せる。
 
 `cl-repo sync`（したがって `test` と `run` も）はプロジェクトの依存閉包を `cl-repo.lock` に記録する。各パッケージのバージョン、index digest、レジストリで、プロジェクトのレジストリがその後ロードするバージョンそのもの。lock が最新である間（`.asd` や `qlfile` がそれより新しくなく、依存の走査が届くものをすべて lock している）、sync は lock からインストールする。解決もタグ一覧の取得もせず、ローカルにないバージョンだけを digest を確かめてから取得する。そうでなければ解決して lock を書き直す。`--locked` は lock が最新でないとき解決せずに失敗する。`--no-lock` は lock を読まず書かずに解決する。`cl-repo restore` は lock の全エントリを入れ直す。
 

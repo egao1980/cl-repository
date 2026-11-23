@@ -40,7 +40,7 @@ cl-oci (CLOS data model) <- cl-oci-client (HTTP) <- cl-repository-packager (buil
 | `src/client/` | Install/manage, platform resolver, CLI commands |
 | `src/ql-exporter/` | Quicklisp dist parser, repackager, exporter |
 | `tests/` | Rove tests per subsystem |
-| `roswell/` | `cl-repo.ros` CLI entry point; `cl-repo` launcher (clears inherited Mach exception ports on macOS, then runs it) |
+| `roswell/` | `cl-repo.ros` CLI entry point; `cl-repo` launcher (clears inherited Mach exception ports on macOS, sets the SBCL heap from `CL_REPO_DYNAMIC_SPACE_MB`, default 4096, then runs it) |
 | `docs/` | Specification and requirements |
 
 ## Building & Testing

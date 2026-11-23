@@ -12,5 +12,19 @@
 # ARITHMETIC, EMULATION, SOFTWARE, BREAKPOINT) before Roswell loads the
 # script; every Lisp cl-repo starts inherits the cleared ports. Elsewhere it
 # is (progn).
+#
+# Heap: SBCL's dynamic-space size, in MB, as test-system.yml's
+# sbcl-dynamic-space-mb (4096). macOS SBCL defaults to 1 GB, and a cold
+# compile of a large suite exhausts it (#175). `cl-repo test` starts its test
+# image with this image's size, so both get it. CL_REPO_DYNAMIC_SPACE_MB
+# overrides the size; empty or 0 leaves it to Roswell and SBCL. Lisps other
+# than SBCL ignore it.
 here="$(cd "$(dirname "$0")" && pwd)"
-exec ros +Q -e '(progn #+(and sbcl darwin) (sb-alien:alien-funcall (sb-alien:extern-alien "task_set_exception_ports" (function sb-alien:int sb-alien:unsigned sb-alien:unsigned sb-alien:unsigned sb-alien:int sb-alien:int)) (sb-alien:extern-alien "mach_task_self_" sb-alien:unsigned) #x7e 0 1 #+arm64 5 #-arm64 13))' -- "$here/cl-repo.ros" "$@"
+heap="${CL_REPO_DYNAMIC_SPACE_MB-4096}"
+case "$heap" in
+  0) heap="" ;;
+  *[!0-9]*)
+    echo "cl-repo: CL_REPO_DYNAMIC_SPACE_MB must be a size in MB, empty or 0 (got '$heap')" >&2
+    exit 2 ;;
+esac
+exec ros ${heap:+"dynamic-space-size=$heap"} +Q -e '(progn #+(and sbcl darwin) (sb-alien:alien-funcall (sb-alien:extern-alien "task_set_exception_ports" (function sb-alien:int sb-alien:unsigned sb-alien:unsigned sb-alien:unsigned sb-alien:int sb-alien:int)) (sb-alien:extern-alien "mach_task_self_" sb-alien:unsigned) #x7e 0 1 #+arm64 5 #-arm64 13))' -- "$here/cl-repo.ros" "$@"
