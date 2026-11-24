@@ -87,6 +87,18 @@
 
 ;;; Fetch counts
 
+(deftest implementation-systems-never-enter-the-plan
+  "#171: dexador's (:version \"uiop\" \"3.1.1\") put uiop 3.1.1 in the plan, and
+   the install pulled a package no registry has (GHCR: 403). uiop, asdf and
+   SBCL contribs ship with the Lisp: never listed, fetched or planned."
+  (with-fake (fake '(("app" ("1.0" ("uiop" . "3.1.1") ("asdf" . "3.3") "uiop" "lib"))
+                     ("lib" ("1.0" ("uiop" . "3.1.1") "sb-posix"))))
+    (ok (equal '(("app" . "1.0") ("lib" . "1.0")) (plan "app"))
+        "only the packages the registries have")
+    (dolist (name '("uiop" "asdf"))
+      (ok (zerop (count-of name (fake-listings fake))) (format nil "~a never listed" name))
+      (ok (zerop (count-of name (fake-fetches fake))) (format nil "~a never fetched" name)))))
+
 (deftest newest-version-that-satisfies-is-the-only-config-fetched
   "A package with 50 versions whose newest satisfies: one config, not 50."
   (with-fake (fake `(("app" ("1.0" ("many" . "3.0")))
