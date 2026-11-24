@@ -31,6 +31,7 @@
                (:file "resolution-test")
                (:file "sync-lock-test")
                (:file "registry-auth-test")
+               (:file "offline-test")
                (:file "all"))
   :perform (test-op (o c)
             (unless (symbol-call :rove :run c)

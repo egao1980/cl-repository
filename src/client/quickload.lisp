@@ -25,7 +25,7 @@
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
                 #:build-install-plan #:find-missing-deps #:dependency-resolution-error
-                #:list-tags/retry #:system-lookup-error
+                #:list-tags/retry #:system-lookup-error #:report-lookup-failure-p
                 #:fetch-available-versions #:fetch-versions-batch #:with-resolution-cache
                 #:*resolution-cache* #:make-resolution-cache)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version #:version<)
@@ -223,7 +223,9 @@
    or pull fails is logged and the next one tried; when none installs NAME
    and one failed, signals SYSTEM-LOOKUP-ERROR naming each failure (a
    transport error, after HTTP-EXCHANGE's retries), not \"not in the
-   registry\" (#120, #132). Restart CONTINUE treats NAME as absent."
+   registry\" (#120, #132). An unreachable registry costs no wait and is
+   logged once (REPORT-LOOKUP-FAILURE-P, #179). Restart CONTINUE treats NAME
+   as absent."
   (let ((failures '()))
     (dolist (entry *registries*)
       (let ((url (registry-url entry))
@@ -237,7 +239,8 @@
                 (return-from ensure-system-installed
                   (install-system url repo tag :type type))))
           (error (e)
-            (msg "~&; cl-repo: pulling ~a from ~a failed: ~a~%" name url e)
+            (when (report-lookup-failure-p url e)
+              (msg "~&; cl-repo: pulling ~a from ~a failed: ~a~%" name url e))
             (push (cons url e) failures)))))
     (when failures
       (restart-case (error 'system-lookup-error :name name :failures (nreverse failures))

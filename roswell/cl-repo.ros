@@ -67,6 +67,7 @@ exec ros +Q -- $0 "$@"
                 #:*default-registry* #:*default-namespace*)
   (:import-from :cl-repository-client/project
                 #:cmd-sync #:cmd-test #:cmd-run #:cmd-grovel #:client-source-tree
+                #:cmd-client-version
                 #:expand-lisp-command
                 #:ensure-default-registry #:discover-project-system
                 #:register-project #:ensure-defsystem-depends-on)
@@ -99,6 +100,7 @@ exec ros +Q -- $0 "$@"
   (format t "  add-overlay [name]    Record an overlay in the .asd. Does not publish.~%")
   (format t "  version [<new>]       Print the .asd :version, or set it. Keeps the file as written.~%")
   (format t "  version --bump <part> Bump major, minor, patch or revision (4th part: 3.5.9 → 3.5.9.1)~%")
+  (format t "  --version, -V         Print the client's release version and directory~%")
   (format t "  install <ref>         Install a system (name, name:version, or full ref)~%")
   (format t "  load <names...>       Install (if needed) and load systems~%")
   (format t "  update                Update all installed systems~%")
@@ -291,6 +293,10 @@ exec ros +Q -- $0 "$@"
               (member "--help" own :test #'string=)
               (member "-h" own :test #'string=))
       (usage)
+      (ros:quit 0))
+    ;; Only in place of a command: `publish --version <ver>` forces a version.
+    (when (member (first argv) '("--version" "-V") :test #'string=)
+      (cmd-client-version)
       (ros:quit 0)))
   (multiple-value-bind (cmd-args opts) (parse-options (rest argv))
     (let* ((command (first argv))

@@ -1,12 +1,14 @@
 (defpackage :cl-oci-client/tests/transport-test
   (:use :cl :rove)
-  (:import-from :cl-oci-client/http #:http-exchange #:*transport-retry* #:transport-failure-p)
+  (:import-from :cl-oci-client/http #:http-exchange #:*transport-retry* #:transport-failure-p
+                #:host-state #:url-host #:*unreachable-seconds* #:*connect-timeout*)
   (:import-from :cl-oci-client/auth #:obtain-token)
   (:import-from :cl-oci-client/registry #:make-registry #:registry-request)
   (:import-from :cl-oci-client/conditions
                 #:auth-error #:registry-error-body #:error-body-summary
                 #:registry-transport-error #:registry-transport-error-attempts
-                #:registry-transport-error-cause))
+                #:registry-transport-error-cause
+                #:registry-unreachable #:registry-unreachable-sent-p #:registry-unreachable-host))
 (in-package :cl-oci-client/tests/transport-test)
 
 ;;; A fake transport: an http-protocol backend whose SEND runs a handler on
@@ -34,11 +36,13 @@
                    :body (babel:string-to-octets body :encoding :utf-8))))
 
 (defun call-with-scripted-backend (handler fn)
-  "Call FN with a SCRIPTED-BACKEND running HANDLER as the HTTP backend, and
-   retries without sleeping. FN gets the backend."
+  "Call FN with a SCRIPTED-BACKEND running HANDLER as the HTTP backend, no
+   host known to answer (*HOST-OUTCOMES*), and retries without sleeping. FN
+   gets the backend."
   (let* ((backend (make-instance 'scripted-backend :handler handler))
          (http-protocol:*http-backend* backend)
          (cl-oci-client/http::*http-clients* '())
+         (cl-oci-client/http:*host-outcomes* (make-hash-table :test 'equal))
          (*transport-retry* (make-instance 'cl-oci-client/http::transport-retry
                                            :total 3 :backoff-factor 0 :status nil
                                            :allowed-methods '(:get :head))))
@@ -59,14 +63,17 @@
   (ng (transport-failure-p (make-condition 'simple-error :format-control "x"))))
 
 (deftest a-truncated-get-is-retried
-  "#120: an incomplete response mid-pull is retried, and the retry's answer used."
+  "#120: an incomplete response mid-pull, from a registry that has answered,
+   is retried, and the retry's answer used."
   (let ((calls 0))
     (call-with-scripted-backend
      (lambda (request)
-       (declare (ignore request))
-       (if (< (incf calls) 3) (incomplete) (respond 200 "blob")))
+       (cond ((search "/v2/x/" (http-protocol:http-request-url request))
+              (if (< (incf calls) 3) (incomplete) (respond 200 "blob")))
+             (t (respond 200 "{}"))))
      (lambda (backend)
        (declare (ignore backend))
+       (http-exchange :get "https://r.test/v2/")
        (multiple-value-bind (body status) (http-exchange :get "https://r.test/v2/x/blobs/d")
          (ok (= status 200))
          (ok (equal "blob" (babel:octets-to-string body))))
@@ -74,18 +81,22 @@
 
 (deftest a-persistent-transport-failure-is-a-transport-error
   "#120/#132: after the retries the caller gets REGISTRY-TRANSPORT-ERROR naming
-   the cause, not an answer it could read as \"not found\"."
+   the cause, not an answer it could read as \"not found\". The registry
+   answered before, so the failure is retried; it is no REGISTRY-UNREACHABLE."
   (let ((calls 0))
     (call-with-scripted-backend
      (lambda (request)
-       (declare (ignore request))
-       (incf calls)
-       (error 'http-protocol:http-timeout-error :message "sync await timed out"))
+       (cond ((search "/v2/x/" (http-protocol:http-request-url request))
+              (incf calls)
+              (error 'http-protocol:http-timeout-error :message "sync await timed out"))
+             (t (respond 200 "{}"))))
      (lambda (backend)
        (declare (ignore backend))
+       (http-exchange :get "https://r.test/v2/")
        (let ((e (handler-case (progn (http-exchange :get "https://r.test/v2/x/blobs/d") nil)
                   (registry-transport-error (e) e))))
          (ok e)
+         (ok (not (typep e 'registry-unreachable)))
          (ok (= calls 4))
          (ok (= 4 (registry-transport-error-attempts e)))
          (ok (typep (registry-transport-error-cause e) 'http-protocol:http-timeout-error))
@@ -93,6 +104,119 @@
            (ok (search "Network failure" report))
            (ok (search "sync await timed out" report))
            (ok (search "https://r.test/v2/x/blobs/d" report))))))))
+
+(defun refused ()
+  (error 'http-protocol:http-connection-error :message "connection refused"))
+
+(deftest a-host-that-has-not-answered-gets-one-attempt
+  "#179: retries are for a registry that answers. A refused first request is
+   not retried: REGISTRY-UNREACHABLE. Later requests to that host are not
+   sent at all; another host gets its own attempt."
+  (call-with-scripted-backend
+   (lambda (request) (declare (ignore request)) (refused))
+   (lambda (backend)
+     (let ((first (handler-case (progn (http-exchange :get "https://down.test/v2/a/tags/list") nil)
+                    (registry-unreachable (e) e))))
+       (ok first "REGISTRY-UNREACHABLE")
+       (ok (= 1 (length (scripted-requests backend))) "one attempt")
+       (ok (and first (registry-unreachable-sent-p first)))
+       (ok (and first (equal "https://down.test" (registry-unreachable-host first))))
+       (ok (eq :unreachable (host-state "https://down.test/v2/b/tags/list")))
+       (let ((again (handler-case (progn (http-exchange :get "https://down.test/v2/b/tags/list") nil)
+                      (registry-unreachable (e) e))))
+         (ok again "REGISTRY-UNREACHABLE again")
+         (ok (and again (not (registry-unreachable-sent-p again))) "not sent")
+         (ok (= 1 (length (scripted-requests backend))) "still one request")
+         (let ((report (princ-to-string again)))
+           (ok (search "Registry https://down.test is unreachable" report) report)
+           (ok (search "was not sent" report) report)
+           (ok (search "connection refused" report) report))))
+     (ok (signals (http-exchange :get "https://other.test/v2/") 'registry-unreachable))
+     (ok (= 2 (length (scripted-requests backend))) "another host gets its own attempt"))))
+
+(deftest an-unreachable-host-is-asked-again-after-a-while
+  "#179: *UNREACHABLE-SECONDS* after its failure, a host gets one attempt
+   again, and once it answers it is reachable."
+  (let ((down t))
+    (call-with-scripted-backend
+     (lambda (request) (declare (ignore request)) (if down (refused) (respond 200 "{}")))
+     (lambda (backend)
+       (let ((*unreachable-seconds* 0))
+         (ok (signals (http-exchange :get "https://r.test/v2/") 'registry-unreachable))
+         (setf down nil)
+         (ok (= 200 (nth-value 1 (http-exchange :get "https://r.test/v2/"))))
+         (ok (= 2 (length (scripted-requests backend))))
+         (ok (eq :reachable (host-state "https://r.test/"))))))))
+
+(deftest a-registry-that-stops-answering-is-retried-once
+  "#179: a host that answered gets the retries. When they all fail, its next
+   request gets one attempt, and once that fails nothing more is sent."
+  (let ((down nil))
+    (call-with-scripted-backend
+     (lambda (request) (declare (ignore request)) (if down (refused) (respond 200 "{}")))
+     (lambda (backend)
+       (http-exchange :get "https://r.test/v2/")
+       (setf down t)
+       (let ((e (handler-case (progn (http-exchange :get "https://r.test/v2/a/tags/list") nil)
+                  (registry-transport-error (e) e))))
+         (ok (and e (not (typep e 'registry-unreachable))) "a failure after the retries")
+         (ok (= 5 (length (scripted-requests backend))) "the request and its three retries"))
+       (ok (eq :unknown (host-state "https://r.test/")))
+       (ok (signals (http-exchange :get "https://r.test/v2/b/tags/list") 'registry-unreachable))
+       (ok (= 6 (length (scripted-requests backend))) "one attempt")
+       (ok (signals (http-exchange :get "https://r.test/v2/c/tags/list") 'registry-unreachable))
+       (ok (= 6 (length (scripted-requests backend))) "then none")))))
+
+(deftest a-request-that-may-not-be-retried-keeps-the-host-reachable
+  "A POST that fails on a registry that answers is not retried, and the
+   registry stays reachable."
+  (let ((down nil))
+    (call-with-scripted-backend
+     (lambda (request) (declare (ignore request)) (if down (incomplete) (respond 200 "{}")))
+     (lambda (backend)
+       (declare (ignore backend))
+       (http-exchange :get "https://r.test/v2/")
+       (setf down t)
+       (ok (signals (http-exchange :post "https://r.test/v2/x/blobs/uploads/")
+             'registry-transport-error))
+       (ok (eq :reachable (host-state "https://r.test/")))))))
+
+(deftest url-host-is-scheme-and-authority
+  (ok (equal "https://ghcr.io" (url-host "https://ghcr.io/v2/ns/x/tags/list")))
+  (ok (equal "http://127.0.0.1:9" (url-host "http://127.0.0.1:9/v2/")))
+  (ok (equal "https://ghcr.io" (url-host "HTTPS://GHCR.IO?x=1")))
+  (ok (equal "https://ghcr.io" (url-host "https://ghcr.io"))))
+
+(deftest connecting-is-bounded-by-the-connect-timeout
+  "#179: a black-holed host fails after *CONNECT-TIMEOUT*, not after the
+   request's whole timeout (30 s, or an hour for a blob) on every attempt.
+   A timeout that sets a connect phase keeps it."
+  (flet ((phases (timeout)
+           (let ((tm (http-protocol:coerce-timeout
+                      (cl-oci-client/http::request-timeout timeout))))
+             (list (http-protocol:timeout-connect tm) (http-protocol:timeout-total tm)))))
+    (let ((*connect-timeout* 10)
+          (old (uiop:getenv "CL_REPO_CONNECT_TIMEOUT")))
+      (unwind-protect
+          (progn
+            (setf (uiop:getenv "CL_REPO_CONNECT_TIMEOUT") "")
+            (destructuring-bind (connect total) (phases nil)
+              (ok (= 10 connect) "no timeout: connect bounded")
+              (ok (= 30 total) "and http-protocol's default total"))
+            (destructuring-bind (connect total) (phases 3600)
+              (ok (= 10 connect) "a blob's hour: connect bounded")
+              (ok (= 3600 total)))
+            (destructuring-bind (connect total) (phases 5)
+              (ok (= 5 connect) "never more than the total")
+              (ok (= 5 total)))
+            (destructuring-bind (connect total) (phases '(:connect 3 :read 300))
+              (ok (= 3 connect) "a connect phase is kept")
+              (ok (null total)))
+            (setf (uiop:getenv "CL_REPO_CONNECT_TIMEOUT") "0")
+            (ok (null (first (phases nil))) "CL_REPO_CONNECT_TIMEOUT=0: no bound")
+            (setf (uiop:getenv "CL_REPO_CONNECT_TIMEOUT") "4")
+            (ok (= 4 (first (phases nil))) "CL_REPO_CONNECT_TIMEOUT=4"))
+        (setf (uiop:getenv "CL_REPO_CONNECT_TIMEOUT") (or old ""))))))
 
 (deftest only-idempotent-requests-are-retried
   (let ((calls 0))
