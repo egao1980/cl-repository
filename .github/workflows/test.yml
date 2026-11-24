@@ -162,11 +162,57 @@ jobs:
       - name: Client dependencies from OCI
         uses: ./.github/actions/setup-client
 
+      - name: A cold start keeps stdout for the command (#194, #193)
+        shell: bash
+        run: |
+          # The first run after an upgrade compiles the client and its
+          # dependencies. stdout is the command's line alone, quiet or not.
+          # Quiet (the default), stderr holds no compiler output. With
+          # CL_REPO_VERBOSE=1 it holds the whole compile, and no structure of
+          # this checkout has a slot accessor that overwrites its predicate.
+          unset CL_REPOSITORY_CLIENT_DIR CL_REPO_HTTP_BACKEND CL_REPO_VERBOSE
+          cold() {
+            local mode=$1 out err lines
+            shift
+            out="$RUNNER_TEMP/cold-$mode.out"
+            err="$RUNNER_TEMP/cold-$mode.err"
+            env XDG_CACHE_HOME="$RUNNER_TEMP/cold-fasl-$mode" "$@" \
+              sh "$GITHUB_WORKSPACE/roswell/cl-repo" --version > "$out" 2> "$err" \
+              || { tail -40 "$err"; echo "::error::cl-repo --version failed ($mode)"; return 1; }
+            lines="$(wc -l < "$out" | tr -d ' ')"
+            echo "; $mode: stdout $(tr -d '\r' < "$out"), stderr $(wc -l < "$err" | tr -d ' ') lines"
+            if [[ "$lines" != 1 ]] || ! grep -q '^cl-repo ' "$out"; then
+              head -20 "$out"
+              echo "::error::stdout is not the version line alone ($mode, $lines lines)"
+              return 1
+            fi
+          }
+          cold quiet
+          if grep -m 3 '^; compiling' "$RUNNER_TEMP/cold-quiet.err"; then
+            echo "::error::a quiet cold start printed compiler output"
+            exit 1
+          fi
+          cold verbose CL_REPO_VERBOSE=1
+          grep -q '^; compiling' "$RUNNER_TEMP/cold-verbose.err" \
+            || { echo "::error::CL_REPO_VERBOSE=1 printed no compiler output"; exit 1; }
+          # The file being compiled when SBCL warns that a slot accessor
+          # overwrites the structure's predicate; dependencies are under .cl-repository/.
+          clash="$(tr -d '\r' < "$RUNNER_TEMP/cold-verbose.err" \
+                   | awk 'index($0, "; compiling file ") == 1 { f = $0 }
+                          /type predicate/ && f !~ /[\\\/]\.cl-repository[\\\/]/ { print f }' | sort -u)"
+          if [[ -n "$clash" ]]; then
+            echo "$clash"
+            echo "::error::a structure predicate is also a slot accessor (#193)"
+            exit 1
+          fi
+
       - name: Sync a project with the checkout's client
         shell: bash
         run: |
-          # setup-client points this at the published client; use the checkout's
+          # setup-client points this at the published client; use the checkout's.
+          # CL_REPO_VERBOSE: the checks below read the whole load transcript.
           unset CL_REPOSITORY_CLIENT_DIR CL_REPO_HTTP_BACKEND
+          export CL_REPO_VERBOSE=1
           work="$RUNNER_TEMP/async-probe"
           mkdir -p "$work" && cd "$work"
           printf '(defsystem "async-probe" :depends-on ("alexandria" "cl-ppcre" "split-sequence"))\n' > async-probe.asd

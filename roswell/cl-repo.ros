@@ -33,7 +33,7 @@ exec ros +Q -- $0 "$@"
        ;; trees would shadow the client's dependencies.
        `(:source-registry (:also-exclude ".qlot" ".cl-repository")
                           ,@(mapcar (lambda (tree) `(:tree ,(namestring tree))) trees)
-                          :ignore-inherited-configuration))
+         :ignore-inherited-configuration))
       ;; cl-repo's own fasl root, <XDG_CACHE_HOME>/common-lisp/cl-repo/<impl>/:
       ;; fasls a Quicklisp image compiled (#+quicklisp code) broke cl-repo
       ;; images through the shared cache (#121). Same form as
@@ -51,12 +51,50 @@ exec ros +Q -- $0 "$@"
       (let ((lock (and *load-pathname* (merge-pathnames "fasl-lock.lisp" *load-pathname*))))
         (when (and lock (probe-file lock))
           (load lock :verbose nil :print nil)))
-      ;; Load chatter (cl-unicode prints at load) goes to stderr: stdout is
-      ;; for command output such as V=$(cl-repo version).
-      (let ((*standard-output* *error-output*))
-        (asdf:load-system "cl-repository-client")
-        ;; Choose the HTTP backend now, outside ASDF's load of the client.
-        (uiop:symbol-call :cl-oci-client/http :ensure-http-backend)))))
+      ;; What building and loading the client prints never goes to stdout,
+      ;; which is the command's (V=$(cl-repo --version)). After an upgrade it
+      ;; is the client's whole compile, tens of thousands of lines; on every
+      ;; run, notes such as cl-unicode's ";;; Computing Hangul syllable names".
+      ;; It is kept back (#194). CL_REPO_VERBOSE (not empty, not 0) sends it
+      ;; to stderr as it comes, and an error first sends what was kept to
+      ;; stderr. Two kinds of warning reach stderr either way: cl-repo's own
+      ;; (the HTTP backend fallback) and one a file signals as it loads
+      ;; (cl-stack-ssl's OpenSSL choice); the compiler's do not.
+      (let* ((stderr *error-output*)
+             (script *load-truename*)
+             (verbose (let ((v (uiop:getenv "CL_REPO_VERBOSE")))
+                        (and v (string/= v "") (string/= v "0"))))
+             (transcript (if verbose stderr (make-string-output-stream))))
+        (labels ((release ()
+                   (unless verbose
+                     (setf verbose t)
+                     (write-string (get-output-stream-string transcript) stderr)
+                     (force-output stderr)
+                     (setf *standard-output* stderr
+                           *error-output* stderr)))
+                 (shown-warning-p (c)
+                   (and (not verbose)
+                        (not (typep c 'style-warning))
+                        (not (typep c 'uiop:compile-condition))
+                        (null *compile-file-pathname*)
+                        (or (uiop:string-prefix-p "cl-repo:" (princ-to-string c))
+                            ;; a fasl or an .asd, not this script
+                            (and *load-truename* (not (equal *load-truename* script)))))))
+          (let ((*standard-output* transcript)
+                (*error-output* transcript))
+            (handler-bind ((serious-condition (lambda (c)
+                                                (declare (ignore c))
+                                                (release)))
+                           (warning (lambda (c)
+                                      (when (shown-warning-p c)
+                                        (format stderr "~&WARNING: ~a~%" c)
+                                        (force-output stderr)
+                                        (let ((muffle (find-restart 'muffle-warning c)))
+                                          (when muffle
+                                            (invoke-restart muffle)))))))
+              (asdf:load-system "cl-repository-client")
+              ;; Choose the HTTP backend now, outside ASDF's load of the client.
+              (uiop:symbol-call :cl-oci-client/http :ensure-http-backend))))))))
 
 (defpackage :ros.script.cl-repo
   (:use :cl)
@@ -241,7 +279,8 @@ exec ros +Q -- $0 "$@"
            (progn
              (asdf:initialize-source-registry
               `(:source-registry (:tree ,(namestring tree)) :ignore-inherited-configuration))
-             (asdf:load-system "cl-repository-packager"))
+             (let ((*standard-output* *error-output*)) ; compile output to stderr (#194)
+               (asdf:load-system "cl-repository-packager")))
         (when saved
           (asdf:initialize-source-registry saved))))))
 
