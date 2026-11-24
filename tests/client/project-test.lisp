@@ -884,6 +884,99 @@
                                         :validate t :if-does-not-exist :ignore)
             (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
 
+(defun %debugger-system (dir default-p)
+  "Write DIR/cl-repo-race-162g.asd, a system whose g.lisp reads its port
+   from DIR/port.conf at load time, as configuration often is read. With
+   DEFAULT-P a missing port.conf gives 8080, else the load signals."
+  (ensure-directories-exist dir)
+  (flet ((put (name text)
+           (with-open-file (o (merge-pathnames name dir) :direction :output :if-exists :supersede)
+             (write-string text o))))
+    (let* ((conf (with-standard-io-syntax
+                     (prin1-to-string (namestring (merge-pathnames "port.conf" dir)))))
+           (read-conf (format nil "(with-open-file (i ~a) (read i))" conf)))
+      (put "cl-repo-race-162g.asd" "(defsystem \"cl-repo-race-162g\" :components ((:file \"g\")))")
+      (put "g.lisp"
+           (format nil "(defpackage :cl-repo-race-162g (:use :cl)) (in-package :cl-repo-race-162g) (defparameter *port* ~a) (defun port () *port*)~%"
+                   (if default-p
+                       (format nil "(if (probe-file ~a) ~a 8080)" conf read-conf)
+                       read-conf))))))
+
+#+(and sbcl (not win32))
+(deftest issue-162-an-image-in-the-debugger-does-not-hold-off-other-images
+  "cl-repository#162: the fasl lock is held for the whole compile and the
+   whole load of a file, including the debugger when either signals. A REPL
+   image (`cl-repo ros`, or SLIME under `cl-repo run`) whose load of g.fasl
+   signals sits in the debugger holding g's shared lock. The user fixes
+   g.lisp and runs the tests in another terminal: that image must compile
+   g.lisp, waits on the exclusive lock for as long as the REPL sits in the
+   debugger, and prints nothing. Before the lock it loaded the fixed file in
+   a second."
+  (let ((command (cl-repository-client/project::test-image-command))
+        (source (cl-repository-client/asdf-integration::fasl-lock-source)))
+    (if (or (null command) (null source))
+        (skip "needs an SBCL whose core is a separate file and roswell/fasl-lock.lisp")
+        (let* ((dir (uiop:ensure-directory-pathname
+                     (format nil "~a/cl-repo-162g-~36r/" (uiop:temporary-directory)
+                             (random (expt 36 6) (make-random-state t)))))
+               (file (lambda (name) (namestring (merge-pathnames name dir))))
+               (prefix (loop for form in (butlast (cl-repository-client/project::test-image-forms
+                                                   "cl-repo-race-162g" nil nil)
+                                                  2)
+                             append (list "--eval" form)))
+               (load-form (lambda (tag)
+                            (with-standard-io-syntax
+                                (format nil "(progn (setf *compile-verbose* nil *compile-print* nil) (asdf:load-asd ~s) (asdf:load-system \"cl-repo-race-162g\") (format t \"~~&~a ~~a~~%\" (uiop:symbol-call :cl-repo-race-162g :port)) (finish-output))"
+                                        (funcall file "cl-repo-race-162g.asd") tag))))
+               (repl (remove "--non-interactive" command :test #'equal))
+               (a nil)
+               (b nil))
+          (%debugger-system dir nil)
+          (with-open-file (o (funcall file "port.conf") :direction :output :if-exists :supersede)
+            (write-line "8080" o))
+          (unwind-protect
+              (let ((first-load (uiop:run-program (append command prefix (list "--eval" (funcall load-form "FIRST")))
+                                                  :output :string :error-output :output
+                                                  :ignore-error-status t)))
+                (ok (search "FIRST 8080" first-load) "g.lisp compiles and loads with its port.conf")
+                (delete-file (funcall file "port.conf"))
+                ;; A: a REPL whose stdin stays open, so its debugger waits for input.
+                (setf a (uiop:launch-program (append repl prefix (list "--eval" (funcall load-form "A")))
+                                             :input :stream
+                                             :output (funcall file "a.log") :if-output-exists :supersede
+                                             :error-output :output))
+                (loop repeat 600
+                      until (search "debugger invoked"
+                                    (or (ignore-errors (uiop:read-file-string (funcall file "a.log"))) ""))
+                      do (sleep 0.05))
+                (ok (search "debugger invoked" (uiop:read-file-string (funcall file "a.log")))
+                    "image A sits in the debugger: its load of g.fasl found no port.conf")
+                (sleep 1.1)
+                (%debugger-system dir t)
+                ;; B: the tests the user runs once g.lisp is fixed, a non-interactive image.
+                (let ((start (get-internal-real-time)))
+                  (setf b (uiop:launch-program (append command prefix (list "--eval" (funcall load-form "B")))
+                                               :output (funcall file "b.log") :if-output-exists :supersede
+                                               :error-output :output))
+                  (loop repeat 300 while (uiop:process-alive-p b) do (sleep 0.05))
+                  (let ((waited (/ (- (get-internal-real-time) start) internal-time-units-per-second))
+                        (alive (uiop:process-alive-p b)))
+                    (when alive (uiop:terminate-process b :urgent t))
+                    (uiop:wait-process b)
+                    (let* ((b-out (uiop:read-file-string (funcall file "b.log")))
+                           (text (string-trim '(#\Space #\Newline) b-out)))
+                      (ok (and (not alive) (search "B 8080" b-out))
+                          (format nil "image B loads the fixed g.lisp while image A sits in the debugger (B ~:[finished~;still waiting~] after ~,1fs, ~:[printing nothing~;printing ~:*~s~])"
+                                  alive waited
+                                  (and (plusp (length text)) (subseq text 0 (min 120 (length text))))))))))
+            (when (and a (uiop:process-alive-p a)) (uiop:terminate-process a :urgent t))
+            (when a (uiop:wait-process a) (uiop:close-streams a))
+            (when (and b (uiop:process-alive-p b)) (uiop:terminate-process b :urgent t))
+            (uiop:delete-directory-tree (uiop:ensure-directory-pathname
+                                         (asdf:apply-output-translations dir))
+                                        :validate t :if-does-not-exist :ignore)
+            (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
+
 (deftest issue-166-cl-repo-ros-starts-without-quicklisp
   "cl-repository#166: `cl-repo ros -l tool.lisp -q` (README) ran Roswell's
    default init, which loads Roswell's Quicklisp, so a system the project
