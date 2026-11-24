@@ -2,10 +2,10 @@
   (:use :cl)
   (:import-from :cl-oci/runtime #:msg)
   (:import-from :cl-oci/system-names #:oci-package-name)
-  (:import-from :cl-oci-client/registry #:make-registry)
+  (:import-from :cl-repository-client/registry-auth #:pull-registry)
   (:import-from :cl-oci-client/pull #:head-manifest)
   (:import-from :cl-oci-client/conditions #:registry-error #:registry-transport-error
-                #:not-found-error)
+                #:not-found-error #:credentials-rejected)
   (:import-from :cl-repository-client/installer
                 #:systems-root #:system-install-path #:install-system #:installed-package
                 #:install-result-path #:install-result-name #:install-result-version
@@ -127,16 +127,18 @@
 
 (defun remote-digest (package version)
   "(values digest registry-url) of PACKAGE VERSION from a HEAD of the tag in
-   the first registry that answers with one, or NIL."
+   the first registry that answers with one, or NIL. Refused credentials
+   (CREDENTIALS-REJECTED) signal: they are not an absent tag."
   (dolist (entry (package-registries package) nil)
     (handler-case
         (multiple-value-bind (status headers)
-            (head-manifest (make-registry (first entry)) (package-repository entry package)
+            (head-manifest (pull-registry (first entry)) (package-repository entry package)
                            version)
           (let ((digest (and status (= status 200) headers
                              (gethash "docker-content-digest" headers))))
             (when digest
               (return (values digest (first entry))))))
+      (credentials-rejected (e) (error e))
       ((or registry-error registry-transport-error) () nil))))
 
 (defun same-version-p (version entry-version)
@@ -285,7 +287,7 @@
         unless (lock-entry-installed-p entry)
           collect (multiple-value-bind (url repo type) (entry-source entry)
                     (let ((version (princ-to-string (lockfile-entry-version entry)))
-                          (registry (make-registry url)))
+                          (registry (pull-registry url)))
                       (msg "~&; cl-repo: installing ~a ~a from cl-repo.lock~%"
                            (lockfile-entry-system entry) version)
                       (let ((result (install-system url repo

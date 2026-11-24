@@ -1,11 +1,13 @@
 (defpackage :cl-repository-client/commands
   (:use :cl)
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
-  (:import-from :cl-oci-client/registry #:make-registry #:parse-reference #:registry
+  (:import-from :cl-oci-client/registry #:parse-reference #:registry
                 #:registry-request)
+  (:import-from :cl-repository-client/registry-auth #:pull-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-manifest-raw)
   (:import-from :cl-oci-client/content-discovery #:list-tags-paginated #:list-referrers)
-  (:import-from :cl-oci-client/conditions #:registry-error #:auth-error #:not-found-error)
+  (:import-from :cl-oci-client/conditions #:registry-error #:auth-error #:not-found-error
+                #:credentials-rejected)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests #:image-index-annotations)
   (:import-from :cl-oci/descriptor #:descriptor-annotations #:descriptor-artifact-type)
   (:import-from :cl-oci/annotations #:+ann-title+ #:+ann-version+ #:+ann-description+
@@ -144,7 +146,7 @@
   (dolist (entry *registries*)
     (let* ((url (first entry))
            (ns (getf (rest entry) :namespace "cl-systems"))
-           (reg (make-registry url))
+           (reg (pull-registry url))
            (root-repo (catalog-root-repo ns)))
       (msg "~&Registry: ~a (~a)~%" url ns)
       (handler-case
@@ -170,7 +172,7 @@
                        *registries*))
       (let* ((url (first entry))
              (ns (getf (rest entry) :namespace "cl-systems"))
-             (reg (make-registry url))
+             (reg (pull-registry url))
              (root-repo (catalog-root-repo ns)))
         (handler-case
             (let ((root-digest (head-manifest-digest reg root-repo "latest")))
@@ -203,7 +205,7 @@
         (let* ((url (first entry))
                (ns (getf (rest entry) :namespace "cl-systems"))
                (repo (format nil "~a/~a" ns query))
-               (reg (make-registry url)))
+               (reg (pull-registry url)))
           (handler-case
               (let ((tags (list-tags-paginated reg repo)))
                 (when tags
@@ -219,8 +221,8 @@
   (multiple-value-bind (host repo tag) (parse-reference reference)
     (let* ((reg-url (or host registry-url *default-registry*))
            (full-repo (if host repo
-                         (format nil "~a/~a" (or namespace *default-namespace*) repo)))
-           (reg (make-registry reg-url))
+                          (format nil "~a/~a" (or namespace *default-namespace*) repo)))
+           (reg (pull-registry reg-url))
            ;; a bare name shows the version `install` would pick: packages need
            ;; not carry a latest tag
            (tag (if (or host (explicit-tag-p reference))
@@ -236,6 +238,9 @@
                (let ((ann (image-index-annotations obj)))
                  (when (plusp (hash-table-count ann))
                    (maphash (lambda (k v) (msg "  ~a: ~a~%" k v)) ann))))))
+        ;; refused credentials (#186) are not an absent package
+        (credentials-rejected (e)
+          (msg "~&Info failed: ~a~%" e))
         ;; 401/403 at the token endpoint is how ghcr answers for a repo it lacks (#131)
         ((or not-found-error auth-error) (e)
           (msg "~&Info failed: ~a: package not found in registry (~a)~%" full-repo e))
@@ -347,7 +352,7 @@ SOURCE-HANDLER is an optional function called for non-:ql entries."
     (let* ((url (first reg-entry))
            (ns (getf (rest reg-entry) :namespace *default-namespace*))
            (repo (format nil "~a/~a" ns name))
-           (reg (make-registry url)))
+           (reg (pull-registry url)))
       (handler-case
           (multiple-value-bind (body status headers)
               (pull-manifest-raw reg repo version)
@@ -390,7 +395,7 @@ SOURCE-HANDLER is an optional function called for non-:ql entries."
   (let ((expected (lockfile-entry-index-digest entry)))
     (when (and expected (> (length expected) 0))
       (multiple-value-bind (body status headers)
-          (pull-manifest-raw (if (stringp reg) (make-registry reg) reg) repo version)
+          (pull-manifest-raw (if (stringp reg) (pull-registry reg) reg) repo version)
         (declare (ignore status))
         (let ((actual (or (gethash "docker-content-digest" headers)
                           (format-digest (compute-digest body)))))

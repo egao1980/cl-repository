@@ -148,6 +148,8 @@ jobs:
     uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
 ```
 
+`ghcr.io` 上のプライベート依存は [プライベートパッケージ](#プライベートパッケージ) を参照してください。
+
 `test-system.yml` / `publish-source.yml` の Ubuntu job は
 `ghcr.io/egao1980/cl-repository/ci-base`（Roswell + SBCL + クライアント済み）で走ります。
 これは `jobs.<id>.container` であり Docker コンテナアクションではありません。
@@ -230,6 +232,36 @@ cl-repo install cffi:0.24.1
 ```
 
 アーティファクトは普通の OCI イメージです。`oras`、`crane`、`skopeo` で pull できます。ASDF へ入れるのは `cl-repo install` です。
+
+### プライベートパッケージ
+
+`cl-repo` はレジストリのホストに対する認証情報が見つからない限り、匿名で pull します。最初に当てはまるソースが使われます。
+
+| ソース | 送信先 | ユーザー名 |
+|---|---|---|
+| `CL_REPO_REGISTRY_TOKEN` | `CL_REPO_REGISTRY_HOST` のホスト（カンマ区切り、既定は `ghcr.io`） | `CL_REPO_REGISTRY_USERNAME`、既定は `x-access-token` |
+| `GITHUB_TOKEN` と `GITHUB_ACTOR`（GitHub Actions が両方を設定） | `ghcr.io` のみ | `GITHUB_ACTOR` |
+| Docker の `config.json`（`$DOCKER_CONFIG`、なければ `~/.docker`）の `auths`。`docker login` が書く形式 | そのエントリのホスト | エントリのもの |
+
+空の変数は未設定として扱います。credential helper（`credsStore`、`credHelpers`）は読みません。代わりに `CL_REPO_REGISTRY_TOKEN` を使ってください。認証情報はレジストリのトークンエンドポイント（Basic 認証を求めるレジストリならレジストリ自身）にだけ送られ、他のホストには送られず、表示されることもありません。レジストリが拒否すると、`cl-repo` は変数名またはファイル名（値ではなく）を示すエラーで停止します。匿名 pull へのフォールバックはしません。フォールバックするとプライベートパッケージが「存在しない」と報告されるためです。匿名で pull するには変数を外してください。公開（publish）ではこの認証情報を使いません。
+
+ローカルでは GitHub CLI を使います（トークンには `read:packages` が必要）。
+
+```sh
+CL_REPO_REGISTRY_TOKEN=$(gh auth token) cl-repo test
+```
+
+CI（`test-system.yml`、`test-system-impl.yml`、`ci` action）では job の `GITHUB_TOKEN`（`permissions: packages: read`）で `ghcr.io` から pull します。これは公開パッケージを読めます。プライベートパッケージは、そのパッケージが呼び出し元リポジトリにアクセスを許可した後に読めます。パッケージのページで **Package settings → Manage Actions access → Add repository** を開き、ロール *Read* を選びます。パッケージがアクセスを許可できない場合（別アカウントの所有など）は、`read:packages` を持つ personal access token をシークレットに保存し、`registry-token` として渡します。workflow はそれを `CL_REPO_REGISTRY_TOKEN` に設定し、`GITHUB_TOKEN` より先に使います。
+
+```yaml
+jobs:
+  test:
+    uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
+    secrets:
+      registry-token: ${{ secrets.PACKAGES_READ_TOKEN }}
+```
+
+独自のステップでは `env:` に `CL_REPO_REGISTRY_TOKEN` を設定してください。
 
 ### OCICL パッケージの読み込み
 

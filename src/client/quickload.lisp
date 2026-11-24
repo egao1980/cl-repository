@@ -1,7 +1,7 @@
 (defpackage :cl-repository-client/quickload
   (:use :cl)
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
-  (:import-from :cl-oci-client/registry #:make-registry)
+  (:import-from :cl-repository-client/registry-auth #:pull-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-blob #:*pull-cache*)
   (:import-from :cl-oci-client/content-discovery #:list-referrers)
   (:import-from :cl-oci-client/conditions #:registry-error #:registry-transport-error)
@@ -180,7 +180,7 @@
    answer, and NIL here reads as \"not in the registry\" (#132)."
   (let* ((pkg (oci-package-name system-name))
          (repo (format nil "~a/~a" namespace pkg))
-         (reg (make-registry reg-url)))
+         (reg (pull-registry reg-url)))
     (cond
       (version (values repo version))
       (t

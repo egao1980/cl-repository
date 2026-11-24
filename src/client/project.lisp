@@ -9,7 +9,8 @@
                 #:dependency-closure #:collect-missing-asdf-deps #:installed-satisfies-p
                 #:*install-recorder*)
   (:import-from :cl-repository-client/asd-rewrite #:asd-defsystem-depends-on)
-  (:import-from :cl-oci-client/conditions #:registry-error #:not-found-error #:auth-error)
+  (:import-from :cl-oci-client/conditions #:registry-error #:not-found-error #:auth-error
+                #:credentials-rejected)
   (:import-from :cl-oci-client/pin #:with-loaded-systems-pinned #:pinned-system-p #:unpin-system)
   (:import-from :cl-repository-client/dep-satisfy #:system-satisfied-p #:asdf-dep-spec #:note-minimum)
   (:import-from :cl-repository-client/version-utils #:version< #:select-preferred-version)
@@ -345,17 +346,26 @@
               (note-installed-locally name tag dir))))
         name))))
 
+(defun absent-package-error-p (e)
+  "True when registry error E means the package is not there: 404, or a
+   401/403 (GHCR's answer to an anonymous pull of a repository that does not
+   exist). Refused credentials (CREDENTIALS-REJECTED) are not: they are a
+   misconfiguration, and treating them as absent hides it (#186)."
+  (and (typep e '(or not-found-error auth-error))
+       (not (typep e 'credentials-rejected))))
+
 (defun install-or-publish (reference publish)
   "Install REFERENCE. When the registry has no such package, call PUBLISH and
    install the bare name. Absent = 404, or the 401/403 GHCR gives an anonymous
-   pull of a repository that does not exist. Any other failure (network, TLS,
-   a broken layer) propagates: publishing would not fix it."
+   pull of a repository that does not exist (ABSENT-PACKAGE-ERROR-P). Any
+   other failure (network, TLS, a broken layer, refused credentials)
+   propagates: publishing would not fix it."
   (when (handler-case
             (progn (cmd-install reference :registry-url *default-registry*
                                 :namespace *default-namespace*)
                    nil)
           (registry-error (e)
-            (unless (typep e '(or not-found-error auth-error))
+            (unless (absent-package-error-p e)
               (error e))
             (msg "~&; cl-repo: ~a is not in ~a/~a; publishing it~%"
                  reference *default-registry* *default-namespace*)
@@ -387,7 +397,7 @@
   (handler-case (cmd-install reference :registry-url *default-registry*
                                        :namespace *default-namespace*)
     (registry-error (e)
-      (unless (typep e '(or not-found-error auth-error))
+      (unless (absent-package-error-p e)
         (error e))
       (msg "~&; cl-repo: ~a has no OCI tag (a qlot lock commit); installing the latest ~a~%"
            reference name)

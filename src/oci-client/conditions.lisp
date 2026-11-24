@@ -15,7 +15,10 @@
            #:registry-transport-error-method
            #:registry-transport-error-url
            #:registry-transport-error-cause
-           #:registry-transport-error-attempts))
+           #:registry-transport-error-attempts
+           #:credentials-rejected
+           #:credentials-rejected-source
+           #:credentials-rejected-username))
 (in-package :cl-oci-client/conditions)
 
 (defun error-body-text (body)
@@ -73,6 +76,29 @@
                      (registry-error-status c)
                      (registry-error-url c)
                      (error-body-summary (registry-error-body c))))))
+
+(define-condition credentials-rejected (auth-error)
+  ((source :initarg :source :reader credentials-rejected-source :initform nil)
+   (username :initarg :username :reader credentials-rejected-username :initform nil))
+  (:documentation
+   "The registry refused the credentials themselves: its token endpoint gave
+    no token for them even without a scope (as `docker login` asks), or a
+    Basic-auth registry answered them with 401. SOURCE names where they came
+    from (an environment variable, a credentials file), never their value.
+    Not an absent package: no anonymous pull is tried in its place, as that
+    would hide the misconfiguration.")
+  (:report (lambda (c s)
+             (let ((source (credentials-rejected-source c)))
+               (format s "Registry credentials~@[ from ~a~]~@[ (user ~a)~] were rejected~
+                          ~@[ (HTTP ~a)~]~@[ at ~a~]~@[: ~a~]."
+                       source
+                       (credentials-rejected-username c)
+                       (registry-error-status c)
+                       (registry-error-url c)
+                       (error-body-summary (registry-error-body c)))
+               (format s " ~:[Fix them~;Fix or unset ~:*~a~]: cl-repo does not fall back ~
+                          to an anonymous pull."
+                       source)))))
 
 (define-condition not-found-error (registry-error) ()
   (:report (lambda (c s)

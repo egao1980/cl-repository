@@ -8,6 +8,8 @@
 #
 # Optional inputs: system, os-json, extra-with, sbcl-version, client-version, ci-image,
 # sbcl-dynamic-space-mb (default 4096; macOS SBCL defaults to 1 GB).
+# Optional secret: registry-token (a read:packages token for private GHCR
+# dependencies the job's GITHUB_TOKEN cannot read; README "Private packages").
 # Caller does not copy ci-install.lisp / ci-test.lisp.
 name: Test CL system
 
@@ -61,6 +63,13 @@ on:
         required: false
         type: string
         default: "true"
+    secrets:
+      registry-token:
+        description: >-
+          Token cl-repo pulls ghcr.io packages with (CL_REPO_REGISTRY_TOKEN),
+          before the job's GITHUB_TOKEN. Only for private dependencies that do
+          not grant this repository Actions access.
+        required: false
 
 jobs:
   test:
@@ -71,7 +80,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Image string or null. Do not mention `secrets` here — reusable-workflow
     # parse rejects it. Do not mention `matrix` in jobs.<id>.if either.
-    # GHCR package should be public so the job can pull without credentials.
+    # The runner pulls this image without credentials, so ci-base stays public.
+    # Dependencies are another matter: cl-repo pulls them with the job's
+    # GITHUB_TOKEN (packages: read; the ci action passes GITHUB_ACTOR too), so
+    # a private package works once it grants the calling repository Actions
+    # access, or with the registry-token secret (cl-repository#186).
     container: ${{ (startsWith(matrix.os, 'ubuntu') && inputs.ci-image != '') && inputs.ci-image || fromJSON('null') }}
     defaults:
       run:
@@ -83,6 +96,8 @@ jobs:
       SBCL_VERSION: ${{ inputs.sbcl-version }}
       ROSWELL_VERSION: ${{ inputs.roswell-version }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # empty when the caller passes no registry-token: cl-repo ignores it
+      CL_REPO_REGISTRY_TOKEN: ${{ secrets.registry-token }}
     steps:
       # Windows git defaults to core.autocrlf=true: a checked-out .lisp gets
       # CRLF, and a FORMAT tilde-newline becomes tilde-Return, which SBCL

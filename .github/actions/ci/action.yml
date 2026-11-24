@@ -72,6 +72,8 @@ runs:
         PKG_VERSION: ${{ inputs.version }}
         PACKAGER_VERSION: ${{ inputs.packager-version }}
         OCI_NAMESPACE: ${{ inputs.oci-namespace }}
+        # publish credentials, and cl-repo's pull credentials for ghcr.io
+        # (private dependencies, cl-repository#186)
         GITHUB_TOKEN: ${{ github.token }}
         GITHUB_ACTOR: ${{ github.actor }}
         SBCL_DYNAMIC_SPACE_MB: ${{ inputs.sbcl-dynamic-space-mb }}

@@ -20,6 +20,7 @@
                (:file "pin-test")
                (:file "transport-test")
                (:file "batch-test")
+               (:file "auth-test")
                (:file "all"))
   :perform (test-op (o c)
             (unless (symbol-call :rove :run c)
