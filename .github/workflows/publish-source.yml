@@ -81,6 +81,18 @@ jobs:
       ROSWELL_VERSION: ${{ inputs.roswell-version }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      # Windows git defaults to core.autocrlf=true: a checked-out .lisp gets
+      # CRLF, and a FORMAT tilde-newline becomes tilde-Return, which SBCL
+      # rejects at compile time (cl-repository#178). Set before checkout, on
+      # every OS, so the tree matches the committed blobs. Without git (a
+      # custom image) checkout falls back to a GitHub archive, already LF.
+      - name: Check out with LF line endings
+        shell: bash
+        run: |
+          command -v git >/dev/null 2>&1 || exit 0
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
