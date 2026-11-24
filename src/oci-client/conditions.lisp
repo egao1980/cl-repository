@@ -18,7 +18,10 @@
            #:registry-transport-error-attempts
            #:credentials-rejected
            #:credentials-rejected-source
-           #:credentials-rejected-username))
+           #:credentials-rejected-username
+           #:registry-unreachable
+           #:registry-unreachable-host
+           #:registry-unreachable-sent-p))
 (in-package :cl-oci-client/conditions)
 
 (defun error-body-text (body)
@@ -125,4 +128,25 @@
                      (registry-transport-error-url c)
                      (let ((n (registry-transport-error-attempts c)))
                        (and n (> n 1) n))
+                     (registry-transport-error-cause c)))))
+
+(define-condition registry-unreachable (registry-transport-error)
+  ((host :initarg :host :reader registry-unreachable-host :initform nil)
+   (sent :initarg :sent :reader registry-unreachable-sent-p :initform t))
+  (:documentation
+   "A request to a host that has not answered: it got no response, and the
+    host had given none in this image (its first request, or the first since
+    it stopped answering), so it was not retried; or it was not sent at all
+    (SENT NIL), because such a failure came less than
+    CL-OCI-CLIENT/HTTP:*UNREACHABLE-SECONDS* ago. CAUSE is that failure.
+    Retries are for a registry that answers: an unreachable one costs one
+    round trip, not retries for every package (cl-repository#179). A
+    REGISTRY-TRANSPORT-ERROR: it says nothing about whether a package exists.")
+  (:report (lambda (c s)
+             (format s "Registry ~a is unreachable: ~@[~a ~]~a ~
+                        ~:[was not sent, as an earlier request to it failed~;failed~]~@[: ~a~]"
+                     (registry-unreachable-host c)
+                     (registry-transport-error-method c)
+                     (registry-transport-error-url c)
+                     (registry-unreachable-sent-p c)
                      (registry-transport-error-cause c)))))

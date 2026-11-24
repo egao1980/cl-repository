@@ -60,7 +60,9 @@
            #:*default-ql-dist*
            #:lisp-command-p
            #:split-lisp-command-args
-           #:expand-lisp-command))
+           #:expand-lisp-command
+           #:client-release-version
+           #:cmd-client-version))
 (in-package :cl-repository-client/project)
 
 (defvar *default-ql-dist* "https://beta.quicklisp.org/dist/quicklisp.txt"
@@ -78,6 +80,33 @@
               dir))))
       (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST")
       (error "cl-repo: cannot find the cl-repository client tree")))
+
+(defun client-release-version (&optional (tree (ignore-errors (client-source-tree))))
+  "The release version of the client in TREE (default: CLIENT-SOURCE-TREE),
+   from its directory name. setup-client.sh, which install.sh runs, extracts
+   release V into cl-oci-V/, the prefix the source layer's tarball carries.
+   NIL for any other directory, such as a checkout."
+  (when tree
+    (let ((name (car (last (pathname-directory (uiop:ensure-directory-pathname tree))))))
+      (when (stringp name)
+        (loop for prefix in '("cl-oci-" "cl-repository-client-")
+              for start = (length prefix)
+              when (and (> (length name) start)
+                        (string= prefix name :end2 start)
+                        (digit-char-p (char name start))
+                        (every (lambda (ch) (or (alphanumericp ch) (find ch ".+-")))
+                               (subseq name start)))
+                return (subseq name start))))))
+
+(defun cmd-client-version (&optional (stream *standard-output*))
+  "Print which client runs: cl-repo --version (#189). \"cl-repo 0.27.38
+   (/home/me/.cl-repository-client/cl-oci-0.27.38/)\": the release version
+   (CLIENT-RELEASE-VERSION) and the client's directory. A client that is not
+   a release tree (a checkout) prints \"unknown version\"."
+  (let ((tree (ignore-errors (client-source-tree))))
+    (format stream "~&cl-repo ~a~@[ (~a)~]~%"
+            (or (client-release-version tree) "unknown version")
+            (and tree (uiop:native-namestring tree)))))
 
 (defun ensure-default-registry ()
   (add-registry *default-registry* :namespace *default-namespace* :priority :append))

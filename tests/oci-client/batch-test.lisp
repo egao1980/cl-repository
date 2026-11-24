@@ -52,17 +52,18 @@
          (orig (fdefinition sym))
          (old-jobs (uiop:getenv "CL_REPO_FETCH_JOBS")))
     (unwind-protect
-         (let ((http-protocol:*http-backend* backend)
-               (cl-oci-client/http::*http-backend-kind* :async)
-               (cl-oci-client/http::*http-clients* '())
-               (cl-oci-client/http:*transport-retry*
-                 (make-instance 'cl-oci-client/http::transport-retry
-                                :total 2 :backoff-factor 0 :status nil
-                                :allowed-methods '(:get :head))))
-           (setf (uiop:getenv "CL_REPO_FETCH_JOBS") "8")
-           (setf (fdefinition sym) #'one-shot-batch)
-           (clear-token-cache)
-           (funcall fn backend))
+        (let ((http-protocol:*http-backend* backend)
+              (cl-oci-client/http::*http-backend-kind* :async)
+              (cl-oci-client/http::*http-clients* '())
+              (cl-oci-client/http:*host-outcomes* (make-hash-table :test 'equal))
+              (cl-oci-client/http:*transport-retry*
+               (make-instance 'cl-oci-client/http::transport-retry
+                              :total 2 :backoff-factor 0 :status nil
+                              :allowed-methods '(:get :head))))
+          (setf (uiop:getenv "CL_REPO_FETCH_JOBS") "8")
+          (setf (fdefinition sym) #'one-shot-batch)
+          (clear-token-cache)
+          (funcall fn backend))
       (setf (fdefinition sym) orig)
       (setf (uiop:getenv "CL_REPO_FETCH_JOBS") (or old-jobs ""))
       (clear-token-cache))))
@@ -108,21 +109,27 @@
        (ok (search "t-" (third (first (scripted-requests backend)))))))))
 
 (deftest a-batch-request-without-an-answer-is-sent-again-with-retries
+  "A registry that has answered: a batch request that gets no response is
+   sent again through REGISTRY-REQUEST, with its retries."
   (let ((failed nil))
     (call-with-batch-registry
      (lambda (request)
        (if (and (search "/ns/flaky/" (http-protocol:http-request-url request)) (not failed))
            (progn (setf failed t)
-                  (error 'http-protocol:http-protocol-error :message "incomplete HTTP response"))
+             (error 'http-protocol:http-protocol-error :message "incomplete HTTP response"))
            (ghcr-like request)))
      (lambda (backend)
        (declare (ignore backend))
+       (registry-request (make-registry "https://r.test") :get "/v2/ns/ok/tags/list")
        (let ((results (registry-request-batch
                        (list (list (make-registry "https://r.test") :get "/v2/ns/flaky/tags/list")
                              (list (make-registry "https://r.test") :get "/v2/ns/ok/tags/list")))))
+         (ok failed "the flaky request failed once")
          (ok (every (lambda (r) (and (consp r) (= 200 (second r)))) results)))))))
 
 (deftest a-persistent-transport-failure-in-a-batch-is-a-transport-error
+  "A registry that has answered: a batch request that keeps failing is a
+   transport error, and the others keep their answers."
   (call-with-batch-registry
    (lambda (request)
      (if (search "/ns/down/" (http-protocol:http-request-url request))
@@ -130,11 +137,31 @@
          (ghcr-like request)))
    (lambda (backend)
      (declare (ignore backend))
+     (registry-request (make-registry "https://r.test") :get "/v2/ns/ok/tags/list")
      (let ((results (registry-request-batch
                      (list (list (make-registry "https://r.test") :get "/v2/ns/down/tags/list")
                            (list (make-registry "https://r.test") :get "/v2/ns/ok/tags/list")))))
        (ok (typep (first results) 'registry-transport-error))
        (ok (= 200 (second (second results))))))))
+
+(deftest a-batch-to-an-unreachable-registry-sends-one-request
+  "#179: a batch of tag listings to a registry that refuses connections and
+   has never answered. The first request fails, the others are not sent, and
+   none is sent again with retries: every result is REGISTRY-UNREACHABLE."
+  (call-with-batch-registry
+   (lambda (request)
+     (declare (ignore request))
+     (error 'http-protocol:http-connection-error :message "connection refused"))
+   (lambda (backend)
+     (let ((results (registry-request-batch
+                     (loop for name in '("a" "b" "c" "d" "e")
+                           collect (list (make-registry "https://down.test") :get
+                                         (format nil "/v2/ns/~a/tags/list" name))))))
+       (ok (= 5 (length results)))
+       (ok (every (lambda (r) (typep r 'cl-oci-client/conditions:registry-unreachable)) results)
+           (format nil "~s" results))
+       (ok (= 1 (length (scripted-requests backend)))
+           (format nil "one request: ~s" (scripted-requests backend)))))))
 
 (deftest path-repository-names-the-repository
   (ok (equal "ns/a" (cl-oci-client/registry::path-repository "/v2/ns/a/tags/list")))

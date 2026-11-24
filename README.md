@@ -35,6 +35,8 @@ If you're familiar with qlot, cl-repo shares the same per-project dependency phi
 
 **Resolution.** Dependency resolution starts from the newest acceptable version of each package and fetches older versions only around a conflict. One sync or install shares one cache of tag lists, configs, manifests and tokens. On the async backend, registry lookups go out up to 8 at a time on one event loop (`CL_REPO_FETCH_JOBS`, 1 for one at a time). Package configs are kept between runs under `$XDG_CACHE_HOME/cl-repository/configs/` (`CL_REPO_CONFIG_CACHE=<dir>` moves it, `off` disables it). An entry is used only after a HEAD of its tag returns the digest it was stored under. `CL_REPO_TRACE_HTTP=1` logs every registry request to stderr. A sync resolves a package its lock does not hold to the newest published version, not the newest installed one: an older copy is upgraded, installed or in the client's own tree (`~/.cl-repository-client`). The newest version goes into the install tree, which the project searches first, and into the lock. A package the lock holds keeps its version, and when no registry can be asked the installed versions stay. A `(:version name min)` that only older published versions miss fails with `cl-repo: agent-tools 0.4.1 or later is required; the registry has 0.4.0 (published versions: 0.3.2, 0.4.0)` (condition `unsatisfied-dependencies`), and nothing of the older version is installed.
 
+**Offline.** Retries are for a registry that answers. A request that gets no response is retried (after 1, 2 and 4 s) only when its registry has answered before in this run. A registry that has not gets one attempt; when that fails, cl-repo treats it as unreachable: its other requests fail at once for 60 s (condition `registry-unreachable`, a `registry-transport-error`), and the log names it once. Connecting takes at most 10 s (`CL_REPO_CONNECT_TIMEOUT=<seconds>`, `0` leaves it to the request's whole timeout), so a black-holed network fails in that time too. With the network down, a sync whose dependencies are installed keeps the installed versions after one failed request. One that needs a package that is not installed fails at once and names the package and the unreachable registry. A sync from a current `cl-repo.lock` whose entries are installed sends no request at all.
+
 ## Systems
 
 | System | Description |
@@ -96,6 +98,10 @@ cl-repo install alexandria
 upstream release: `3.5.9` becomes `3.5.9.1`. Only the version string in the `.asd` changes, and
 `--system foo/bar` picks another `defsystem` in the file. A publish workflow sets the version
 with `cl-repo version "$V"`; no `sed` or sync script.
+
+`cl-repo --version` (or `-V`) prints the client itself: the release its directory was installed
+from and the directory, `cl-repo 0.27.38 (/home/me/.cl-repository-client/cl-oci-0.27.38/)`. A
+client run from a checkout prints `unknown version`.
 
 ### Onboarding Existing Projects
 

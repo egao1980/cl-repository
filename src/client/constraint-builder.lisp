@@ -8,7 +8,7 @@
                 #:remember-pull)
   (:import-from :cl-oci-client/content-discovery #:list-tags #:parse-tag-list)
   (:import-from :cl-oci-client/conditions #:registry-error #:registry-error-status
-                #:registry-transport-error #:credentials-rejected)
+                #:registry-transport-error #:registry-unreachable #:credentials-rejected)
   (:import-from :cl-oci-client/http #:ensure-http-backend)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests)
   (:import-from :cl-oci/manifest #:manifest #:manifest-config)
@@ -44,7 +44,8 @@
            #:with-resolution-cache
            #:*resolution-cache*
            #:make-resolution-cache
-           #:call-with-resolution-cache))
+           #:call-with-resolution-cache
+           #:report-lookup-failure-p))
 (in-package :cl-repository-client/constraint-builder)
 
 (define-condition dependency-resolution-error (error)
@@ -78,7 +79,9 @@
   ;; (package . version) → config, or :NONE when it could not be read
   (configs (make-hash-table :test 'equal))
   ;; (registry-url . repository) → tags (LIST-TAGS/RETRY answers)
-  (tags (make-hash-table :test 'equal)))
+  (tags (make-hash-table :test 'equal))
+  ;; registry-url → T once a lookup there was reported unreachable
+  (unreachable (make-hash-table :test 'equal)))
 
 (defvar *resolution-cache* nil
   "The RESOLUTION-CACHE of the operation in progress, or NIL.")
@@ -203,10 +206,22 @@
 (defun registry-repository (entry name)
   (format nil "~a/~a" (getf (rest entry) :namespace "cl-systems") (oci-package-name name)))
 
+(defun report-lookup-failure-p (url condition)
+  "True when a failed lookup in the registry URL with CONDITION is worth a log
+   line. A REGISTRY-UNREACHABLE is logged once per registry and operation
+   (*RESOLUTION-CACHE*): every package after the first would only repeat that
+   the registry is down (cl-repository#179)."
+  (or (not (typep condition 'registry-unreachable))
+      (null *resolution-cache*)
+      (let ((reported (resolution-cache-unreachable *resolution-cache*)))
+        (prog1 (not (gethash url reported))
+          (setf (gethash url reported) t)))))
+
 (defun registry-versions (name registries)
   "Version tags of NAME in REGISTRIES (already filtered by source policy).
    A registry whose lookup fails is skipped; when none has NAME and one
-   failed, signals SYSTEM-LOOKUP-ERROR rather than answering \"no versions\"."
+   failed, signals SYSTEM-LOOKUP-ERROR rather than answering \"no versions\".
+   An unreachable registry is logged once (REPORT-LOOKUP-FAILURE-P)."
   (let ((versions nil)
         (failures nil))
     (dolist (entry registries)
@@ -217,7 +232,8 @@
               (unless (string= tag "latest")
                 (pushnew tag versions :test #'string=)))
           (error (e)
-            (msg "~&; cl-repo: ~a: lookup in ~a failed: ~a~%" name url e)
+            (when (report-lookup-failure-p url e)
+              (msg "~&; cl-repo: ~a: lookup in ~a failed: ~a~%" name url e))
             (push (cons url e) failures)))))
     (when (and failures (null versions))
       (error 'system-lookup-error :name name :failures (nreverse failures)))

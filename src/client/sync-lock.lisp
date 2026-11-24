@@ -33,7 +33,9 @@
            #:lockfile-closure-gap
            #:lockfile-policy-gap
            #:lockfile-reproduction-gap
-           #:install-lockfile-entries))
+           #:install-lockfile-entries
+           #:lockfile-entry-unavailable
+           #:lockfile-entry-unavailable-system))
 (in-package :cl-repository-client/sync-lock)
 
 ;;; cl-repo.lock as the record of a project's dependency closure: the
@@ -53,6 +55,24 @@
                         Run cl-repo sync without --locked to resolve and rewrite it."
                      (uiop:native-namestring (lockfile-not-current-path c))
                      (lockfile-not-current-reason c)))))
+
+(define-condition lockfile-entry-unavailable (error)
+  ((system :initarg :system :reader lockfile-entry-unavailable-system)
+   (version :initarg :version :reader lockfile-entry-unavailable-version)
+   (registry :initarg :registry :reader lockfile-entry-unavailable-registry :initform nil)
+   (cause :initarg :cause :reader lockfile-entry-unavailable-cause :initform nil))
+  (:documentation
+   "A sync from cl-repo.lock needs an entry that is not installed, and its
+    registry gave no answer (CAUSE, a REGISTRY-TRANSPORT-ERROR: unreachable,
+    or a transfer that kept failing). Not an absent package or tag: nothing
+    was learnt about it.")
+  (:report (lambda (c s)
+             (format s "cl-repo: ~a ~a (cl-repo.lock) is not installed, and ~
+                        ~:[its registry~;~:*~a~] could not be asked for it: ~a"
+                     (lockfile-entry-unavailable-system c)
+                     (lockfile-entry-unavailable-version c)
+                     (lockfile-entry-unavailable-registry c)
+                     (lockfile-entry-unavailable-cause c)))))
 
 (defun project-input-files (directory)
   "The files the dependencies of the project in DIRECTORY are declared in:
@@ -282,7 +302,9 @@
    its tag, once the registry has shown that the tag still names the digest
    the entry records (LOCKFILE-DIGEST-MISMATCH otherwise), or by the digest
    when there is no such tag (ENTRY-REFERENCE). Nothing is resolved and no
-   tag is listed. → the INSTALL-RESULTs."
+   tag is listed. A registry that gives no answer (REGISTRY-TRANSPORT-ERROR,
+   such as REGISTRY-UNREACHABLE) signals LOCKFILE-ENTRY-UNAVAILABLE naming
+   the entry. → the INSTALL-RESULTs."
   (loop for entry in entries
         unless (lock-entry-installed-p entry)
           collect (multiple-value-bind (url repo type) (entry-source entry)
@@ -290,10 +312,15 @@
                           (registry (pull-registry url)))
                       (msg "~&; cl-repo: installing ~a ~a from cl-repo.lock~%"
                            (lockfile-entry-system entry) version)
-                      (let ((result (install-system url repo
-                                                    (entry-reference entry registry repo version)
-                                                    :type type)))
-                        (when (install-result-index-digest result)
-                          (record-installed-digest (install-result-index-digest result)
-                                                   (install-result-path result)))
-                        result)))))
+                      (handler-case
+                          (let ((result (install-system url repo
+                                                        (entry-reference entry registry repo version)
+                                                        :type type)))
+                            (when (install-result-index-digest result)
+                              (record-installed-digest (install-result-index-digest result)
+                                                       (install-result-path result)))
+                            result)
+                        (registry-transport-error (e)
+                          (error 'lockfile-entry-unavailable
+                                 :system (lockfile-entry-system entry) :version version
+                                 :registry url :cause e)))))))

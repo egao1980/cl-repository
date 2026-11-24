@@ -149,13 +149,14 @@
       (values result log))))
 
 (deftest test-list-tags-retry-unreachable-signals
-  "#132: an unreachable registry is not an empty one. HTTP-EXCHANGE retries
-   the request; then the transport error propagates, it is not NIL."
+  "#132: an unreachable registry is not an empty one. The transport error
+   propagates, it is not NIL."
   (let ((*tag-list-attempts* 2)
         (cl-oci-client/http:*transport-retry* nil)
+        (cl-oci-client/http:*host-outcomes* (make-hash-table :test 'equal))
         (reg (make-registry "http://127.0.0.1:9" :insecure-p t)))
     (ok (signals (%call-capturing-log (lambda () (list-tags/retry reg "cl-systems/nope")))
-                 'registry-transport-error))))
+          'registry-transport-error))))
 
 (deftest test-list-tags-retry-transport-error-is-not-retried-again
   (let ((calls 0)
@@ -636,17 +637,19 @@
 
 (defun %with-scripted-registry (routes fn)
   "Call FN with *REGISTRIES* naming one fake registry that answers ROUTES,
-   ((url-substring . thunk) ...); other URLs get a 404. FN gets the backend."
+   ((url-substring . thunk) ...); other URLs get a 404. No host has answered
+   yet (*HOST-OUTCOMES*). FN gets the backend."
   (let* ((backend (make-instance '%scripted-registry :routes routes))
          (http-protocol:*http-backend* backend)
          (cl-oci-client/http::*http-clients* '())
+         (cl-oci-client/http:*host-outcomes* (make-hash-table :test 'equal))
          (cl-oci-client/http:*transport-retry*
-           (make-instance 'cl-oci-client/http::transport-retry
-                          :total 2 :backoff-factor 0 :status nil
-                          :allowed-methods '(:get :head)))
+          (make-instance 'cl-oci-client/http::transport-retry
+                         :total 2 :backoff-factor 0 :status nil
+                         :allowed-methods '(:get :head)))
          (*tag-list-attempts* 1)
          (cl-repository-client/quickload::*registries*
-           '(("https://r.test" :namespace "ns"))))
+          '(("https://r.test" :namespace "ns"))))
     (funcall fn backend)))
 
 (deftest test-blob-pull-transport-failure-is-not-not-found

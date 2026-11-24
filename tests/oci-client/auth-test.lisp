@@ -77,6 +77,7 @@
   (let* ((backend (make-instance 'scripted-backend :handler handler))
          (http-protocol:*http-backend* backend)
          (cl-oci-client/http::*http-clients* '())
+         (cl-oci-client/http:*host-outcomes* (make-hash-table :test 'equal))
          (*transport-retry* nil))
     (clear-token-cache)
     (unwind-protect (funcall fn backend)

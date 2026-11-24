@@ -18,4 +18,5 @@
    :cl-repository-client/tests/project-test
    :cl-repository-client/tests/resolution-test
    :cl-repository-client/tests/sync-lock-test
-   :cl-repository-client/tests/registry-auth-test))
+   :cl-repository-client/tests/registry-auth-test
+   :cl-repository-client/tests/offline-test))
