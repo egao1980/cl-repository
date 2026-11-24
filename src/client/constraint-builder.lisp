@@ -631,6 +631,10 @@
 
 (defun entry-dependency-requests (name entries)
   "(package . minimum) for every dependency of ENTRIES of package NAME.
+   A system that ships with the Lisp or with ASDF (uiop, asdf, SBCL contribs:
+   IMPLEMENTATION-SYSTEM-P) is no request: the registries never have it, and
+   with a minimum, as in dexador's (:version \"uiop\" \"3.1.1\"), it used to
+   enter the plan at that version and fail the pull (#171).
    Signals DEPENDENCY-RESOLUTION-ERROR for a dependency source policy denies."
   (let ((requests nil))
     (dolist (entry entries (nreverse requests))
@@ -640,7 +644,9 @@
             (error 'dependency-resolution-error
                    :message (format nil "~a depends on ~a which is denied by source policy"
                                     name dn)))
-          (push (cons (asdf-primary-system-name dn) (dep-version dep)) requests))))))
+          (unless (or (implementation-system-p dn)
+                      (implementation-system-p (asdf-primary-system-name dn)))
+            (push (cons (asdf-primary-system-name dn) (dep-version dep)) requests)))))))
 
 (defun pin-meets-p (pin minimum)
   (or (null minimum) (version-satisfies-p pin minimum)))
