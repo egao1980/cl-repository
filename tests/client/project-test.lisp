@@ -755,6 +755,68 @@
               (uiop:wait-process child)
               (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))))
 
+#+(and sbcl (not win32))
+(deftest the-debugger-lets-the-fasl-locks-go
+  "cl-repository#162: an image that enters the debugger inside a compile or
+   load (a REPL whose load signals, or a BREAK) unlocks every fasl lock its
+   thread holds before the debugger runs, so other images compile and load
+   those files meanwhile. The hook it replaces (Swank's, or the one of
+   --disable-debugger) still runs: here the test's, which leaves by a
+   restart outside both locks."
+  (let* ((source (cl-repository-client/asdf-integration::fasl-lock-source))
+         (dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-162h-~36r/" (uiop:temporary-directory)
+                       (random (expt 36 6) (make-random-state t)))))
+         (outer (merge-pathnames "a.fasl" dir))
+         (inner (merge-pathnames "b.fasl" dir))
+         (seen '()))
+    (if (null source)
+        (skip "needs roswell/fasl-lock.lisp")
+        (flet ((free-p (fasl)
+                 ;; another open file description: LOCK_EX|LOCK_NB fails while
+                 ;; any lock on the file is held
+                 (with-open-file (s (uiop:symbol-call "CL-REPO-FASL-LOCK" "FASL-LOCK-FILE" fasl)
+                                    :direction :output :if-exists :append
+                                    :if-does-not-exist :create)
+                   (let ((fd (sb-sys:fd-stream-fd s)))
+                     (and (uiop:symbol-call "CL-REPO-FASL-LOCK" "FLOCK" fd 6)
+                          (uiop:symbol-call "CL-REPO-FASL-LOCK" "FLOCK" fd 8))))))
+          (ensure-directories-exist dir)
+          (unless (find-package "CL-REPO-FASL-LOCK")
+            (load source :verbose nil :print nil))
+          (unwind-protect
+              (progn
+                (let ((sb-ext:*invoke-debugger-hook*
+                       (lambda (condition hook)
+                         (declare (ignore hook))
+                         (push (list :debugger (princ-to-string condition)
+                                     (free-p outer) (free-p inner))
+                               seen)
+                         (invoke-restart 'leave))))
+                  (restart-case
+                      (uiop:symbol-call
+                       "CL-REPO-FASL-LOCK" "CALL-WITH-FASL-LOCK" outer t
+                       (lambda ()
+                         (uiop:symbol-call
+                          "CL-REPO-FASL-LOCK" "CALL-WITH-FASL-LOCK" inner nil
+                          (lambda ()
+                            (push (list :held (free-p outer) (free-p inner)) seen)
+                            ;; what ERROR does when nothing handles the condition
+                            (invoke-debugger
+                             (make-condition 'simple-error
+                                             :format-control "port.conf is missing"
+                                             :format-arguments '()))))))
+                    (leave () nil)))
+                (setf seen (reverse seen))
+                (ok (equal (first seen) '(:held nil nil))
+                    (format nil "the compile's exclusive and the load's shared lock are held (~s)"
+                            (first seen)))
+                (ok (equal (second seen) '(:debugger "port.conf is missing" t t))
+                    (format nil "the debugger finds both free and the hook before it runs (~s)"
+                            (second seen)))
+                (ok (and (free-p outer) (free-p inner)) "both are free once the restart leaves"))
+            (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
+
 (defun %stale-plan-systems (dir)
   "Write two systems into DIR: cl-repo-race-162d (d.lisp) and
    cl-repo-race-162v, which needs it. Its pkg.lisp defines the package and

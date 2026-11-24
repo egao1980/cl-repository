@@ -16,7 +16,9 @@
 ;;;; opens a fasl while another replaces it. The kernel drops a lock with its
 ;;;; process. SBCL off Windows only; on other Lisps the methods run their
 ;;;; operation unlocked. Nothing is printed: stdout of `cl-repo run` is the
-;;;; command's (#130).
+;;;; command's (#130). An image that enters the debugger while it holds
+;;;; locks (a REPL whose load signals) unlocks them first, so the other
+;;;; images do not wait on it while it sits there.
 
 (defpackage :cl-repo-fasl-lock
   (:use :cl)
@@ -25,8 +27,9 @@
 (in-package :cl-repo-fasl-lock)
 
 (defvar *held* '()
-  "Lock files this thread holds, innermost first. A nested compile or load of
-   the same fasl takes no second lock: flock would make it wait on the first.")
+  "The locks this thread holds, innermost first: (lock-file . stream). A
+   nested compile or load of the same fasl takes no second lock: flock would
+   make it wait on the first.")
 
 #+(and sbcl (not win32))
 (defun flock (fd operation)
@@ -45,31 +48,55 @@
   (let ((file (uiop:physicalize-pathname fasl)))
     (make-pathname :name (file-namestring file) :type "lock" :version nil :defaults file)))
 
+#+(and sbcl (not win32))
+(defun letting-go-debugger-hook (previous)
+  "An SB-EXT:*INVOKE-DEBUGGER-HOOK* that unlocks every lock of *HELD* (the
+   locks of the thread entering the debugger), then calls PREVIOUS, the hook
+   it replaces (Swank's, or the one of --disable-debugger), if any. An image
+   in the debugger inside a compile or load (a REPL whose load signals, or a
+   BREAK) would else hold off every image that compiles or loads that fasl
+   for as long as it sits there, and they print nothing. ASDF's restarts
+   (retry, try-recompiling, accept) leave the compile or load, and a retry
+   takes the lock again. A restart inside it, such as CONTINUE of a CERROR,
+   goes on unlocked. The streams stay open until CALL-WITH-FASL-LOCK
+   returns."
+  (lambda (condition hook)
+    (declare (ignore hook))
+    (dolist (held *held*)
+      (when (open-stream-p (cdr held))
+        ;; LOCK_UN
+        (flock (sb-sys:fd-stream-fd (cdr held)) 8)))
+    (when previous
+      (funcall previous condition previous))))
+
 (defun call-with-fasl-lock (fasl exclusive thunk)
   "Call THUNK holding a flock(2) on FASL's lock file (FASL-LOCK-FILE):
-   exclusive when EXCLUSIVE, else shared. THUNK runs unlocked when FASL is
-   NIL, on a Lisp without flock, when the lock file cannot be opened (a
-   read-only output directory) or when it cannot be locked (a file system
-   without flock)."
+   exclusive when EXCLUSIVE, else shared. The debugger lets the lock go
+   (LETTING-GO-DEBUGGER-HOOK). THUNK runs unlocked when FASL is NIL, on a
+   Lisp without flock, when the lock file cannot be opened (a read-only
+   output directory) or when it cannot be locked (a file system without
+   flock)."
   #-(and sbcl (not win32))
   (declare (ignore fasl exclusive))
   #-(and sbcl (not win32))
   (funcall thunk)
   #+(and sbcl (not win32))
   (let ((lock (and fasl (fasl-lock-file fasl))))
-    (if (or (null lock) (member lock *held* :test #'equal))
+    (if (or (null lock) (assoc lock *held* :test #'equal))
         (funcall thunk)
         (let ((stream (handler-case
                           (progn (ensure-directories-exist lock)
-                                 (open lock :direction :output :if-exists :append
-                                            :if-does-not-exist :create))
+                            (open lock :direction :output :if-exists :append
+                                       :if-does-not-exist :create))
                         (file-error () nil))))
           (if (null stream)
               (funcall thunk)
               (unwind-protect
-                   (let ((*held* (cons lock *held*)))
-                     (flock (sb-sys:fd-stream-fd stream) (if exclusive 2 1))
-                     (funcall thunk))
+                  (let ((*held* (acons lock stream *held*))
+                        (sb-ext:*invoke-debugger-hook*
+                         (letting-go-debugger-hook sb-ext:*invoke-debugger-hook*)))
+                    (flock (sb-sys:fd-stream-fd stream) (if exclusive 2 1))
+                    (funcall thunk))
                 ;; closing the descriptor releases the lock
                 (close stream)))))))
 
