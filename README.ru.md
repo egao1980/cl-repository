@@ -148,6 +148,8 @@ jobs:
     uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
 ```
 
+Приватные зависимости на `ghcr.io`: см. [Приватные пакеты](#приватные-пакеты).
+
 Ubuntu-джобы в `test-system.yml` / `publish-source.yml` идут в
 `ghcr.io/egao1980/cl-repository/ci-base` (Roswell + SBCL + клиент уже стоят).
 Это `jobs.<id>.container`, не Docker container action.
@@ -230,6 +232,36 @@ cl-repo install cffi:0.24.1
 ```
 
 Артефакты — обычные OCI-образы. `oras`, `crane` и `skopeo` умеют их скачивать. В ASDF их ставит `cl-repo install`.
+
+### Приватные пакеты
+
+`cl-repo` скачивает анонимно, пока не найдёт учётные данные для хоста реестра. Побеждает первый подходящий источник:
+
+| Источник | Куда отправляется | Имя пользователя |
+|---|---|---|
+| `CL_REPO_REGISTRY_TOKEN` | хосты из `CL_REPO_REGISTRY_HOST` (через запятую, по умолчанию `ghcr.io`) | `CL_REPO_REGISTRY_USERNAME`, по умолчанию `x-access-token` |
+| `GITHUB_TOKEN` вместе с `GITHUB_ACTOR` (GitHub Actions задаёт оба) | только `ghcr.io` | `GITHUB_ACTOR` |
+| `auths` в `config.json` Docker (`$DOCKER_CONFIG`, иначе `~/.docker`), в том виде, в каком его пишет `docker login` | хост этой записи | из записи |
+
+Пустая переменная считается незаданной. Credential helpers (`credsStore`, `credHelpers`) не читаются: вместо них задайте `CL_REPO_REGISTRY_TOKEN`. Учётные данные уходят на token endpoint реестра (или в сам реестр, если он просит Basic auth), ни на какой другой хост, и никогда не печатаются. Если реестр их отвергает, `cl-repo` останавливается с ошибкой, в которой названа переменная или файл, но не значение. Анонимного запроса вместо этого нет: он выдал бы приватный пакет за отсутствующий. Чтобы скачивать анонимно, уберите переменную. Публикация эти учётные данные не использует.
+
+Локально, через GitHub CLI (токену нужен `read:packages`):
+
+```sh
+CL_REPO_REGISTRY_TOKEN=$(gh auth token) cl-repo test
+```
+
+В CI (`test-system.yml`, `test-system-impl.yml`, action `ci`) из `ghcr.io` скачивает `GITHUB_TOKEN` джобы (`permissions: packages: read`). Он читает публичные пакеты, а приватный пакет — после того как пакет даст доступ вызывающему репозиторию. На странице пакета откройте **Package settings → Manage Actions access → Add repository** и выберите роль *Read*. Если пакет не может дать доступ (им владеет другой аккаунт), сохраните personal access token с `read:packages` как секрет и передайте его как `registry-token`. Workflow кладёт его в `CL_REPO_REGISTRY_TOKEN`, который идёт раньше `GITHUB_TOKEN`:
+
+```yaml
+jobs:
+  test:
+    uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
+    secrets:
+      registry-token: ${{ secrets.PACKAGES_READ_TOKEN }}
+```
+
+В собственных шагах задайте `CL_REPO_REGISTRY_TOKEN` в `env:`.
 
 ### Загрузка пакетов OCICL
 

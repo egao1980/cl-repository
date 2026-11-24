@@ -9,7 +9,7 @@
 #         lisp: ecl
 #
 # Optional inputs: system, extra-with, lisp-version, apt-packages, runs-on, timeout-minutes,
-# roswell-version, client-version.
+# roswell-version, client-version. Optional secret: registry-token, as test-system.yml.
 name: Test CL system (impl)
 
 on:
@@ -64,6 +64,13 @@ on:
         required: false
         type: string
         default: "true"
+    secrets:
+      registry-token:
+        description: >-
+          Token cl-repo pulls ghcr.io packages with (CL_REPO_REGISTRY_TOKEN),
+          before the job's GITHUB_TOKEN. Only for private dependencies that do
+          not grant this repository Actions access.
+        required: false
 
 jobs:
   test:
@@ -78,6 +85,8 @@ jobs:
       packages: read
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # empty when the caller passes no registry-token: cl-repo ignores it
+      CL_REPO_REGISTRY_TOKEN: ${{ secrets.registry-token }}
       LISP_IMPL: ${{ inputs.lisp }}
       LISP_IMPL_VERSION: ${{ inputs.lisp-version || (inputs.lisp == 'ecl' && '26.5.5' || '') }}
     steps:

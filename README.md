@@ -171,6 +171,8 @@ jobs:
     uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
 ```
 
+Private dependencies on `ghcr.io`: see [Private Packages](#private-packages).
+
 Ubuntu jobs in `test-system.yml` / `publish-source.yml` run in
 `ghcr.io/egao1980/cl-repository/ci-base` (Roswell + SBCL + client already
 installed). That is `jobs.<id>.container` — not a Docker container action. The image is
@@ -256,6 +258,36 @@ cl-repo install cffi:0.24.1
 ```
 
 The artifacts are ordinary OCI images. `oras`, `crane`, and `skopeo` can pull them. Installing into ASDF is `cl-repo install`.
+
+### Private Packages
+
+`cl-repo` pulls anonymously unless it finds credentials for the registry's host. The first source that applies wins:
+
+| Source | Sent to | User name |
+|---|---|---|
+| `CL_REPO_REGISTRY_TOKEN` | the hosts in `CL_REPO_REGISTRY_HOST` (comma-separated, default `ghcr.io`) | `CL_REPO_REGISTRY_USERNAME`, default `x-access-token` |
+| `GITHUB_TOKEN` with `GITHUB_ACTOR` (GitHub Actions sets both) | `ghcr.io` only | `GITHUB_ACTOR` |
+| `auths` in Docker's `config.json` (`$DOCKER_CONFIG`, else `~/.docker`), as `docker login` writes it | that entry's host | the entry's |
+
+An empty variable counts as unset. Credential helpers (`credsStore`, `credHelpers`) are not read: use `CL_REPO_REGISTRY_TOKEN` instead. The credentials go to the registry's token endpoint (or, to a registry that asks for Basic auth, to the registry), to no other host, and are never printed. A registry that refuses them stops `cl-repo` with an error that names the variable or file, not its value. There is no fallback to an anonymous pull, which would report a private package as missing. Unset the variable to pull anonymously. Publishing does not use these credentials.
+
+Locally, with the GitHub CLI (the token needs `read:packages`):
+
+```sh
+CL_REPO_REGISTRY_TOKEN=$(gh auth token) cl-repo test
+```
+
+In CI (`test-system.yml`, `test-system-impl.yml`, the `ci` action) the job's `GITHUB_TOKEN` (`permissions: packages: read`) pulls from `ghcr.io`. It reads public packages, and a private package once that package grants the calling repository access. On the package's page, open **Package settings → Manage Actions access → Add repository**, and choose role *Read*. When a package cannot grant access (another account owns it), store a personal access token with `read:packages` as a secret, and pass it as `registry-token`. The workflow maps it to `CL_REPO_REGISTRY_TOKEN`, which comes before `GITHUB_TOKEN`:
+
+```yaml
+jobs:
+  test:
+    uses: egao1980/cl-repository/.github/workflows/test-system.yml@main
+    secrets:
+      registry-token: ${{ secrets.PACKAGES_READ_TOKEN }}
+```
+
+In your own steps, set `CL_REPO_REGISTRY_TOKEN` in `env:`.
 
 ### Loading OCICL Packages
 

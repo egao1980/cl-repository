@@ -1,10 +1,11 @@
 (defpackage :cl-oci-client/registry
   (:use :cl)
   (:import-from :cl-oci-client/conditions #:registry-error #:auth-error #:not-found-error
-                #:error-body-text)
+                #:credentials-rejected #:error-body-text)
   (:import-from :bordeaux-threads #:make-lock #:with-lock-held)
   (:import-from :cl-oci-client/auth
                 #:auth-config #:auth-config-token #:make-auth-config
+                #:auth-config-username #:auth-config-source #:credentials-p
                 #:obtain-token #:make-auth-headers #:token-request #:parse-token-response
                 #:parse-www-authenticate)
   (:import-from :cl-oci-client/http
@@ -30,7 +31,10 @@
 (defclass registry ()
   ((url :type string :initarg :url :accessor registry-url)
    (auth :type (or null auth-config) :initarg :auth :accessor registry-auth :initform nil)
-   (insecure-p :type boolean :initarg :insecure-p :accessor registry-insecure-p :initform nil)))
+   (insecure-p :type boolean :initarg :insecure-p :accessor registry-insecure-p :initform nil)
+   ;; true once the registry answered with a Basic challenge: its requests
+   ;; then carry the credentials themselves (registry:2 with htpasswd)
+   (basic-auth-p :type boolean :accessor registry-basic-auth-p :initform nil)))
 
 (defun make-registry (url &key auth insecure-p)
   (make-instance 'registry
@@ -124,14 +128,24 @@
           (setf (gethash key *token-cache*)
                 (cons token (+ (get-universal-time) (max 1 ttl)))))))))
 
-(defun request-auth-headers (registry path)
-  "Authorization for a request to PATH: the registry's own token, else a
-   cached token for the repository, else the registry's credentials (Basic)."
+(defun bearer-auth-headers (registry path)
+  "Bearer authorization for a request to PATH: the registry's own token, else
+   a cached token for the repository, else NIL."
   (let ((auth (registry-auth registry)))
     (or (and auth (auth-config-token auth) (make-auth-headers auth))
         (let ((token (cached-token registry path)))
-          (and token (list (cons "Authorization" (format nil "Bearer ~a" token)))))
-        (make-auth-headers auth))))
+          (and token (list (cons "Authorization" (format nil "Bearer ~a" token))))))))
+
+(defun request-auth-headers (registry path)
+  "Authorization for a request to PATH: BEARER-AUTH-HEADERS, else the
+   registry's credentials as Basic auth once it asked for them
+   (REGISTRY-BASIC-AUTH-P), else none. Credentials are not sent before a
+   challenge, as `docker` does: a token registry gets them only at its token
+   endpoint (ghcr.io answers a request that carries them with a challenge
+   for another repository)."
+  (or (bearer-auth-headers registry path)
+      (and (registry-basic-auth-p registry)
+           (make-auth-headers (registry-auth registry)))))
 
 (defun note-token-realm (registry www-authenticate)
   (let* ((params (ignore-errors (parse-www-authenticate www-authenticate)))
@@ -143,29 +157,54 @@
 
 (defun predicted-challenge (registry path)
   "The challenge a pull from PATH's repository would get, when the
-   registry's realm is known and it is asked without credentials."
+   registry's realm is known and the registry has no token of its own.
+   Its credentials, if any, go to the token request (%FETCH-TOKENS)."
   (let ((realm (with-lock-held (*token-cache-lock*)
                  (gethash (base-url registry) *token-realms*)))
-        (repo (path-repository path)))
-    (when (and realm repo (null (registry-auth registry)))
+        (repo (path-repository path))
+        (auth (registry-auth registry)))
+    (when (and realm repo (not (and auth (auth-config-token auth))))
       (format nil "Bearer realm=\"~a\",service=\"~a\",scope=\"repository:~a:pull\""
               (car realm) (or (cdr realm) "") repo))))
 
+(defun bearer-challenge-p (www-authenticate)
+  "True when the WWW-AUTHENTICATE header value is a Bearer challenge."
+  (let ((s (string-left-trim '(#\Space #\Tab) www-authenticate)))
+    (and (>= (length s) 6) (string-equal "Bearer" s :end2 6))))
+
+(defun basic-credentials-rejected (registry path)
+  "Signal CREDENTIALS-REJECTED: REGISTRY answered its Basic credentials for
+   PATH with 401."
+  (let ((auth (registry-auth registry)))
+    (error 'credentials-rejected :status 401
+                                 :url (api-url registry (or path "/v2/"))
+                                 :source (auth-config-source auth)
+                                 :username (auth-config-username auth))))
+
 (defun handle-auth-challenge (registry headers &optional path)
   "Handle 401 by extracting WWW-Authenticate and obtaining a token.
-   The token is remembered for PATH's repository (REMEMBER-TOKEN)."
-  (let ((www-auth (response-header-value headers "www-authenticate")))
-    (when www-auth
+   The token is remembered for PATH's repository (REMEMBER-TOKEN).
+   A challenge that is not Bearer (Basic) has no token to give: with
+   credentials, the next requests carry them (REGISTRY-BASIC-AUTH-P), and a
+   request that already did had them refused (CREDENTIALS-REJECTED).
+   Without credentials there is nothing to do: NIL."
+  (let ((www-auth (response-header-value headers "www-authenticate"))
+        (auth (registry-auth registry)))
+    (cond
+     ((null www-auth) nil)
+     ((not (bearer-challenge-p www-auth))
+      (cond ((not (credentials-p auth)) nil)
+            ((registry-basic-auth-p registry) (basic-credentials-rejected registry path))
+            (t (setf (registry-basic-auth-p registry) t))))
+     (t
       (note-token-realm registry www-auth)
       (multiple-value-bind (token expires-in)
-          (obtain-token www-auth
-                        :auth (registry-auth registry)
-                        :insecure (registry-insecure-p registry))
+          (obtain-token www-auth :auth auth :insecure (registry-insecure-p registry))
         (when path (remember-token registry path token expires-in))
-        (if (registry-auth registry)
-            (setf (auth-config-token (registry-auth registry)) token)
+        (if auth
+            (setf (auth-config-token auth) token)
             (setf (registry-auth registry) (make-auth-config :token token)))
-        t))))
+        t)))))
 
 (defun signal-registry-error (status url body)
   "Signal the REGISTRY-ERROR subtype for HTTP STATUS: AUTH-ERROR for 401/403,
@@ -181,7 +220,7 @@
   (let ((url (api-url registry "/v2/")))
     (multiple-value-bind (body status headers)
         (http-exchange :get url
-                       :headers (make-auth-headers (registry-auth registry))
+                       :headers (request-auth-headers registry "/v2/")
                        :force-binary nil
                        :verify (%verify registry))
       (declare (ignorable body))
@@ -233,6 +272,10 @@
                           :content content :content-type content-type
                           :headers headers :accept accept :handle-auth nil
                           :timeout timeout))
+       ;; Basic credentials sent, and answered with 401 again
+       ((and (= status 401) (registry-basic-auth-p registry)
+             (credentials-p (registry-auth registry)))
+        (basic-credentials-rejected registry path))
        (t (signal-registry-error status url body))))))
 
 (defun parse-reference (reference)
@@ -275,12 +318,15 @@
 (defun %fetch-tokens (challenges)
   "CHALLENGES: ((registry path www-authenticate) ...). Requests one token per
    repository, in one batch, and remembers each. Returns a table token-key →
-   token for the ones that came."
+   token for the ones that came. A challenge that is not Bearer has no token:
+   REGISTRY-REQUEST answers those requests."
   (let ((tokens (make-hash-table :test 'equal))
         (jobs nil))
     (loop for (registry path www-auth) in challenges
           do (let ((key (%token-key registry path)))
-               (unless (or (null key) (find key jobs :key #'first :test #'equal))
+               (unless (or (null key)
+                           (not (bearer-challenge-p www-auth))
+                           (find key jobs :key #'first :test #'equal))
                  (note-token-realm registry www-auth)
                  (multiple-value-bind (url headers)
                      (ignore-errors (token-request www-auth :auth (registry-auth registry)))
@@ -338,7 +384,7 @@
                        (loop for i in all
                              for (registry method path) = (aref items i)
                              for challenge = (and (member method '(:get :head))
-                                                  (null (request-auth-headers registry path))
+                                                  (null (bearer-auth-headers registry path))
                                                   (predicted-challenge registry path))
                              when challenge collect (list registry path challenge)))))
           (loop for i in all

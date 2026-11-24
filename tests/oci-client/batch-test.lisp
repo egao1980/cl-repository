@@ -160,3 +160,31 @@
        (ok (every #'third (remove-if (lambda (r) (search "/token" (second r)))
                                      (scripted-requests backend)))
            "every request carried its token")))))
+
+(deftest a-known-token-realm-saves-the-challenges-with-credentials-too
+  "A registry with credentials (#186) asks the known realm for its tokens
+   first, sending the credentials there, instead of sending them to the
+   registry and taking a 401 for each repository."
+  (call-with-batch-registry
+   #'ghcr-like
+   (lambda (backend)
+     (registry-request-batch (list (list (make-registry "https://r.test") :get "/v2/ns/a/tags/list")
+                                   (list (make-registry "https://r.test") :get "/v2/ns/b/tags/list")))
+     (setf (scripted-requests backend) nil)
+     (flet ((credentialed ()
+              (make-registry "https://r.test"
+                             :auth (cl-oci-client/auth:make-auth-config
+                                    :username "u" :password "pw" :source "TEST"))))
+       (let ((results (registry-request-batch
+                       (list (list (credentialed) :get "/v2/ns/c/tags/list")
+                             (list (credentialed) :get "/v2/ns/d/tags/list"))))
+             (tokens (remove-if-not (lambda (r) (search "/token" (second r)))
+                                    (scripted-requests backend)))
+             (others (remove-if (lambda (r) (search "/token" (second r)))
+                                (scripted-requests backend))))
+         (ok (every (lambda (r) (and (consp r) (= 200 (second r)))) results))
+         (ok (= 2 (length tokens)) "one token per repository")
+         (ok (every (lambda (r) (eql 0 (search "Basic " (third r)))) tokens)
+             "the token requests carried the credentials")
+         (ok (every (lambda (r) (eql 0 (search "Bearer t-" (third r)))) others)
+             "the registry got bearer tokens, not the credentials"))))))

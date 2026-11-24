@@ -4,7 +4,8 @@
   (:import-from :flexi-streams)
   (:import-from :chipz)
   (:import-from :cl-oci/runtime #:*quiet* #:*dry-run* #:msg)
-  (:import-from :cl-oci-client/registry #:registry #:make-registry)
+  (:import-from :cl-oci-client/registry #:registry)
+  (:import-from :cl-repository-client/registry-auth #:pull-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-manifest-raw #:pull-blob)
   (:import-from :cl-oci/digest #:format-digest #:compute-digest #:verify-digest)
   (:import-from :cl-oci/descriptor #:descriptor #:descriptor-digest #:descriptor-media-type
@@ -158,7 +159,7 @@
   "Install a CL system from an OCI registry.
    TYPE is :cl-repo (default) or :ocicl for OCICL-format packages.
    Respects *dry-run* and *quiet*.  Returns an INSTALL-RESULT."
-  (let ((reg (make-registry registry-url)))
+  (let ((reg (pull-registry registry-url)))
     (msg "~&Pulling ~a:~a from ~a...~%" repository reference registry-url)
     (when *dry-run*
       (msg "~&[dry-run] Would install ~a:~a~%" repository reference)

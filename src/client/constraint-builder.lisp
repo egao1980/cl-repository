@@ -1,13 +1,14 @@
 (defpackage :cl-repository-client/constraint-builder
   (:use :cl)
   (:import-from :cl-oci/runtime #:msg #:*quiet*)
-  (:import-from :cl-oci-client/registry #:make-registry #:registry-request-batch #:blob-timeout)
+  (:import-from :cl-oci-client/registry #:registry-request-batch #:blob-timeout)
+  (:import-from :cl-repository-client/registry-auth #:pull-registry)
   (:import-from :cl-oci-client/pull #:pull-manifest #:pull-manifest-raw #:pull-blob
                 #:head-manifest #:parse-manifest-body #:*default-accept*
                 #:remember-pull)
   (:import-from :cl-oci-client/content-discovery #:list-tags #:parse-tag-list)
   (:import-from :cl-oci-client/conditions #:registry-error #:registry-error-status
-                #:registry-transport-error)
+                #:registry-transport-error #:credentials-rejected)
   (:import-from :cl-oci-client/http #:ensure-http-backend)
   (:import-from :cl-oci/image-index #:image-index #:image-index-manifests)
   (:import-from :cl-oci/manifest #:manifest #:manifest-config)
@@ -143,16 +144,28 @@
 (defparameter *tag-list-attempts* 3
   "How many times LIST-TAGS/RETRY asks a registry before giving up.")
 
+(defun %credential-source (registry)
+  "Where REGISTRY's credentials came from (\"GITHUB_TOKEN\"), or NIL when it
+   pulls anonymously."
+  (let ((auth (and (typep registry 'cl-oci-client/registry:registry)
+                   (cl-oci-client/registry:registry-auth registry))))
+    (and auth (cl-oci-client/auth:auth-config-source auth))))
+
 (defun %list-tags/retry (registry repo attempts lister)
   (loop for attempt from 1 to attempts
         do (handler-case (return (funcall lister registry repo))
              (registry-transport-error (e)
                (error e))
+             ;; refused credentials are a misconfiguration, not an absent package
+             (credentials-rejected (e)
+               (error e))
              (registry-error (e)
                (case (registry-error-status e)
                  (404 (return nil))
                  ((401 403)
-                  (msg "~&; cl-repo: ~a: package not found in registry (~a)~%" repo e)
+                  (msg "~&; cl-repo: ~a: package not found in registry~
+                        ~@[, or the credentials from ~a cannot read it~] (~a)~%"
+                       repo (%credential-source registry) e)
                   (return nil)))
                (msg "~&; cl-repo: ~a: tag listing failed (attempt ~d/~d): ~a~%"
                     repo attempt attempts e)
@@ -164,14 +177,15 @@
            (when (< attempt attempts) (sleep attempt))))
 
 (defun list-tags/retry (registry repo &key (attempts *tag-list-attempts*)
-                                           (lister #'list-tags))
+                                 (lister #'list-tags))
   "LIST-TAGS with retries of failed answers (linear backoff 1s, 2s, ...).
    HTTP 404 (unknown repo) is final and yields NIL silently. HTTP 401/403 is
-   final too (ghcr answers 403 at the token endpoint for an unknown repo when
-   stored credentials are presented — one per sb-posix/uiop-style builtin) and
-   is logged once as \"package not found in registry\". A request that got no
-   response (REGISTRY-TRANSPORT-ERROR: HTTP-EXCHANGE already retried it)
-   propagates at once. Any other error is logged per attempt and the last one
+   final too (ghcr answers an anonymous pull of an unknown repo with 403 at
+   the token endpoint — one per sb-posix/uiop-style builtin) and is logged
+   once as \"package not found in registry\". A request that got no
+   response (REGISTRY-TRANSPORT-ERROR: HTTP-EXCHANGE already retried it) and
+   credentials the registry refused (CREDENTIALS-REJECTED, #186) propagate
+   at once. Any other error is logged per attempt and the last one
    is re-signalled: a failed lookup must not read as a missing package
    (#120, #132). LISTER is the tag-listing function (tests inject a stub).
    Inside WITH-RESOLUTION-CACHE, a listing that returned normally is kept for
@@ -198,7 +212,7 @@
     (dolist (entry registries)
       (let ((url (first entry)))
         (handler-case
-            (dolist (tag (list-tags/retry (make-registry url)
+            (dolist (tag (list-tags/retry (pull-registry url)
                                           (registry-repository entry name)))
               (unless (string= tag "latest")
                 (pushnew tag versions :test #'string=)))
@@ -248,7 +262,7 @@
       (loop for (url . repo) in todo
             for answer in (registry-request-batch
                            (mapcar (lambda (key)
-                                     (list (make-registry (car key)) :get
+                                     (list (pull-registry (car key)) :get
                                            (format nil "/v2/~a/tags/list" (cdr key))))
                                    todo))
             do (cond
@@ -384,7 +398,7 @@
   (dolist (entry registries nil)
     (let ((url (first entry)))
       (handler-case
-          (let ((config (fetch-config-at (make-registry url) url
+          (let ((config (fetch-config-at (pull-registry url) url
                                          (registry-repository entry name) version)))
             (when config (return config)))
         (error () nil)))))
@@ -424,7 +438,7 @@
          (jobs (mapcar (lambda (pair)
                          (let ((job (make-config-job (car pair) (cdr pair) url
                                                      (registry-repository entry (car pair)))))
-                           (setf (config-job-registry job) (make-registry url))
+                           (setf (config-job-registry job) (pull-registry url))
                            job))
                        pairs)))
     (flet ((manifest-path (job reference)
