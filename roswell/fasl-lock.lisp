@@ -73,9 +73,39 @@
                 ;; closing the descriptor releases the lock
                 (close stream)))))))
 
+(defun compiled-since-planned-p (o c)
+  "Whether the compile of C by O is done now: its output files are up to
+   date with its source and with what this image has done of its
+   dependencies. That is ASDF's own test, COMPUTE-ACTION-STAMP, here against
+   this image rather than the plan; a forced compile fails it. The session
+   keeps the stamp each file had when it was planned (a missing fasl: NIL),
+   so the output files' stamps are read again first: another image may have
+   written them since. NIL outside an ASDF session (ASDF 3.3 and later have
+   them) and when the test signals an error, so the compile then runs."
+  (let ((session (and (find-package "ASDF/SESSION")
+                      (find-symbol "*ASDF-SESSION*" "ASDF/SESSION")))
+        (register (and (find-package "ASDF/SESSION")
+                       (find-symbol "REGISTER-FILE-STAMP" "ASDF/SESSION"))))
+    (and session register (boundp session) (symbol-value session)
+         (ignore-errors
+           (dolist (file (asdf:output-files o c))
+             (when file (funcall register file)))
+           (nth-value 1 (asdf/action:compute-action-stamp nil o c))))))
+
 (defmethod asdf:perform :around ((o asdf:compile-op) (c asdf:cl-source-file))
-  "Compile C while no other image compiles or loads its fasl."
-  (call-with-fasl-lock (first (asdf:output-files o c)) t (lambda () (call-next-method))))
+  "Compile C while no other image compiles or loads its fasl. When the fasl
+   is up to date once the lock is held, another image compiled it after
+   this one planned the compile, often while this one waited on the lock:
+   C is marked done and not compiled again, as ASDF does with an up-to-date
+   fasl. A second compile would make the fasl newer than the stamp that the
+   images which loaded it hold, and their next ASDF session would recompile
+   the files downstream of it into packages that already exist
+   (cl-repository#162)."
+  (call-with-fasl-lock (first (asdf:output-files o c)) t
+                       (lambda ()
+                         (if (compiled-since-planned-p o c)
+                             (asdf/action:mark-operation-done o c)
+                             (call-next-method)))))
 
 (defmethod asdf:perform :around ((o asdf:load-op) (c asdf:cl-source-file))
   "Load C's fasl while no other image replaces it."

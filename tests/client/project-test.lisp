@@ -845,6 +845,45 @@
                                         :validate t :if-does-not-exist :ignore)
             (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
 
+#+(and sbcl (not win32))
+(deftest a-forced-compile-still-compiles-under-the-fasl-lock
+  "cl-repository#162: a compile that finds its fasl up to date once it holds
+   the lock is skipped, but only when ASDF itself would skip it. A load with
+   :force t compiles the file again, and a load with nothing changed
+   compiles nothing."
+  (let ((command (cl-repository-client/project::test-image-command))
+        (source (cl-repository-client/asdf-integration::fasl-lock-source)))
+    (if (or (null command) (null source))
+        (skip "needs an SBCL whose core is a separate file and roswell/fasl-lock.lisp")
+        (let* ((dir (uiop:ensure-directory-pathname
+                     (format nil "~a/cl-repo-162k-~36r/" (uiop:temporary-directory)
+                             (random (expt 36 6) (make-random-state t)))))
+               (asd (namestring (merge-pathnames "cl-repo-race-162d.asd" dir)))
+               (prefix (loop for form in (butlast (cl-repository-client/project::test-image-forms
+                                                   "cl-repo-race-162d" nil nil)
+                                                  2)
+                             append (list "--eval" form)))
+               (form (with-standard-io-syntax
+                         (format nil "(progn (setf *compile-verbose* nil *compile-print* nil) (asdf:load-asd ~s) (flet ((stamp () (file-write-date (first (asdf:output-files 'asdf:compile-op (asdf:find-component \"cl-repo-race-162d\" \"d\")))))) (asdf:load-system \"cl-repo-race-162d\") (let ((initial (stamp))) (sleep 1.1) (asdf:load-system \"cl-repo-race-162d\") (let ((plain (stamp))) (sleep 1.1) (asdf:load-system \"cl-repo-race-162d\" :force t) (format t \"~~&PLAIN ~~:[RECOMPILED~~;KEPT~~] FORCED ~~:[KEPT~~;RECOMPILED~~]~~%\" (= initial plain) (> (stamp) plain))))))"
+                                 asd))))
+          (%stale-plan-systems dir)
+          (unwind-protect
+              (let ((out (uiop:run-program (append command prefix (list "--eval" form))
+                                           :output :string :error-output :output
+                                           :ignore-error-status t)))
+                (ok (search "PLAIN KEPT" out) "a load with nothing changed compiles nothing")
+                (ok (search "FORCED RECOMPILED" out)
+                    (format nil "a forced load compiles again (~a)"
+                            (let ((at (search "PLAIN" out)))
+                              (if at
+                                  (string-trim '(#\Space #\Newline)
+                                               (subseq out at (or (position #\Newline out :start at) (length out))))
+                                  "no result")))))
+            (uiop:delete-directory-tree (uiop:ensure-directory-pathname
+                                         (asdf:apply-output-translations dir))
+                                        :validate t :if-does-not-exist :ignore)
+            (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
+
 (deftest issue-166-cl-repo-ros-starts-without-quicklisp
   "cl-repository#166: `cl-repo ros -l tool.lisp -q` (README) ran Roswell's
    default init, which loads Roswell's Quicklisp, so a system the project
