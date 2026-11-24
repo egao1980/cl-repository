@@ -1,4 +1,6 @@
 .cl-repository/
+# cl-repo sync / test in the checkout writes it: a local artifact
+cl-repo.lock
 
 *.fasl
 *.fas
