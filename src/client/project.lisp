@@ -304,9 +304,10 @@
     (unwind-protect
          (progn
            (asdf:initialize-source-registry (source-registry-form (list tree)))
-           (with-loaded-systems-pinned ()
-             (asdf:load-system "cl-repository-packager")
-             (asdf:load-system "cl-repository-ql-exporter")))
+           (let ((*standard-output* *error-output*)) ; compile output to stderr (#194)
+             (with-loaded-systems-pinned ()
+               (asdf:load-system "cl-repository-packager")
+               (asdf:load-system "cl-repository-ql-exporter"))))
       (when saved
         (asdf:initialize-source-registry saved)))))
 

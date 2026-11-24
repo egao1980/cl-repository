@@ -121,9 +121,10 @@ opposed to bugs in it at run time."
 (defun ensure-http-backend ()
   "Bind *HTTP-BACKEND* if unset: the async backend on libuv, or dexador when the
 async stack cannot load here (restart USE-DEXADOR, taken automatically unless
-CL_REPO_HTTP_BACKEND=async)."
+CL_REPO_HTTP_BACKEND=async). What loading the backend prints goes to
+*ERROR-OUTPUT*: the caller's stdout is its own (cl-repository#194)."
   (or *http-backend*
-      (progn
+      (let ((*standard-output* *error-output*))
         ;; Load CE backend before first SEND so a request never loads one mid-plan.
         (asdf:load-system "http-encoding-chipz")
         (let ((choice (%env-backend)))

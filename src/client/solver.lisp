@@ -14,7 +14,11 @@
 (defstruct (sat-not (:constructor sat-not (expr))) expr)
 (defstruct (sat-and (:constructor sat-and (exprs))) (exprs nil :type list))
 (defstruct (sat-or (:constructor sat-or (exprs))) (exprs nil :type list))
-(defstruct (sat-imply (:constructor sat-imply (p q))) p q)
+(defstruct (sat-imply (:constructor sat-imply (antecedent consequent)))
+  "ANTECEDENT implies CONSEQUENT. The slots are not P and Q: the accessor of
+   a slot P is SAT-IMPLY-P, the name of the structure's predicate, and an
+   implementation may keep either one (cl-repository#193)."
+  antecedent consequent)
 
 ;;; Evaluation (ground expressions only)
 
@@ -27,8 +31,8 @@
     (sat-not (not (sat-eval (sat-not-expr expr))))
     (sat-and (every #'sat-eval (sat-and-exprs expr)))
     (sat-or (some #'sat-eval (sat-or-exprs expr)))
-    (sat-imply (or (not (sat-eval (sat-imply-p expr)))
-                   (sat-eval (sat-imply-q expr))))))
+    (sat-imply (or (not (sat-eval (sat-imply-antecedent expr)))
+                   (sat-eval (sat-imply-consequent expr))))))
 
 ;;; Free variable extraction
 
@@ -45,8 +49,8 @@
     (sat-not (collect-vars (sat-not-expr expr) table))
     (sat-and (dolist (e (sat-and-exprs expr)) (collect-vars e table)))
     (sat-or (dolist (e (sat-or-exprs expr)) (collect-vars e table)))
-    (sat-imply (collect-vars (sat-imply-p expr) table)
-               (collect-vars (sat-imply-q expr) table))))
+    (sat-imply (collect-vars (sat-imply-antecedent expr) table)
+               (collect-vars (sat-imply-consequent expr) table))))
 
 ;;; Simplifying constructors (constant folding)
 ;;;
@@ -106,8 +110,8 @@
                                (sat-and-exprs expr))))
     (sat-or (fold-or (mapcar (lambda (e) (sat-replace e var-name value))
                              (sat-or-exprs expr))))
-    (sat-imply (fold-imply (sat-replace (sat-imply-p expr) var-name value)
-                           (sat-replace (sat-imply-q expr) var-name value)))))
+    (sat-imply (fold-imply (sat-replace (sat-imply-antecedent expr) var-name value)
+                           (sat-replace (sat-imply-consequent expr) var-name value)))))
 
 ;;; Solver with latest-version heuristic
 

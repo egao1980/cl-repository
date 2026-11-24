@@ -31,6 +31,28 @@
   (ok (not (sat-eval (sat-imply (sat-true) (sat-false)))))
   (ok (sat-eval (sat-imply (sat-true) (sat-true)))))
 
+(deftest issue-193-an-implication-keeps-its-predicate-and-its-parts
+  "cl-repository#193: SAT-IMPLY had the slots P and Q, so SAT-IMPLY-P named
+   both the structure's predicate and the accessor of P. SBCL kept the
+   accessor and warned. An implementation that keeps the predicate would make
+   every antecedent T, and every implication of the dependency constraints
+   wrong without an error. SAT-IMPLY-P is the predicate, and each walk over
+   an implication (free variables, replacement, evaluation) reaches both
+   sides."
+  (let* ((expr (sat-imply (sat-var "a") (sat-var "b")))
+         (got (cl-repository-client/solver::sat-imply-p expr)))
+    (ok (and got (not (typep got 'structure-object)))
+        (format nil "SAT-IMPLY-P is the structure predicate, not a slot accessor (got ~s)" got))
+    (ok (not (cl-repository-client/solver::sat-imply-p (sat-var "a")))
+        "and is false for another expression")
+    (ok (equal (sat-free-vars expr) '("a" "b")) "both sides' variables are free")
+    (ok (equal (sat-free-vars (sat-replace expr "b" nil)) '("a"))
+        "a replaced consequent keeps the antecedent")
+    (ok (sat-eval (sat-replace (sat-replace expr "a" nil) "b" nil))
+        "a false antecedent makes the implication true")
+    (ok (not (sat-eval (sat-replace (sat-replace expr "a" t) "b" nil)))
+        "a true antecedent and a false consequent make it false")))
+
 ;;; sat-free-vars
 
 (deftest test-free-vars
