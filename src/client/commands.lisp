@@ -11,7 +11,9 @@
   (:import-from :cl-oci/annotations #:+ann-title+ #:+ann-version+ #:+ann-description+
                 #:+cl-system-name+ #:+cl-provides+)
   (:import-from :cl-oci/media-types #:+cl-system-name-anchor-v1+ #:+oci-image-manifest-v1+)
-  (:import-from :cl-repository-client/installer #:install-system #:install-result-path #:systems-root)
+  (:import-from :cl-repository-client/installer #:install-system #:install-result-path #:systems-root
+                #:install-result-index-digest)
+  (:import-from :cl-repository-client/digest-cache #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-oci/digest #:format-digest #:compute-digest)
   (:import-from :cl-repository-client/lockfile #:lockfile-entry #:read-lockfile #:write-lockfile
                 #:lockfile-entry-system #:lockfile-entry-version #:lockfile-entry-registry
@@ -63,7 +65,10 @@
                                     with deny allow sources default-source)
   "Install a CL system. REFERENCE can be 'name', 'name:version', or 'registry/ns/name:ver'.
    WITH: extra references installed alongside; strings or (name :version v) forms.
-   DENY, ALLOW, SOURCES, DEFAULT-SOURCE: see load-system for semantics."
+   DENY, ALLOW, SOURCES, DEFAULT-SOURCE: see load-system for semantics.
+   The index digest of each install is recorded (RECORD-INSTALLED-DIGEST), so
+   a lock written later locks it by digest: a package whose .asd has no
+   :version is installed as \"latest\", which need not be a tag (#163)."
   (call-with-policy-overrides
    sources deny allow default-source
    (lambda ()
@@ -79,14 +84,19 @@
              (error "System ~a is denied by source policy" sys-name))
            (when (and reg-url (not (registry-allowed-p sys-name reg-url)))
              (error "System ~a is not allowed from registry ~a" sys-name reg-url))
-           (install-system reg-url full-repo
-                           (if (or host (explicit-tag-p ref))
-                               tag
-                               (resolve-default-tag reg-url
-                                                    (or namespace *default-namespace*)
-                                                    sys-name)))
-           (unless *dry-run*
-             (configure-asdf-source-registry))))))))
+           (let ((result (install-system reg-url full-repo
+                                         (if (or host (explicit-tag-p ref))
+                                             tag
+                                             (resolve-default-tag reg-url
+                                                                  (or namespace *default-namespace*)
+                                                                  sys-name)))))
+             (unless *dry-run*
+               (when (install-result-index-digest result)
+                 ;; the table on disk, not only this process's: the save writes it all
+                 (load-digest-cache)
+                 (record-installed-digest (install-result-index-digest result)
+                                          (install-result-path result)))
+               (configure-asdf-source-registry)))))))))
 
 (defun explicit-tag-p (reference)
   "True when REFERENCE names a tag or digest after its last path segment."

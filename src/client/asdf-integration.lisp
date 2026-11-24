@@ -6,7 +6,8 @@
            #:preferred-install-trees
            #:*locked-versions*
            #:load-system-init-files
-           #:output-translations-form))
+           #:output-translations-form
+           #:fasl-lock-form))
 (in-package :cl-repository-client/asdf-integration)
 
 (defun registry-mentions-p (parameter directory)
@@ -39,6 +40,26 @@
                                            "common-lisp" "cl-repo" :implementation)
                                   :**/ :*.*.*))
                     :inherit-configuration))))
+
+(defun fasl-lock-source ()
+  "roswell/fasl-lock.lisp of the cl-repository-client this image runs, or NIL.
+   REGISTERED-SYSTEM, not FIND-SYSTEM: no search, so no pin check."
+  (let ((system (asdf:registered-system "cl-repository-client")))
+    (and system
+         (asdf:system-source-directory system)
+         (probe-file (merge-pathnames "roswell/fasl-lock.lisp"
+                                      (asdf:system-source-directory system))))))
+
+(defun fasl-lock-form ()
+  "A form, readable before ASDF is loaded and run once it is, that loads
+   roswell/fasl-lock.lisp into the image: its compiles and loads of the shared
+   fasl root then hold a lock per fasl, so parallel cl-repo images do not
+   delete each other's fasls mid-load (#162). NIL when this client has no
+   such file."
+  (let ((file (fasl-lock-source)))
+    (when file
+      `(unless (find-package "CL-REPO-FASL-LOCK")
+         (load ,(namestring file) :verbose nil :print nil)))))
 
 (defvar *locked-versions* nil
   "Alist system → version from the project's cl-repo.lock (REGISTER-PROJECT

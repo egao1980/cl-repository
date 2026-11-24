@@ -12,7 +12,10 @@
 ;;;; When the registry offers a newer version of a pinned system (a project
 ;;;; locks http-protocol 0.3.11, the client runs 0.3.10) the loaded copy still
 ;;;; wins, and LOADED-SYSTEM-SHADOWS-NEWER is warned once per system so the
-;;;; project's code does not silently run against the older one.
+;;;; project's code does not silently run against the older one. A scope
+;;;; that only prepares another image (the sync before `cl-repo test`, `run`
+;;;; or `ros`, whose fresh image loads the newer copy) passes
+;;;; :WARN-SHADOWING NIL (cl-repository#169).
 
 (defpackage :cl-oci-client/pin
   (:use :cl)
@@ -72,6 +75,12 @@
 
 (defvar *checked* nil
   "While pinned: names already compared against the rest of the registry.")
+
+(defvar *warn-shadowing* t
+  "While pinned: whether a pinned system the registry has newer warns
+   LOADED-SYSTEM-SHADOWS-NEWER. NIL in a scope whose work runs in another
+   image: a sync for the fresh image of `cl-repo test`, `run` or `ros`, which
+   loads the newer copy (cl-repository#169).")
 
 (define-condition loaded-system-shadows-newer (warning)
   ((name :initarg :name :reader shadowed-system-name)
@@ -133,7 +142,7 @@
   "ASDF search function: the .asd a pinned NAME was loaded from."
   (when *pinned*
     (let ((file (gethash name *pinned*)))
-      (when file
+      (when (and file *warn-shadowing*)
         (ignore-errors (check-shadowing name file)))
       file)))
 
@@ -152,14 +161,19 @@
             when (string= primary (asdf:primary-system-name key))
               do (remhash key *pinned*)))))
 
-(defun call-with-loaded-systems-pinned (thunk &key except)
+(defun call-with-loaded-systems-pinned (thunk &key except (warn-shadowing t))
   (if *pinned*
       (funcall thunk)
       (let ((*pinned* (loaded-system-files :except except))
-            (*checked* (make-hash-table :test #'equal)))
+            (*checked* (make-hash-table :test #'equal))
+            (*warn-shadowing* warn-shadowing))
         (funcall thunk))))
 
-(defmacro with-loaded-systems-pinned ((&key except) &body body)
+(defmacro with-loaded-systems-pinned ((&key except (warn-shadowing t)) &body body)
   "Run BODY with every loaded system resolving to the .asd it was loaded from.
-   Systems under the EXCEPT directories (a project checkout) are not pinned."
-  `(call-with-loaded-systems-pinned (lambda () ,@body) :except ,except))
+   Systems under the EXCEPT directories (a project checkout) are not pinned.
+   WARN-SHADOWING NIL: no LOADED-SYSTEM-SHADOWS-NEWER, for a scope that only
+   prepares another image (*WARN-SHADOWING*). A nested scope is the outer
+   one, with its setting."
+  `(call-with-loaded-systems-pinned (lambda () ,@body) :except ,except
+                                                       :warn-shadowing ,warn-shadowing))

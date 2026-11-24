@@ -18,9 +18,10 @@
                 #:lockfile-entry-system #:lockfile-entry-version)
   (:import-from :cl-repository-client/sync-lock
                 #:lockfile-not-current #:lockfile-stale-reason #:closure-lock-entries
-                #:lockfile-closure-gap #:lockfile-policy-gap #:install-lockfile-entries)
+                #:lockfile-closure-gap #:lockfile-policy-gap #:lockfile-reproduction-gap
+                #:install-lockfile-entries)
   (:import-from :cl-repository-client/asdf-integration
-                #:configure-asdf-source-registry #:output-translations-form)
+                #:configure-asdf-source-registry #:output-translations-form #:fasl-lock-form)
   (:import-from :cl-repository-client/installer #:systems-root #:*requested-overlay*
                 #:system-install-path #:extract-layer)
   (:import-from :cl-repository-client/qlot-integration
@@ -711,8 +712,10 @@ install tree, since the project's .asd is read in this image."
 
 (defun sync-from-lockfile (dir system &key strict)
   "Install the project in DIR from its cl-repo.lock when the lock is current:
-   no project .asd or qlfile is newer, source policy allows its entries, and
-   it locks every package the dependency walk (PROJECT-CLOSURE) reaches, at
+   no project .asd or qlfile is newer, source policy allows its entries, each
+   entry not installed records a registry or digest to install it from
+   (LOCKFILE-REPRODUCTION-GAP), and it locks every package the dependency
+   walk (PROJECT-CLOSURE) reaches, at
    the version the registry then resolves. A version not installed is pulled
    by its tag after a digest check; nothing is resolved and no tag listed.
    → T when the lock was used, NIL when it is not current. With STRICT
@@ -726,6 +729,11 @@ install tree, since the project's .asd is read in this image."
           (setf reason (format nil "it cannot be read (~a)" e)))))
     (unless reason
       (setf reason (lockfile-policy-gap entries)))
+    ;; an entry that records no registry or digest and is not installed here
+    ;; came from a local-only install: resolve rather than pull a tag no
+    ;; registry has (#163)
+    (unless reason
+      (setf reason (lockfile-reproduction-gap entries)))
     (unless reason
       (when (install-lockfile-entries entries)
         (register-project dir))
@@ -749,15 +757,26 @@ install tree, since the project's .asd is read in this image."
 
 (defun sync-resolving (dir system)
   "Install what the .asd files and qlfile of DIR ask for (SYSTEM only, when
-   given), resolving what is missing against the registries."
+   given), resolving what is missing against the registries. The qlfile's
+   entries get their dependency closure too, as PROJECT-CLOSURE counts it: a
+   qlfile-only project has no .asd to walk from, and its lock held the
+   entries alone, so a fresh runner failed with Component not found (#170).
+   A package the lock does not hold resolves to the newest published version
+   (#167), except the qlfile's entries, installed at the reference it gives."
   (when (sync-qlfile dir)
     ;; a local or git entry synced another project, which registered itself
     (register-project dir))
-  (let ((names (sync-system-names dir system)))
+  (let ((names (sync-system-names dir system))
+        (entries (qlfile-system-names dir)))
     (when names
       (ensure-defsystem-depends-on dir))
     (dolist (name names)
-      (apply #'ensure-system-dependencies name (sync-walk-options name dir system)))))
+      (apply #'ensure-system-dependencies name :newest t :keep entries
+             (sync-walk-options name dir system)))
+    ;; installed packages, not checkouts: no test systems, no :ci extras
+    (dolist (name entries)
+      (when (asdf:find-system name nil)
+        (ensure-system-dependencies name :also-tests nil :newest t :keep entries)))))
 
 (defun write-project-lock (dir system installs)
   "Write DIR's cl-repo.lock: the packages the project's dependency closure is
@@ -813,7 +832,10 @@ install tree, since the project's .asd is read in this image."
       ;; Pinned from the start: the walk's FIND-SYSTEM under the project registry
       ;; would otherwise re-register a system this image runs (cl+ssl) from the
       ;; install tree, and a later load would load it, and its library, again.
-      (with-loaded-systems-pinned (:except (list dir))
+      ;; No shadowing warning: the project runs in another image, which loads
+      ;; the newer copy (#169). Inside a scope that runs it here (cl-repo test
+      ;; in process, grovel) this is that scope, which warns.
+      (with-loaded-systems-pinned (:except (list dir) :warn-shadowing nil)
         (let ((*sync-stack* (cons (namestring dir) *sync-stack*))
               ;; one registry cache for the whole sync (CL-REPOSITORY#136)
               (cl-repository-client/constraint-builder:*resolution-cache*
@@ -920,11 +942,14 @@ install tree, since the project's .asd is read in this image."
 
 (defun test-image-forms (name extras pre-test-file)
   "The --eval forms of the test image, as strings. Each is read only when the
-   one before has run, so the ASDF package exists by the second."
+   one before has run, so the ASDF package exists by the second. The fasl
+   lock (FASL-LOCK-FORM) is in place before anything compiles (#162)."
   (with-standard-io-syntax
     (remove nil
             (list (asdf-require-form)
                   (format nil "~S" (output-translations-form))
+                  (let ((lock (fasl-lock-form)))
+                    (when lock (format nil "~S" lock)))
                   (format nil "(asdf:initialize-source-registry '~S)"
                           (namestrings asdf/source-registry:*source-registry-parameter*))
                   (when extras
@@ -964,7 +989,8 @@ install tree, since the project's .asd is read in this image."
     (if command
         (progn
           (when sync
-            (with-loaded-systems-pinned (:except checkout)
+            ;; the suite runs in the fresh image, which loads the locked versions
+            (with-loaded-systems-pinned (:except checkout :warn-shadowing nil)
               (cmd-sync :directory directory :system system :overlay overlay
                         :locked locked :lock lock)))
           (multiple-value-bind (name extras) (test-setup directory system :synced sync)
@@ -1028,10 +1054,14 @@ install tree, since the project's .asd is read in this image."
            (return (append (reverse runtime) (list "--eval" form) args))))))))
 
 (defun lisp-startup (program form rest)
-  "REST, the arguments of PROGRAM, with FORM evaluated at startup."
+  "REST, the arguments of PROGRAM, with FORM evaluated at startup.
+   Roswell starts with +Q: its default init loads Roswell's Quicklisp, which
+   then answered for every system the project registry lacks, so a missing
+   :depends-on loaded from the Quicklisp dist without a word (#166). A -Q in
+   REST still turns Quicklisp on: Roswell's later option wins."
   (let ((name (pathname-name (uiop:parse-native-namestring program))))
     (cond
-      ((string-equal name "ros") (append (list "-e" form) rest))
+      ((string-equal name "ros") (append (list "+Q" "-e" form) rest))
       ((string-equal name "ecl") (append (list "-eval" form) rest))
       ((string-equal name "sbcl") (sbcl-startup form rest))
       ((member name '("ccl" "abcl") :test #'string-equal)
@@ -1040,10 +1070,12 @@ install tree, since the project's .asd is read in this image."
 
 (defun run-startup-form (directory)
   "The form `cl-repo run` starts a lisp with: load ASDF, take cl-repo's fasl
-   root (OUTPUT-TRANSLATIONS-FORM), and the project's source registry."
+   root (OUTPUT-TRANSLATIONS-FORM) and its fasl lock (FASL-LOCK-FORM, #162),
+   and the project's source registry."
   (with-standard-io-syntax
-    (format nil "(progn (require \"asdf\") ~s (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s))"
+    (format nil "(progn (require \"asdf\") ~s ~s (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s))"
             (output-translations-form)
+            (fasl-lock-form)
             (namestrings (source-registry-form (project-registry-directories directory)
                                                :locked (locked-versions directory)
                                                :extra (explicit-source-registry-entries))))))

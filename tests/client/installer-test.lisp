@@ -246,3 +246,48 @@
       (ok (search "system nowhere is not in the registry" m) m)
       (ok (search "system fine 1.0 is installed" m) m)
       (ng (search "json-protocol is not in the registry" m) m))))
+
+(deftest client-tree-package-reads-the-package-directory
+  "cl-repository#167: install.sh puts the client's dependencies in
+   CL_REPOSITORY_DEST as <package>-<version>/ (the packager's tar prefix).
+   CLIENT-TREE-PACKAGE reads package and version from it, so a sync can
+   compare the client's copy with the newest published version."
+  (with-temp-systems-root (root)
+    (let ((dest (merge-pathnames "client-dest/" root))
+          (old (uiop:getenv "CL_REPOSITORY_DEST"))
+          (cl-repository-client/installer::*systems-root* (merge-pathnames "systems/" root)))
+      (flet ((asd (package-dir name)
+               (let ((dir (merge-pathnames package-dir dest)))
+                 (ensure-directories-exist dir)
+                 (touch dir (format nil "~a.asd" name))
+                 (merge-pathnames (format nil "~a.asd" name) dir)))
+             (package-of (file)
+               (multiple-value-bind (package version)
+                   (cl-repository-client/installer:client-tree-package file)
+                 (and package (list package version)))))
+        (let ((http (asd "http-protocol-0.4.2/" "http-protocol"))
+              (utf (asd "trivial-utf-8-0.1/" "trivial-utf-8"))
+              (cffi (asd "cffi-grovel-0.24.1/" "cffi"))
+              (latest (asd "cl-utilities-latest/" "cl-utilities"))
+              (nested (asd "foo-1.0.0-rc.1/sub/" "bar"))
+              (installed (installed (cl-repository-client/installer:systems-root)
+                                    "http-protocol" "0.4.3" "http-protocol")))
+          (asd "cffi-grovel-0.24.1/" "cffi-grovel")
+          (setf (uiop:getenv "CL_REPOSITORY_DEST") (namestring dest))
+          (unwind-protect
+              (progn
+                (ok (equal '("http-protocol" "0.4.2") (package-of http)))
+                (ok (equal '("trivial-utf-8" "0.1") (package-of utf))
+                    "a digit after a hyphen in the package name")
+                (ok (equal '("cffi-grovel" "0.24.1") (package-of cffi))
+                    "a system of another name in the package")
+                (ok (equal '("cl-utilities" "latest") (package-of latest)) "the tag latest")
+                (ok (equal '("foo" "1.0.0-rc.1") (package-of nested))
+                    "a hyphen in the version, an .asd below the package directory")
+                (ok (null (package-of (merge-pathnames "http-protocol.asd" installed)))
+                    "the install tree is not the client's tree")
+                (ok (null (package-of (merge-pathnames "elsewhere/x.asd" root)))
+                    "nor is a file outside CL_REPOSITORY_DEST")
+                (setf (uiop:getenv "CL_REPOSITORY_DEST") "")
+                (ok (null (package-of http)) "no CL_REPOSITORY_DEST, no client tree"))
+            (setf (uiop:getenv "CL_REPOSITORY_DEST") (or old ""))))))))

@@ -19,12 +19,14 @@
                 #:install-result-index-digest #:install-result-source-digest
                 #:install-result-overlay-digest #:install-result-overlay-digests
                 #:install-result-registry-url
-                #:systems-root #:system-install-path)
+                #:systems-root #:system-install-path #:installed-package
+                #:client-tree-package)
   (:import-from :cl-repository-client/digest-cache
                 #:digest-already-installed-p #:record-installed-digest #:load-digest-cache)
   (:import-from :cl-repository-client/constraint-builder
                 #:build-install-plan #:find-missing-deps #:dependency-resolution-error
                 #:list-tags/retry #:system-lookup-error
+                #:fetch-available-versions #:fetch-versions-batch #:with-resolution-cache
                 #:*resolution-cache* #:make-resolution-cache)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version #:version<)
   (:import-from :cl-repository-client/dep-satisfy
@@ -57,6 +59,12 @@
            #:installed-satisfies-p
            #:*install-recorder*
            #:installed-system-version
+           #:published-versions
+           #:newest-published-version
+           #:outdated-installs
+           #:unsatisfied-dependencies
+           #:unsatisfied-dependencies-systems
+           #:unsatisfied-dependencies-reasons
            #:load-system))
 (in-package :cl-repository-client/quickload)
 
@@ -407,34 +415,137 @@
        (asdf:component-loaded-p name)
        (installed-satisfies-p name minimum)))
 
+(defun published-versions (package)
+  "The version tags the registries publish of PACKAGE, cached for the
+   operation. SYSTEM-LOOKUP-ERROR when no registry could be asked."
+  (with-resolution-cache ()
+    (fetch-available-versions package *registries*)))
+
+(defun newest-published-version (package &optional minimum)
+  "The newest version of PACKAGE the registries publish that is not below
+   MINIMUM, or NIL."
+  (select-preferred-version
+   (remove-if (lambda (v) (and minimum (tag-older-than-p v minimum)))
+              (published-versions package))))
+
+(defun published-only-below-p (package minimum)
+  "True when the registries publish PACKAGE, but no version at MINIMUM or
+   later. A lookup that fails is no answer: NIL."
+  (let ((versions (handler-case (published-versions package)
+                    (system-lookup-error () nil))))
+    (and versions
+         (every (lambda (v) (tag-older-than-p v minimum)) versions))))
+
+(defun outdated-installs (names &key keep)
+  "(package . newest) for each package a fresh image under the current source
+   registry loads one of NAMES from, out of the install tree or the client's
+   own tree (CL_REPOSITORY_DEST, CLIENT-TREE-PACKAGE: alexandria,
+   http-protocol, ...), at a version older than the newest one the registries
+   publish. Without a lock entry a sync resolves to the newest published
+   version, not the newest installed one or the one the client happens to
+   carry (#167), so two machines agree on one .asd. The newest version goes
+   into the install tree, which the project registry searches first, and so
+   into the lock. Left out: the packages cl-repo.lock or this sync's installs
+   hold (*LOCKED-VERSIONS*) and those named in KEEP (qlfile entries, installed
+   at the reference they give). The version lists come in one batch. When no
+   registry can be asked (SYSTEM-LOOKUP-ERROR), the installed versions stay."
+  (let ((found '()))
+    (dolist (name names)
+      (unless (implementation-system-p name)
+        (let ((file (asdf/source-registry:sysdef-source-registry-search name)))
+          (multiple-value-bind (package version where)
+              (multiple-value-bind (package version) (installed-package file)
+                (if package
+                    (values package version "installed")
+                    (multiple-value-bind (package version) (client-tree-package file)
+                      (values package version "in the client's tree"))))
+            (when (and package
+                       (not (assoc package cl-repository-client/asdf-integration:*locked-versions*
+                                   :test #'string-equal))
+                       (not (member package keep :test #'string-equal))
+                       (not (assoc package found :test #'string=)))
+              (push (list package version where) found))))))
+    (when found
+      (setf found (nreverse found))
+      (with-resolution-cache ()
+        (let ((outdated '()))
+          (handler-case
+              (progn
+                (fetch-versions-batch (mapcar #'first found) *registries*)
+                (loop for (package version where) in found
+                      for newest = (newest-published-version package)
+                      when (and newest (version< version newest))
+                        do (msg "~&; cl-repo: ~a ~a is ~a and ~a is published; ~
+                                 resolving the newest~%" package version where newest)
+                           (push (cons package newest) outdated)))
+            (system-lookup-error (e)
+              (msg "~&; cl-repo: keeping installed versions: ~a~%" e)))
+          (nreverse outdated))))))
+
+(defun still-missing-reason (target minimum)
+  "Why TARGET (at MINIMUM or later, when given) is still missing after the
+   walk installed it, a phrase. A system whose package is installed but whose
+   .asd is not in the version directory was not produced by the install (a
+   provides link sent it elsewhere, #124). With nothing installed, it is not
+   in the registry, unless the registry has it below MINIMUM: then that is
+   what it says, with the published versions (#165)."
+  (let* ((primary (asdf:primary-system-name target))
+         (version (installed-system-version primary))
+         (dir (when version
+                (ignore-errors
+                  (truename (merge-pathnames (format nil "~a/~a/" primary version)
+                                             (systems-root)))))))
+    (cond
+      ((and (null dir) minimum)
+       (let ((published (handler-case (sort (copy-list (published-versions primary)) #'version<)
+                          (system-lookup-error (e) e))))
+         (cond
+           ((typep published 'condition)
+            (format nil "system ~a ~a or later is not installed, and the registry could not ~
+                         be asked for its versions (~a)" target minimum published))
+           (published
+            (format nil "~a ~a or later is required; the registry has ~a (published versions: ~{~a~^, ~})"
+                    target minimum (car (last published)) published))
+           (t (format nil "system ~a is not in the registry" target)))))
+      ((null dir)
+       (format nil "system ~a is not in the registry" target))
+      ((not (probe-file (merge-pathnames (format nil "~a.asd" primary) dir)))
+       (format nil "the install of ~a ~a did not produce ~a.asd (in ~a)"
+               primary version primary (uiop:native-namestring dir)))
+      (minimum
+       (format nil "system ~a ~a is installed (~a) but below the required ~a"
+               target version (uiop:native-namestring dir) minimum))
+      (t
+       (format nil "system ~a is installed (~a) but ASDF does not find it"
+               target (uiop:native-namestring dir))))))
+
+(define-condition unsatisfied-dependencies (error)
+  ((systems :initarg :systems :reader unsatisfied-dependencies-systems
+            :documentation "((name . minimum) ...), MINIMUM NIL when any version does.")
+   (reasons :initarg :reasons :reader unsatisfied-dependencies-reasons
+            :documentation "Why each system is missing, one phrase per system, in order."))
+  (:documentation
+   "A dependency walk installed what it could, and SYSTEMS are still not
+    satisfied: not in the registry, published only below a :version minimum,
+    or installed without the .asd that defines them (STILL-MISSING-REASON).")
+  (:report (lambda (c s)
+             (format s "cl-repo: ~{~a~^; ~}" (unsatisfied-dependencies-reasons c)))))
+
+(defun make-unsatisfied-dependencies (targets minimums)
+  "The UNSATISFIED-DEPENDENCIES condition for TARGETS, still missing, with
+   their MINIMUMS ((name . minimum) ...)."
+  (let ((systems (mapcar (lambda (target)
+                           (cons target (cdr (assoc target minimums :test #'string=))))
+                         targets)))
+    (make-condition 'unsatisfied-dependencies
+                    :systems systems
+                    :reasons (loop for (target . minimum) in systems
+                                   collect (still-missing-reason target minimum)))))
+
 (defun still-missing-message (targets &optional minimums)
-  "Why TARGETS are still missing after the walk installed them. A system
-   whose package is installed but whose .asd is not in the version directory
-   was not produced by the install (a provides link sent it elsewhere, #124);
-   only a system with nothing installed is not in the registry."
-  (let ((lines '()))
-    (dolist (target targets)
-      (let* ((primary (asdf:primary-system-name target))
-             (version (installed-system-version primary))
-             (dir (when version
-                    (ignore-errors
-                     (truename (merge-pathnames (format nil "~a/~a/" primary version)
-                                                (systems-root))))))
-             (minimum (cdr (assoc target minimums :test #'string=))))
-        (push (cond
-                ((null dir)
-                 (format nil "system ~a is not in the registry" target))
-                ((not (probe-file (merge-pathnames (format nil "~a.asd" primary) dir)))
-                 (format nil "the install of ~a ~a did not produce ~a.asd (in ~a)"
-                         primary version primary (uiop:native-namestring dir)))
-                (minimum
-                 (format nil "system ~a ~a is installed (~a) but below the required ~a"
-                         target version (uiop:native-namestring dir) minimum))
-                (t
-                 (format nil "system ~a is installed (~a) but ASDF does not find it"
-                         target (uiop:native-namestring dir))))
-              lines)))
-    (format nil "cl-repo: ~{~a~^; ~}" (nreverse lines))))
+  "The message of the UNSATISFIED-DEPENDENCIES condition for TARGETS and
+   MINIMUMS."
+  (princ-to-string (make-unsatisfied-dependencies targets minimums)))
 
 (defun satisfied-or-definer (name minimum)
   "SYSTEM-SATISFIED-P for NAME, except when reading NAME's .asd stops on a
@@ -631,7 +742,7 @@
 
 (defun ensure-system-dependencies (system-name &key (also-tests t) with silent version force
                                                     sources deny allow default-source
-                                                    config-path)
+                                                    config-path newest keep)
   "Install dependency closure for a local SYSTEM-NAME already visible to ASDF.
 
    Walks ASDF :depends-on (transitively while systems are findable). Missing names
@@ -646,7 +757,12 @@
    Secondary systems of SYSTEM-NAME itself (\"foo/capability\" for \"foo\") are local
    roots: their deps are walked, but they are never installed — otherwise an older
    published FOO would be pulled next to the checkout and could shadow it.
-   The roots are DEPENDENCY-ROOTS; DEPENDENCY-CLOSURE walks them without installing."
+   The roots are DEPENDENCY-ROOTS; DEPENDENCY-CLOSURE walks them without installing.
+   NEWEST (a sync): a package the lock does not hold, found in the install
+   tree or in the client's own tree, is resolved again when the registries
+   publish a newer version (OUTDATED-INSTALLS, #167);
+   KEEP names packages left at their installed version.
+   What stays missing signals UNSATISFIED-DEPENDENCIES."
   (let* ((name (string-downcase (string system-name)))
          ;; one registry cache for every target of the walk: they share
          ;; most of their transitive dependencies
@@ -680,13 +796,23 @@
     ;; system (rove → rove/core/assertion → dissect), re-walk until fixpoint.
     (let ((prev nil))
       (loop
-        (multiple-value-bind (targets minimums)
+        (multiple-value-bind (targets minimums closure)
             (collect-missing-asdf-deps local-roots extras)
+          (when newest
+            ;; an outdated install is resolved again at the newest version,
+            ;; as a target with that version as its minimum
+            (loop for (package . newer) in (outdated-installs
+                                            (set-difference closure (append targets local-roots)
+                                                            :test #'string=)
+                                            :keep keep)
+                  unless (member package targets :test #'string=)
+                    do (setf targets (append targets (list package)))
+                       (push (cons package newer) minimums)))
           (when (or (null targets)
                     (equal (sort (copy-list targets) #'string<)
                            (sort (copy-list prev) #'string<)))
             (when targets
-              (error "~a" (still-missing-message targets minimums)))
+              (error (make-unsatisfied-dependencies targets minimums)))
             (return))
           (msg "~&; cl-repo: ensure deps for local ~a → ~{~a~^, ~}~%" name targets)
           (dolist (target targets)
@@ -830,6 +956,12 @@
          ((and (ql-allowed-p name) (not (oci-allowed-p name)))
           (msg "~&; cl-repo: ~a source=:ql, queueing Quicklisp~%" name)
           (pushnew name *missing-deps-accumulator* :test #'string=)
+          plan)
+         ;; Every published version is below MINIMUM: resolving the newest
+         ;; would install the dependencies of a version then rejected (#165).
+         ;; The walk reports what the registry has.
+         ((and minimum (null version) (published-only-below-p pkg minimum))
+          (msg "~&; cl-repo: no published ~a is ~a or later~%" pkg minimum)
           plan)
          (t
           (handler-case

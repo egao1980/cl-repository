@@ -283,6 +283,45 @@
                       '("foo" "foo-extra"))))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
+(deftest issue-168-each-matrix-job-publishes-its-own-title-and-description
+  "cl-repository#168: mail-protocol 0.2.0 (published 2026-09-13) carries
+   mail-backend-memory's title and description: every matrix job of the
+   multi-.asd checkout mounted its index onto the siblings' tags, and the
+   last one won (#109). Since #109 (114a33f, 2026-11-20) a job that names its
+   system keeps only that system (as publish.lisp computes it), and the spec
+   it publishes is that system's: title and description from its own
+   defsystem."
+  (let ((dir (make-temp-dir))
+        (saved asdf:*source-registry-parameter*))
+    (unwind-protect
+        (progn
+          (write-asd dir "mp168-backend-memory.asd"
+                     :systems '("mp168-backend-memory")
+                     :extra ":version \"0.2.0\" :description \"backend: record sends in memory\"")
+          (write-asd dir "mp168-protocol.asd"
+                     :systems '("mp168-protocol")
+                     :extra ":version \"0.2.0\" :description \"the mail protocol\"")
+          (asdf:initialize-source-registry
+           `(:source-registry (:directory ,(namestring dir)) :inherit-configuration))
+          (loop for (system description) in '(("mp168-protocol" "the mail protocol")
+                                              ("mp168-backend-memory" "backend: record sends in memory"))
+                do (asdf:clear-system system)
+                   (let* ((spec (cl-repository-packager/asdf-plugin:auto-package-spec system))
+                          (kept (cl-repository-ci-lib:own-provides
+                                 system
+                                 (cl-repository-packager/asdf-plugin:filter-publish-provides
+                                  system (cl-repository-packager/build-matrix:package-spec-provides spec))
+                                 :explicit-system system :source-dir dir))
+                          (ann (cl-repository-packager/build-matrix::make-annotations spec)))
+                     (ok (equal kept (list system)) (format nil "~a mounts no sibling" system))
+                     (ok (equal system (gethash cl-oci/annotations:+ann-title+ ann))
+                         (format nil "~a: its own title" system))
+                     (ok (equal description (gethash cl-oci/annotations:+ann-description+ ann))
+                         (format nil "~a: its own description" system)))))
+      (dolist (system '("mp168-protocol" "mp168-backend-memory")) (asdf:clear-system system))
+      (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
 (deftest sibling-asd-files-are-the-unprovided-ones
   "cl-repository#117: cli-backend-clingon:0.2.0 shipped a stale cli-protocol.asd."
   (let ((dir (make-temp-dir)))

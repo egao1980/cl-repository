@@ -552,7 +552,8 @@
 
 (deftest sbcl-startup-eval-follows-the-runtime-options
   "#130: the startup --eval goes after SBCL's runtime options; --script keeps
-   its runtime implications and stays last."
+   its runtime implications and stays last. #166: ros starts with +Q, and a
+   -Q of the user's comes later, so it still wins."
   (let ((f "F"))
     (flet ((start (&rest args) (cl-repository-client/project::lisp-startup "sbcl" f args)))
       (ok (equal (start "--script" "x.lisp")
@@ -572,7 +573,10 @@
                (cl-repository-client/project::lisp-startup "sbcl" f '("--script" "x")))
         "a path to sbcl is sbcl")
     (ok (equal (cl-repository-client/project::lisp-startup "ros" f '("run"))
-               '("-e" "F" "run")))))
+               '("+Q" "-e" "F" "run")))
+    (ok (equal (cl-repository-client/project::lisp-startup "ros" f '("-Q" "-l" "x.lisp"))
+               '("+Q" "-e" "F" "-Q" "-l" "x.lisp"))
+        "the user's -Q comes after the +Q")))
 
 #+sbcl
 (deftest run-script-stdout-is-the-script-only
@@ -604,3 +608,472 @@
   (let ((form (cl-repository-client/asdf-integration:output-translations-form)))
     (ok (equal form (with-standard-io-syntax
                       (read-from-string (prin1-to-string form)))))))
+
+(defun %race-system (dir files)
+  "Write DIR/cl-repo-race-162.asd, a serial system of FILES tiny files."
+  (ensure-directories-exist dir)
+  (dotimes (i files)
+    (with-open-file (o (merge-pathnames (format nil "f~d.lisp" i) dir)
+                       :direction :output :if-exists :supersede)
+      (format o "(defpackage :cl-repo-race-162-~d (:use :cl)) (in-package :cl-repo-race-162-~d) (defun f (x) (1+ x))~%"
+              i i)))
+  (with-open-file (o (merge-pathnames "cl-repo-race-162.asd" dir)
+                     :direction :output :if-exists :supersede)
+    (format o "(defsystem \"cl-repo-race-162\" :serial t :components (~{(:file \"f~d\")~^ ~}))~%"
+            (loop for i below files collect i))))
+
+#+sbcl
+(deftest issue-162-parallel-images-compile-into-the-shared-cache
+  "cl-repository#162: two cl-repo runs that compile the same files into the
+   shared fasl root (~/.cache/common-lisp/cl-repo/<impl>/) kill each
+   other's load: \"Couldn't load …fasl: file does not exist\". Here three
+   images started as cl-repo test starts its fresh image (TEST-IMAGE-COMMAND,
+   the TEST-IMAGE-FORMS before the project load) and three started as
+   `cl-repo run -- sbcl` (RUN-STARTUP-FORM) force-load one 120-file system
+   twenty times each, all at once. Every one must load it every time.
+   UIOP 3.3.1 COMPILE-FILE* deletes the fasl before it renames the staging
+   file over it and then takes its TRUENAME, so another image's delete
+   lands in that window; seeding *RANDOM-STATE* alone does not close it.
+   On 0.27.33 a run of this has a few failed loads (it is a race: a lucky
+   run can pass)."
+  (let ((command (cl-repository-client/project::test-image-command)))
+    (if (null command)
+        (skip "needs an SBCL whose core is a separate file")
+        (let* ((dir (uiop:ensure-directory-pathname
+                     (format nil "~a/cl-repo-162-~36r/" (uiop:temporary-directory)
+                             (random (expt 36 6) (make-random-state t)))))
+               (asd (uiop:native-namestring (merge-pathnames "cl-repo-race-162.asd" dir)))
+               (work (with-standard-io-syntax
+                         (format nil "(progn (setf *compile-verbose* nil *compile-print* nil) (asdf:load-asd ~s) (let ((fails 0)) (dotimes (i 20) (handler-case (asdf:load-system \"cl-repo-race-162\" :force t) (error (e) (incf fails) (format t \"~~&RACE-FAIL ~~a~~%\" e)))) (format t \"~~&RACE-DONE ~~d~~%\" fails)))"
+                                 asd)))
+               (test-image (append command
+                                   (loop for form in (butlast (cl-repository-client/project::test-image-forms
+                                                               "cl-repo-race-162" nil nil)
+                                                              2)
+                                         append (list "--eval" form))
+                                   (list "--eval" work)))
+               (run-image (cons (uiop:native-namestring sb-ext:*runtime-pathname*)
+                                (cl-repository-client/project::lisp-startup
+                                 "sbcl" (cl-repository-client/project::run-startup-form dir)
+                                 (list "--core" (uiop:native-namestring sb-ext:*core-pathname*)
+                                       "--noinform" "--non-interactive" "--no-sysinit" "--no-userinit"
+                                       "--eval" work))))
+               (images (list test-image run-image test-image run-image test-image run-image))
+               (logs (loop for i below (length images)
+                           collect (merge-pathnames (format nil "image-~d.log" i) dir))))
+          (%race-system dir 120)
+          (unwind-protect
+              (let* ((processes (loop for argv in images
+                                      for log in logs
+                                      collect (uiop:launch-program argv :output log
+                                                                        :if-output-exists :supersede
+                                                                        :error-output nil)))
+                     (outputs (progn (mapc #'uiop:wait-process processes)
+                                (mapcar #'uiop:read-file-string logs)))
+                     (failures (loop for out in outputs
+                                     for start = 0
+                                     append (loop for at = (search "RACE-FAIL" out :start2 start)
+                                                  while at
+                                                  collect (subseq out at (min (length out) (+ at 140)))
+                                                  do (setf start (1+ at))))))
+                (ok (every (lambda (out) (search "RACE-DONE" out)) outputs)
+                    "every image ran its twenty loads")
+                (ok (null failures)
+                    (format nil "no load failed (~d failed: ~{~a~^ | ~})"
+                            (length failures) (subseq failures 0 (min 3 (length failures))))))
+            (uiop:delete-directory-tree (uiop:ensure-directory-pathname
+                                         (asdf:apply-output-translations dir))
+                                        :validate t :if-does-not-exist :ignore)
+            (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
+
+(deftest every-image-cl-repo-starts-takes-the-fasl-lock
+  "cl-repository#162: the test image loads roswell/fasl-lock.lisp before its
+   source registry (so before anything compiles), and so does the startup
+   form of `cl-repo run`."
+  (let ((lock (cl-repository-client/asdf-integration:fasl-lock-form))
+        (forms (cl-repository-client/project::test-image-forms "x" nil nil)))
+    (ok lock "this client has roswell/fasl-lock.lisp")
+    (let ((at (position (with-standard-io-syntax (format nil "~S" lock)) forms :test #'equal))
+          (registry (position-if (lambda (f)
+                                   (search "initialize-source-registry" f :test #'char-equal))
+                                 forms)))
+      (ok (and at registry (< at registry))
+          (format nil "test image: before the source registry (~a, ~a)" at registry)))
+    (let ((dir (uiop:ensure-directory-pathname
+                (format nil "~a/cl-repo-162f-~36r/" (uiop:temporary-directory)
+                        (random (expt 36 6) (make-random-state t))))))
+      (ensure-directories-exist dir)
+      (unwind-protect
+          (ok (search "CL-REPO-FASL-LOCK" (cl-repository-client/project::run-startup-form dir))
+              "run startup form")
+        (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
+
+#+(and sbcl (not win32))
+(deftest a-fasl-lock-holds-off-another-image
+  "cl-repository#162: an image that compiles a fasl (exclusive lock, here
+   with a nested shared one on the same fasl, which must not wait on it)
+   keeps another image's load of that fasl (shared lock) waiting until it
+   is done."
+  (let* ((command (cl-repository-client/project::test-image-command))
+         (source (cl-repository-client/asdf-integration::fasl-lock-source))
+         (dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-162l-~36r/" (uiop:temporary-directory)
+                       (random (expt 36 6) (make-random-state t)))))
+         (fasl (merge-pathnames "x.fasl" dir))
+         (marker (merge-pathnames "held" dir)))
+    (if (null command)
+        (skip "needs an SBCL whose core is a separate file")
+        (progn
+          (ensure-directories-exist dir)
+          (unless (find-package "CL-REPO-FASL-LOCK")
+            (load source :verbose nil :print nil))
+          (let ((child (uiop:launch-program
+                        (append command
+                                (list "--eval" (cl-repository-client/project::asdf-require-form)
+                                      "--eval" (format nil "(load ~s)" (namestring source))
+                                      "--eval"
+                                      (with-standard-io-syntax
+                                          (format nil "(funcall (find-symbol \"CALL-WITH-FASL-LOCK\" \"CL-REPO-FASL-LOCK\") ~s t (lambda () (funcall (find-symbol \"CALL-WITH-FASL-LOCK\" \"CL-REPO-FASL-LOCK\") ~:*~s nil (lambda () (with-open-file (o ~s :direction :output :if-exists :supersede)) (sleep 3)))))"
+                                                  (namestring fasl) (namestring marker)))))
+                        :output nil :error-output nil)))
+            (unwind-protect
+                (let ((deadline (+ (get-internal-real-time)
+                                   (* 20 internal-time-units-per-second))))
+                  (loop until (or (probe-file marker) (> (get-internal-real-time) deadline))
+                        do (sleep 0.05))
+                  (ok (probe-file marker) "the other image holds the lock (no self-deadlock)")
+                  (when (probe-file marker)
+                    (let ((start (get-internal-real-time)))
+                      (uiop:symbol-call "CL-REPO-FASL-LOCK" "CALL-WITH-FASL-LOCK" fasl nil
+                                        (lambda () nil))
+                      (let ((waited (/ (- (get-internal-real-time) start)
+                                       internal-time-units-per-second)))
+                        (ok (> waited 1.5) (format nil "the load waited (~,1fs)" waited)))))
+                  (ok (probe-file (merge-pathnames "x.fasl.lock" dir))
+                      "the lock file is beside the fasl"))
+              (when (uiop:process-alive-p child) (uiop:terminate-process child :urgent t))
+              (uiop:wait-process child)
+              (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))))
+
+#+(and sbcl (not win32))
+(deftest the-debugger-lets-the-fasl-locks-go
+  "cl-repository#162: an image that enters the debugger inside a compile or
+   load (a REPL whose load signals, or a BREAK) unlocks every fasl lock its
+   thread holds before the debugger runs, so other images compile and load
+   those files meanwhile. The hook it replaces (Swank's, or the one of
+   --disable-debugger) still runs: here the test's, which leaves by a
+   restart outside both locks."
+  (let* ((source (cl-repository-client/asdf-integration::fasl-lock-source))
+         (dir (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-162h-~36r/" (uiop:temporary-directory)
+                       (random (expt 36 6) (make-random-state t)))))
+         (outer (merge-pathnames "a.fasl" dir))
+         (inner (merge-pathnames "b.fasl" dir))
+         (seen '()))
+    (if (null source)
+        (skip "needs roswell/fasl-lock.lisp")
+        (flet ((free-p (fasl)
+                 ;; another open file description: LOCK_EX|LOCK_NB fails while
+                 ;; any lock on the file is held
+                 (with-open-file (s (uiop:symbol-call "CL-REPO-FASL-LOCK" "FASL-LOCK-FILE" fasl)
+                                    :direction :output :if-exists :append
+                                    :if-does-not-exist :create)
+                   (let ((fd (sb-sys:fd-stream-fd s)))
+                     (and (uiop:symbol-call "CL-REPO-FASL-LOCK" "FLOCK" fd 6)
+                          (uiop:symbol-call "CL-REPO-FASL-LOCK" "FLOCK" fd 8))))))
+          (ensure-directories-exist dir)
+          (unless (find-package "CL-REPO-FASL-LOCK")
+            (load source :verbose nil :print nil))
+          (unwind-protect
+              (progn
+                (let ((sb-ext:*invoke-debugger-hook*
+                       (lambda (condition hook)
+                         (declare (ignore hook))
+                         (push (list :debugger (princ-to-string condition)
+                                     (free-p outer) (free-p inner))
+                               seen)
+                         (invoke-restart 'leave))))
+                  (restart-case
+                      (uiop:symbol-call
+                       "CL-REPO-FASL-LOCK" "CALL-WITH-FASL-LOCK" outer t
+                       (lambda ()
+                         (uiop:symbol-call
+                          "CL-REPO-FASL-LOCK" "CALL-WITH-FASL-LOCK" inner nil
+                          (lambda ()
+                            (push (list :held (free-p outer) (free-p inner)) seen)
+                            ;; what ERROR does when nothing handles the condition
+                            (invoke-debugger
+                             (make-condition 'simple-error
+                                             :format-control "port.conf is missing"
+                                             :format-arguments '()))))))
+                    (leave () nil)))
+                (setf seen (reverse seen))
+                (ok (equal (first seen) '(:held nil nil))
+                    (format nil "the compile's exclusive and the load's shared lock are held (~s)"
+                            (first seen)))
+                (ok (equal (second seen) '(:debugger "port.conf is missing" t t))
+                    (format nil "the debugger finds both free and the hook before it runs (~s)"
+                            (second seen)))
+                (ok (and (free-p outer) (free-p inner)) "both are free once the restart leaves"))
+            (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
+
+(defun %stale-plan-systems (dir)
+  "Write two systems into DIR: cl-repo-race-162d (d.lisp) and
+   cl-repo-race-162v, which needs it. Its pkg.lisp defines the package and
+   its more.lisp exports one more symbol from it, as cl+ssl's files do: a
+   recompile of pkg.lisp in an image that loaded more.lisp is a package
+   variance WARNING, so COMPILE-FILE-ERROR on SBCL."
+  (ensure-directories-exist dir)
+  (flet ((put (name text)
+           (with-open-file (o (merge-pathnames name dir) :direction :output :if-exists :supersede)
+             (write-string text o))))
+    (put "cl-repo-race-162d.asd" "(defsystem \"cl-repo-race-162d\" :components ((:file \"d\")))")
+    (put "d.lisp" "(defpackage :cl-repo-race-162d (:use :cl)) (in-package :cl-repo-race-162d) (defun d () 1)")
+    (put "cl-repo-race-162v.asd"
+         "(defsystem \"cl-repo-race-162v\" :depends-on (\"cl-repo-race-162d\") :serial t :components ((:file \"pkg\") (:file \"more\")))")
+    (put "pkg.lisp"
+         "(defpackage :cl-repo-race-162v (:use :cl) (:export #:a)) (in-package :cl-repo-race-162v) (defun a () (cl-repo-race-162d::d))")
+    (put "more.lisp"
+         "(in-package :cl-repo-race-162v) (export (intern \"B\" :cl-repo-race-162v) :cl-repo-race-162v) (defun b () 2)")))
+
+#+(and sbcl (not win32))
+(deftest issue-162-a-compile-that-waited-on-the-lock-does-not-replace-the-fasl
+  "cl-repository#162: six parallel `cl-repo ros` runs over an empty fasl root
+   (PR 174 head) still killed one: COMPILE-FILE-ERROR while compiling
+   cl+ssl's src/package.lisp in the client image, after \"CL+SSL also
+   exports the following symbols\". An image plans a compile while the fasl
+   is missing, waits on the lock while another image compiles it, and then
+   compiles it again, though the fasl is now up to date. Its newer fasl
+   makes an image that already loaded everything downstream see a changed
+   dependency in its next ASDF session and recompile files it has loaded,
+   in an image their packages already exist in. Here image A takes d's
+   lock, image B plans its load of cl-repo-race-162d and waits, A loads
+   cl-repo-race-162v (compiling d, pkg and more) and lets go; then A loads
+   cl-repo-race-162v again, as the client does when it loads its HTTP
+   backend after the client. That second load must not recompile pkg.lisp
+   and fail."
+  (let ((command (cl-repository-client/project::test-image-command))
+        (source (cl-repository-client/asdf-integration::fasl-lock-source)))
+    (if (or (null command) (null source))
+        (skip "needs an SBCL whose core is a separate file and roswell/fasl-lock.lisp")
+        (let* ((dir (uiop:ensure-directory-pathname
+                     (format nil "~a/cl-repo-162w-~36r/" (uiop:temporary-directory)
+                             (random (expt 36 6) (make-random-state t)))))
+               (file (lambda (name) (namestring (merge-pathnames name dir))))
+               (prefix (loop for form in (butlast (cl-repository-client/project::test-image-forms
+                                                   "cl-repo-race-162v" nil nil)
+                                                  2)
+                             append (list "--eval" form)))
+               (wait (lambda (marker)
+                       (format nil "(loop repeat 1200 until (probe-file ~s) do (sleep 0.05))" marker)))
+               (a-form (with-standard-io-syntax
+                           (format nil "(progn (setf *compile-verbose* nil *compile-print* nil) (asdf:load-asd ~s) (asdf:load-asd ~s) (funcall (find-symbol \"CALL-WITH-FASL-LOCK\" \"CL-REPO-FASL-LOCK\") (first (asdf:output-files 'asdf:compile-op (asdf:find-component \"cl-repo-race-162d\" \"d\"))) t (lambda () (with-open-file (o ~s :direction :output :if-exists :supersede)) ~a (sleep 2) (asdf:load-system \"cl-repo-race-162v\") (sleep 2))) ~a (handler-case (progn (asdf:load-system \"cl-repo-race-162v\") (format t \"~~&SECOND-LOAD OK~~%\")) (error (e) (format t \"~~&SECOND-LOAD FAIL ~~a~~%\" e))))"
+                                   (funcall file "cl-repo-race-162d.asd")
+                                   (funcall file "cl-repo-race-162v.asd")
+                                   (funcall file "held")
+                                   (funcall wait (funcall file "b-started"))
+                                   (funcall wait (funcall file "b-done")))))
+               (b-form (with-standard-io-syntax
+                           (format nil "(progn (setf *compile-verbose* t *compile-print* nil) (asdf:load-asd ~s) (with-open-file (o ~s :direction :output :if-exists :supersede)) (asdf:load-system \"cl-repo-race-162d\") (format t \"~~&B-DONE~~%\") (with-open-file (o ~s :direction :output :if-exists :supersede)))"
+                                   (funcall file "cl-repo-race-162d.asd")
+                                   (funcall file "b-started")
+                                   (funcall file "b-done")))))
+          (%stale-plan-systems dir)
+          (unwind-protect
+              (let ((a (uiop:launch-program (append command prefix (list "--eval" a-form))
+                                            :output (funcall file "a.log") :if-output-exists :supersede
+                                            :error-output :output))
+                    (b nil))
+                (loop repeat 600 until (probe-file (funcall file "held")) do (sleep 0.05))
+                (setf b (uiop:launch-program (append command prefix (list "--eval" b-form))
+                                             :output (funcall file "b.log") :if-output-exists :supersede
+                                             :error-output :output))
+                (uiop:wait-process b)
+                (uiop:wait-process a)
+                (let* ((a-out (uiop:read-file-string (funcall file "a.log")))
+                       (b-out (uiop:read-file-string (funcall file "b.log")))
+                       (recompiled (search "d.lisp" b-out))
+                       (at (search "SECOND-LOAD" a-out)))
+                  (ok (search "B-DONE" b-out) "image B loaded cl-repo-race-162d")
+                  (ok (search "SECOND-LOAD OK" a-out)
+                      (format nil "image A's second load does not recompile what it loaded (~a; B ~:[did not compile d.lisp~;compiled d.lisp again after waiting on the lock~])"
+                              (if at
+                                  (string-trim " " (substitute #\Space #\Newline
+                                                               (subseq a-out at (min (length a-out) (+ at 110)))))
+                                  "no result")
+                              recompiled))))
+            (uiop:delete-directory-tree (uiop:ensure-directory-pathname
+                                         (asdf:apply-output-translations dir))
+                                        :validate t :if-does-not-exist :ignore)
+            (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
+
+#+(and sbcl (not win32))
+(deftest a-forced-compile-still-compiles-under-the-fasl-lock
+  "cl-repository#162: a compile that finds its fasl up to date once it holds
+   the lock is skipped, but only when ASDF itself would skip it. A load with
+   :force t compiles the file again, and a load with nothing changed
+   compiles nothing."
+  (let ((command (cl-repository-client/project::test-image-command))
+        (source (cl-repository-client/asdf-integration::fasl-lock-source)))
+    (if (or (null command) (null source))
+        (skip "needs an SBCL whose core is a separate file and roswell/fasl-lock.lisp")
+        (let* ((dir (uiop:ensure-directory-pathname
+                     (format nil "~a/cl-repo-162k-~36r/" (uiop:temporary-directory)
+                             (random (expt 36 6) (make-random-state t)))))
+               (asd (namestring (merge-pathnames "cl-repo-race-162d.asd" dir)))
+               (prefix (loop for form in (butlast (cl-repository-client/project::test-image-forms
+                                                   "cl-repo-race-162d" nil nil)
+                                                  2)
+                             append (list "--eval" form)))
+               (form (with-standard-io-syntax
+                         (format nil "(progn (setf *compile-verbose* nil *compile-print* nil) (asdf:load-asd ~s) (flet ((stamp () (file-write-date (first (asdf:output-files 'asdf:compile-op (asdf:find-component \"cl-repo-race-162d\" \"d\")))))) (asdf:load-system \"cl-repo-race-162d\") (let ((initial (stamp))) (sleep 1.1) (asdf:load-system \"cl-repo-race-162d\") (let ((plain (stamp))) (sleep 1.1) (asdf:load-system \"cl-repo-race-162d\" :force t) (format t \"~~&PLAIN ~~:[RECOMPILED~~;KEPT~~] FORCED ~~:[KEPT~~;RECOMPILED~~]~~%\" (= initial plain) (> (stamp) plain))))))"
+                                 asd))))
+          (%stale-plan-systems dir)
+          (unwind-protect
+              (let ((out (uiop:run-program (append command prefix (list "--eval" form))
+                                           :output :string :error-output :output
+                                           :ignore-error-status t)))
+                (ok (search "PLAIN KEPT" out) "a load with nothing changed compiles nothing")
+                (ok (search "FORCED RECOMPILED" out)
+                    (format nil "a forced load compiles again (~a)"
+                            (let ((at (search "PLAIN" out)))
+                              (if at
+                                  (string-trim '(#\Space #\Newline)
+                                               (subseq out at (or (position #\Newline out :start at) (length out))))
+                                  "no result")))))
+            (uiop:delete-directory-tree (uiop:ensure-directory-pathname
+                                         (asdf:apply-output-translations dir))
+                                        :validate t :if-does-not-exist :ignore)
+            (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
+
+(defun %debugger-system (dir default-p)
+  "Write DIR/cl-repo-race-162g.asd, a system whose g.lisp reads its port
+   from DIR/port.conf at load time, as configuration often is read. With
+   DEFAULT-P a missing port.conf gives 8080, else the load signals."
+  (ensure-directories-exist dir)
+  (flet ((put (name text)
+           (with-open-file (o (merge-pathnames name dir) :direction :output :if-exists :supersede)
+             (write-string text o))))
+    (let* ((conf (with-standard-io-syntax
+                     (prin1-to-string (namestring (merge-pathnames "port.conf" dir)))))
+           (read-conf (format nil "(with-open-file (i ~a) (read i))" conf)))
+      (put "cl-repo-race-162g.asd" "(defsystem \"cl-repo-race-162g\" :components ((:file \"g\")))")
+      (put "g.lisp"
+           (format nil "(defpackage :cl-repo-race-162g (:use :cl)) (in-package :cl-repo-race-162g) (defparameter *port* ~a) (defun port () *port*)~%"
+                   (if default-p
+                       (format nil "(if (probe-file ~a) ~a 8080)" conf read-conf)
+                       read-conf))))))
+
+#+(and sbcl (not win32))
+(deftest issue-162-an-image-in-the-debugger-does-not-hold-off-other-images
+  "cl-repository#162: the fasl lock is held for the whole compile and the
+   whole load of a file, including the debugger when either signals. A REPL
+   image (`cl-repo ros`, or SLIME under `cl-repo run`) whose load of g.fasl
+   signals sits in the debugger holding g's shared lock. The user fixes
+   g.lisp and runs the tests in another terminal: that image must compile
+   g.lisp, waits on the exclusive lock for as long as the REPL sits in the
+   debugger, and prints nothing. Before the lock it loaded the fixed file in
+   a second."
+  (let ((command (cl-repository-client/project::test-image-command))
+        (source (cl-repository-client/asdf-integration::fasl-lock-source)))
+    (if (or (null command) (null source))
+        (skip "needs an SBCL whose core is a separate file and roswell/fasl-lock.lisp")
+        (let* ((dir (uiop:ensure-directory-pathname
+                     (format nil "~a/cl-repo-162g-~36r/" (uiop:temporary-directory)
+                             (random (expt 36 6) (make-random-state t)))))
+               (file (lambda (name) (namestring (merge-pathnames name dir))))
+               (prefix (loop for form in (butlast (cl-repository-client/project::test-image-forms
+                                                   "cl-repo-race-162g" nil nil)
+                                                  2)
+                             append (list "--eval" form)))
+               (load-form (lambda (tag)
+                            (with-standard-io-syntax
+                                (format nil "(progn (setf *compile-verbose* nil *compile-print* nil) (asdf:load-asd ~s) (asdf:load-system \"cl-repo-race-162g\") (format t \"~~&~a ~~a~~%\" (uiop:symbol-call :cl-repo-race-162g :port)) (finish-output))"
+                                        (funcall file "cl-repo-race-162g.asd") tag))))
+               (repl (remove "--non-interactive" command :test #'equal))
+               (a nil)
+               (b nil))
+          (%debugger-system dir nil)
+          (with-open-file (o (funcall file "port.conf") :direction :output :if-exists :supersede)
+            (write-line "8080" o))
+          (unwind-protect
+              (let ((first-load (uiop:run-program (append command prefix (list "--eval" (funcall load-form "FIRST")))
+                                                  :output :string :error-output :output
+                                                  :ignore-error-status t)))
+                (ok (search "FIRST 8080" first-load) "g.lisp compiles and loads with its port.conf")
+                (delete-file (funcall file "port.conf"))
+                ;; A: a REPL whose stdin stays open, so its debugger waits for input.
+                (setf a (uiop:launch-program (append repl prefix (list "--eval" (funcall load-form "A")))
+                                             :input :stream
+                                             :output (funcall file "a.log") :if-output-exists :supersede
+                                             :error-output :output))
+                (loop repeat 600
+                      until (search "debugger invoked"
+                                    (or (ignore-errors (uiop:read-file-string (funcall file "a.log"))) ""))
+                      do (sleep 0.05))
+                (ok (search "debugger invoked" (uiop:read-file-string (funcall file "a.log")))
+                    "image A sits in the debugger: its load of g.fasl found no port.conf")
+                (sleep 1.1)
+                (%debugger-system dir t)
+                ;; B: the tests the user runs once g.lisp is fixed, a non-interactive image.
+                (let ((start (get-internal-real-time)))
+                  (setf b (uiop:launch-program (append command prefix (list "--eval" (funcall load-form "B")))
+                                               :output (funcall file "b.log") :if-output-exists :supersede
+                                               :error-output :output))
+                  (loop repeat 300 while (uiop:process-alive-p b) do (sleep 0.05))
+                  (let ((waited (/ (- (get-internal-real-time) start) internal-time-units-per-second))
+                        (alive (uiop:process-alive-p b)))
+                    (when alive (uiop:terminate-process b :urgent t))
+                    (uiop:wait-process b)
+                    (let* ((b-out (uiop:read-file-string (funcall file "b.log")))
+                           (text (string-trim '(#\Space #\Newline) b-out)))
+                      (ok (and (not alive) (search "B 8080" b-out))
+                          (format nil "image B loads the fixed g.lisp while image A sits in the debugger (B ~:[finished~;still waiting~] after ~,1fs, ~:[printing nothing~;printing ~:*~s~])"
+                                  alive waited
+                                  (and (plusp (length text)) (subseq text 0 (min 120 (length text))))))))))
+            (when (and a (uiop:process-alive-p a)) (uiop:terminate-process a :urgent t))
+            (when a (uiop:wait-process a) (uiop:close-streams a))
+            (when (and b (uiop:process-alive-p b)) (uiop:terminate-process b :urgent t))
+            (uiop:delete-directory-tree (uiop:ensure-directory-pathname
+                                         (asdf:apply-output-translations dir))
+                                        :validate t :if-does-not-exist :ignore)
+            (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))))
+
+(deftest issue-166-cl-repo-ros-starts-without-quicklisp
+  "cl-repository#166: `cl-repo ros -l tool.lisp -q` (README) ran Roswell's
+   default init, which loads Roswell's Quicklisp, so a system the project
+   registry lacks (a missing :depends-on) loaded from the Quicklisp dist
+   without a word. The image cl-repo starts for `ros` must have no Quicklisp,
+   unless the user asks for it with -Q."
+  (let ((probe "(format t \"~&QL=~:[NIL~;T~]~%\" (find-package \"QL\"))"))
+    (flet ((quicklisp-p (args)
+             (let ((out (ignore-errors
+                          (uiop:run-program (cons "ros" args) :output :string
+                                                              :error-output nil
+                                                              :ignore-error-status t))))
+               (cond ((null out) :no-ros)
+                     ((search "QL=T" out) t)
+                     ((search "QL=NIL" out) nil)
+                     (t :no-answer)))))
+      (let ((plain (quicklisp-p (list "-e" probe "-q"))))
+        (cond
+         ((eq plain :no-ros) (skip "needs Roswell (ros) on PATH"))
+         ((not (eq plain t)) (skip "this Roswell loads no Quicklisp by default: nothing to leak"))
+         (t
+          (let ((dir (uiop:ensure-directory-pathname
+                      (format nil "~a/cl-repo-166-~36r/" (uiop:temporary-directory)
+                              (random (expt 36 6) (make-random-state t))))))
+            (ensure-directories-exist dir)
+            (unwind-protect
+                (flet ((started (&rest args)
+                         (quicklisp-p (cl-repository-client/project::lisp-startup
+                                       "ros" (cl-repository-client/project::run-startup-form dir)
+                                       args))))
+                  (let ((got (started "-e" probe "-q")))
+                    (ok (null got)
+                        (format nil "no Quicklisp in the image `cl-repo ros -e … -q` starts (got ~a)"
+                                got)))
+                  (let ((got (started "-Q" "-e" probe "-q")))
+                    (ok (eq got t)
+                        (format nil "`cl-repo ros -Q …` has Quicklisp (got ~a)" got))))
+              (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))))))

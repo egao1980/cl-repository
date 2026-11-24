@@ -33,7 +33,7 @@ qlot を使っている場合、`cl-repo` も「プロジェクト単位で依�
 
 **HTTP.** レジストリ通信は `http-protocol` 上の cl-stack 非同期バックエンド（`http-backend-async` × `event-backend-libuv`、TLS は `cl-stack-ssl`）を、そのスタックがロードできる場合に使用し、できない場合は `http-backend-dexador` を使います。`CL_REPO_HTTP_BACKEND=async|dexador|auto` で選択を強制できます。`setup-client` がネイティブオーバーレイをインストールできるようになるまで、CI イメージには dexador が残ります。
 
-**依存関係の解決。** 解決は各パッケージの条件を満たす最新バージョンから始め、古いバージョンは競合が起きたパッケージについてだけ取得します。1 回の sync または install の間、タグ一覧・設定・マニフェスト・トークンのキャッシュを共有します。非同期バックエンドでは、レジストリへの問い合わせを 1 つのイベントループ上で最大 8 件同時に送ります（`CL_REPO_FETCH_JOBS`、1 なら 1 件ずつ）。パッケージの設定は実行をまたいで `$XDG_CACHE_HOME/cl-repository/configs/` に保存されます（`CL_REPO_CONFIG_CACHE=<ディレクトリ>` で場所を変更、`off` で無効化）。保存されたエントリは、そのタグへの HEAD が保存時と同じダイジェストを返したときだけ使われます。`CL_REPO_TRACE_HTTP=1` を設定すると、レジストリへの各リクエストを stderr に記録します。
+**依存関係の解決。** 解決は各パッケージの条件を満たす最新バージョンから始め、古いバージョンは競合が起きたパッケージについてだけ取得します。1 回の sync または install の間、タグ一覧・設定・マニフェスト・トークンのキャッシュを共有します。非同期バックエンドでは、レジストリへの問い合わせを 1 つのイベントループ上で最大 8 件同時に送ります（`CL_REPO_FETCH_JOBS`、1 なら 1 件ずつ）。パッケージの設定は実行をまたいで `$XDG_CACHE_HOME/cl-repository/configs/` に保存されます（`CL_REPO_CONFIG_CACHE=<ディレクトリ>` で場所を変更、`off` で無効化）。保存されたエントリは、そのタグへの HEAD が保存時と同じダイジェストを返したときだけ使われます。`CL_REPO_TRACE_HTTP=1` を設定すると、レジストリへの各リクエストを stderr に記録します。 lock にないパッケージは、インストール済みの最新版ではなく公開済みの最新版に解決します。インストール済みのコピーでも、クライアント自身のツリー（`~/.cl-repository-client`）にあるコピーでも、古ければ更新されます。最新版はプロジェクトが最初に探すインストールツリーに入り、lock にも記録されます。lock にあるパッケージはそのバージョンのままで、どのレジストリにも問い合わせられないときはインストール済みのバージョンを使います。公開済みのバージョンがすべて `(:version name min)` より古いときは `cl-repo: agent-tools 0.4.1 or later is required; the registry has 0.4.0 (published versions: 0.3.2, 0.4.0)`（コンディション `unsatisfied-dependencies`）で失敗し、古いバージョンのものは何もインストールしません。
 
 ## システム一覧
 
@@ -53,12 +53,13 @@ cl-repo test
 cl-repo publish
 ```
 
-普通の `.asd` で足ります。同じディレクトリの `qlfile` / `qlfile.lock` も入ります。
+普通の `.asd` で足ります。同じディレクトリの `qlfile` / `qlfile.lock` も、各エントリの依存関係とともに入ります。`qlfile` だけのディレクトリもプロジェクトです。
 既定のレジストリは `https://ghcr.io` / `egao1980/cl-systems` です。
 `cl-repo test` は同じ SBCL の新しいイメージでテストを実行し、そこにはソースレジストリだけを渡す。クライアント自身のシステム（dexador、cl+ssl とその OpenSSL）はロードされない。`CL_REPO_TEST_IN_PROCESS=1` でクライアントのイメージ内で実行する。
+cl-repo が起動するイメージ（クライアント、テストイメージ、`cl-repo run` の Lisp）はすべて 1 つの fasl ルート `$XDG_CACHE_HOME/common-lisp/cl-repo/<impl>/` にコンパイルする。SBCL では、そこでのコンパイルは fasl ごとの排他ロック（fasl の隣の `<fasl>.lock`）を、ロードは共有ロックを持つので、並行実行が互いの fasl をロード中に消すことはない。
 `cl-repo` コマンドは CI の `sbcl-dynamic-space-mb` と同じ 4096 MB のヒープで SBCL を起動する（macOS の SBCL の既定は 1 GB で、大きなテストスイートのコールドコンパイルで使い切ることがある）。テスト用イメージも同じサイズになる。`CL_REPO_DYNAMIC_SPACE_MB=<MB>` で別のサイズを指定し、空または `0` なら Roswell と SBCL に任せる。
 
-`cl-repo sync`（したがって `test` と `run` も）はプロジェクトの依存閉包を `cl-repo.lock` に記録する。各パッケージのバージョン、index digest、レジストリで、プロジェクトのレジストリがその後ロードするバージョンそのもの。lock が最新である間（`.asd` や `qlfile` がそれより新しくなく、依存の走査が届くものをすべて lock している）、sync は lock からインストールする。解決もタグ一覧の取得もせず、ローカルにないバージョンだけを digest を確かめてから取得する。そうでなければ解決して lock を書き直す。`--locked` は lock が最新でないとき解決せずに失敗する。`--no-lock` は lock を読まず書かずに解決する。`cl-repo restore` は lock の全エントリを入れ直す。
+`cl-repo sync`（したがって `test` と `run` も）はプロジェクトの依存閉包を `cl-repo.lock` に記録する。各パッケージのバージョン、index digest、レジストリで、プロジェクトのレジストリがその後ロードするバージョンそのもの。lock が最新である間（`.asd` や `qlfile` がそれより新しくなく、依存の走査が届くものをすべて lock している）、sync は lock からインストールする。解決もタグ一覧の取得もせず、ローカルにないバージョンだけを digest を確かめてから取得する。そうでなければ解決して lock を書き直す。`--locked` は lock が最新でないとき解決せずに失敗する。`--no-lock` は lock を読まず書かずに解決する。`cl-repo restore` は lock の全エントリを入れ直す。 レジストリも digest も持たないエントリ（ローカルだけのインストール）がインストールされていなければ lock は最新でなく、`--locked` はそこで失敗する。バージョンがタグでないエントリ（`:version` のないパッケージは `latest` としてインストールされる）は digest で取得する。
 
 ### CLI
 
@@ -77,7 +78,7 @@ cl-repo install alexandria
 
 ### Lisp の実行
 
-`cl-repo run -- <command…>` は sync してからコマンドを実行する。Lisp（ros、sbcl、ccl、ecl、abcl）は source registry を設定済みの状態で起動し、`CL_SOURCE_REGISTRY` はエクスポートしない（source-registry の設定ファイルは読まない。渡された `CL_SOURCE_REGISTRY` の `:tree` / `:directory` は sync・test・run で同じく使う）。`cl-repo ros …` は `cl-repo run -- ros …` の短縮形（他の Lisp も同様）。先頭の `--system NAME` / `--overlay NAME` は cl-repo のオプションで、それ以降は `--help` や `ros run` も含めてそのまま Lisp に渡す。
+`cl-repo run -- <command…>` は sync してからコマンドを実行する。Lisp（ros、sbcl、ccl、ecl、abcl）は source registry を設定済みの状態で起動し、`CL_SOURCE_REGISTRY` はエクスポートしない（source-registry の設定ファイルは読まない。渡された `CL_SOURCE_REGISTRY` の `:tree` / `:directory` は sync・test・run で同じく使う）。`cl-repo ros …` は `cl-repo run -- ros …` の短縮形（他の Lisp も同様）。先頭の `--system NAME` / `--overlay NAME` は cl-repo のオプションで、それ以降は `--help` や `ros run` も含めてそのまま Lisp に渡す。 `cl-repo ros` は Roswell を `+Q`（Quicklisp なし）で起動する。プロジェクトのレジストリにないシステムは Roswell の Quicklisp dist から読み込まれず、ロードに失敗する。引数に `-Q` を入れると Quicklisp が再び有効になる。
 
 ### バージョン
 
