@@ -974,6 +974,18 @@ install tree, since the project's .asd is read in this image."
         (format nil "(load ~S)" (uiop:native-namestring fasl))
         "(require :asdf)")))
 
+(defmacro with-portable-print-syntax (&body body)
+  "BODY under standard I/O syntax with *PRINT-READABLY* NIL, for forms another
+   Lisp reads (the startup form of `cl-repo run`, the test image's --eval
+   forms). Readably, SBCL prints a base-string, which NAMESTRING returns, as
+   #A((n) BASE-CHAR . \"…\"): only SBCL reads that back, so ECL, CCL and ABCL
+   stopped before the first form ran (#190, #203). Without it a string prints
+   as \"…\" with its quotes and backslashes escaped. These forms hold only
+   conses, symbols, strings and numbers, which print the same either way."
+  `(with-standard-io-syntax
+       (let ((*print-readably* nil))
+         ,@body)))
+
 (defun namestrings (form)
   "FORM with each pathname replaced by its namestring, so it prints readably."
   (cond ((pathnamep form) (namestring form))
@@ -983,21 +995,22 @@ install tree, since the project's .asd is read in this image."
 (defun test-image-forms (name extras pre-test-file)
   "The --eval forms of the test image, as strings. Each is read only when the
    one before has run, so the ASDF package exists by the second. The fasl
-   lock (FASL-LOCK-FORM) is in place before anything compiles (#162)."
-  (with-standard-io-syntax
-    (remove nil
-            (list (asdf-require-form)
-                  (format nil "~S" (output-translations-form))
-                  (let ((lock (fasl-lock-form)))
-                    (when lock (format nil "~S" lock)))
-                  (format nil "(asdf:initialize-source-registry '~S)"
-                          (namestrings asdf/source-registry:*source-registry-parameter*))
-                  (when extras
-                    (format nil "(dolist (s '~S) (asdf:load-system s))" extras))
-                  (when pre-test-file
-                    (format nil "(load ~S)" (uiop:native-namestring pre-test-file)))
-                  (format nil "(asdf:load-system ~S)" name)
-                  (format nil "(asdf:test-system ~S)" name)))))
+   lock (FASL-LOCK-FORM) is in place before anything compiles (#162).
+   Printed portably (WITH-PORTABLE-PRINT-SYNTAX, #190)."
+  (with-portable-print-syntax
+      (remove nil
+              (list (asdf-require-form)
+                    (format nil "~S" (output-translations-form))
+                    (let ((lock (fasl-lock-form)))
+                      (when lock (format nil "~S" lock)))
+                    (format nil "(asdf:initialize-source-registry '~S)"
+                            (namestrings asdf/source-registry:*source-registry-parameter*))
+                    (when extras
+                      (format nil "(dolist (s '~S) (asdf:load-system s))" extras))
+                    (when pre-test-file
+                      (format nil "(load ~S)" (uiop:native-namestring pre-test-file)))
+                    (format nil "(asdf:load-system ~S)" name)
+                    (format nil "(asdf:test-system ~S)" name)))))
 
 (defun run-test-image (command name extras pre-test-file)
   (msg "~&; cl-repo: testing ~a in a fresh image~%" name)
@@ -1111,14 +1124,15 @@ install tree, since the project's .asd is read in this image."
 (defun run-startup-form (directory)
   "The form `cl-repo run` starts a lisp with: load ASDF, take cl-repo's fasl
    root (OUTPUT-TRANSLATIONS-FORM) and its fasl lock (FASL-LOCK-FORM, #162),
-   and the project's source registry."
-  (with-standard-io-syntax
-    (format nil "(progn (require \"asdf\") ~s ~s (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s))"
-            (output-translations-form)
-            (fasl-lock-form)
-            (namestrings (source-registry-form (project-registry-directories directory)
-                                               :locked (locked-versions directory)
-                                               :extra (explicit-source-registry-entries))))))
+   and the project's source registry. Printed so that any Lisp reads it
+   (WITH-PORTABLE-PRINT-SYNTAX): ECL, CCL and ABCL could not (#190, #203)."
+  (with-portable-print-syntax
+      (format nil "(progn (require \"asdf\") ~s ~s (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s))"
+              (output-translations-form)
+              (fasl-lock-form)
+              (namestrings (source-registry-form (project-registry-directories directory)
+                                                 :locked (locked-versions directory)
+                                                 :extra (explicit-source-registry-entries))))))
 
 (defun cmd-run (argv &key (directory (uiop:getcwd)) system overlay)
   "Sync (SYSTEM, else every project system), then exec ARGV. A lisp

@@ -432,6 +432,60 @@
       (asdf:clear-system "cl-repo-lc-demo")
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))
 
+(deftest issue-196-a-locked-copy-below-a-floor-gives-way-to-the-installed-one
+  "cl-repository#196: the client image runs http-protocol (quri), the stale
+   cl-repo.lock holds 0.4.4, and a package the re-resolve installs needs
+   (:version \"http-protocol\" \"0.4.5\"), which is installed too. The walk
+   counted the loaded copy plus the installed 0.4.5 as satisfied, but the
+   registry still preferred the locked 0.4.4: the lock was rewritten with it
+   and the fresh image's ASDF refused to load. Satisfied now means the copy
+   the registry gives a fresh image is at the floor, and the lock follows.
+   The loaded copy is pinned, as in a sync (WITH-LOADED-SYSTEMS-PINNED)."
+  (let* ((tmp (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-196-~36r/" (uiop:temporary-directory)
+                       (random (expt 36 6) (make-random-state t)))))
+         (root (merge-pathnames "systems/" tmp))
+         (client (merge-pathnames "client/" tmp))
+         (name "cl-repo-lf-demo")
+         (saved asdf/source-registry:*source-registry-parameter*)
+         (cl-repository-client/installer::*systems-root* root)
+         (cl-repository-client/asdf-integration:*locked-versions* (list (cons name "0.4.4"))))
+    (flet ((write-asd (dir version)
+             (ensure-directories-exist dir)
+             (with-open-file (o (merge-pathnames (format nil "~a.asd" name) dir)
+                                :direction :output :if-exists :supersede)
+               (format o "(defsystem ~s :version ~s)~%" name version)))
+           (fresh-image-version ()
+             (cl-repository-client/dep-satisfy:registry-copy-version
+              name (asdf:registered-system name))))
+      (write-asd (merge-pathnames "cl-repo-lf-demo/0.4.4/" root) "0.4.4")
+      (write-asd (merge-pathnames "cl-repo-lf-demo/0.4.5/" root) "0.4.5")
+      (write-asd client "0.4.5")
+      (unwind-protect
+          (progn
+            (let ((*standard-output* (make-broadcast-stream)))
+              (asdf:load-asd (merge-pathnames "cl-repo-lf-demo.asd" client))
+              (asdf:load-system name))
+            (cl-oci-client/pin:with-loaded-systems-pinned (:warn-shadowing nil)
+              (asdf:initialize-source-registry
+               `(:source-registry
+                 ,@(cl-repository-client/asdf-integration:preferred-install-trees
+                    root cl-repository-client/asdf-integration:*locked-versions*)
+                 (:tree ,(namestring root))
+                 :ignore-inherited-configuration))
+              (ok (equal "0.4.4" (fresh-image-version)) "the lock pins 0.4.4 at first")
+              (ok (cl-repository-client/quickload::satisfied-or-definer name "0.4.5")
+                  "satisfied: 0.4.5 is installed")
+              (ok (equal "0.4.5" (fresh-image-version)) "a fresh image now gets 0.4.5")
+              (ok (equal "0.4.5" (cdr (assoc name cl-repository-client/asdf-integration:*locked-versions*
+                                             :test #'string=)))
+                  "the lock written next holds 0.4.5")
+              (ok (not (cl-repository-client/quickload::satisfied-or-definer name "0.5.0"))
+                  "nothing installed at 0.5.0: not satisfied")))
+        (asdf:clear-system name)
+        (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+        (uiop:delete-directory-tree tmp :validate t :if-does-not-exist :ignore)))))
+
 (deftest test-collect-missing-takes-the-strongest-minimum
   "cl-repository#100: ai-agent-protocol needs conversation-protocol 0.3.0, its
    /tests 0.4.0. The walk checked the first (:version ...) it met, found the

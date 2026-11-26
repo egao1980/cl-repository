@@ -408,15 +408,34 @@
               (and (stringp v) (not (version< v (princ-to-string minimum))))))
           (ignore-errors (uiop:subdirectories dir)))))
 
+(defun registry-copy-at-least-p (name minimum)
+  "True when the copy of NAME the source registry gives a fresh image is at
+   MINIMUM or later, or is the loaded one, or has no literal :version. A
+   cl-repo.lock entry below MINIMUM keeps an older installed copy first; then
+   the newest installed version replaces it in the preferences
+   (PREFER-INSTALLED-VERSION) and the registry is scanned again, so the fresh
+   image and the lock written next get that one (#196)."
+  (flet ((at-least-p ()
+           (let* ((sys (asdf:registered-system name))
+                  (have (and sys (cl-repository-client/dep-satisfy:registry-copy-version name sys))))
+             (or (null have) (not (version< have (princ-to-string minimum)))))))
+    (or (at-least-p)
+        (let ((package (asdf:primary-system-name name)))
+          (prefer-installed-version package (installed-system-version package))
+          (configure-asdf-source-registry)
+          (at-least-p)))))
+
 (defun loaded-copy-satisfied-p (name minimum)
   "NAME is loaded in this image (the client runs it: event-protocol under the
    async backend) at a version below MINIMUM, but a new enough one is installed.
    FIND-SYSTEM answers with the loaded copy, so without this the walk asked for
    it again after installing it and failed (not in the registry). The project
-   is built in a fresh image, which finds the installed one."
+   is built in a fresh image, which must find the installed one: a lock entry
+   below MINIMUM gives way to it (REGISTRY-COPY-AT-LEAST-P, #196)."
   (and minimum
        (asdf:component-loaded-p name)
-       (installed-satisfies-p name minimum)))
+       (installed-satisfies-p name minimum)
+       (registry-copy-at-least-p name minimum)))
 
 (defun published-versions (package)
   "The version tags the registries publish of PACKAGE, cached for the
