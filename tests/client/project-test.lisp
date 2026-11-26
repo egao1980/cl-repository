@@ -693,7 +693,9 @@
   (let ((lock (cl-repository-client/asdf-integration:fasl-lock-form))
         (forms (cl-repository-client/project::test-image-forms "x" nil nil)))
     (ok lock "this client has roswell/fasl-lock.lisp")
-    (let ((at (position (with-standard-io-syntax (format nil "~S" lock)) forms :test #'equal))
+    (let ((at (position (cl-repository-client/project::with-portable-print-syntax
+                            (format nil "~S" lock))
+                        forms :test #'equal))
           (registry (position-if (lambda (f)
                                    (search "initialize-source-registry" f :test #'char-equal))
                                  forms)))
@@ -707,6 +709,98 @@
           (ok (search "CL-REPO-FASL-LOCK" (cl-repository-client/project::run-startup-form dir))
               "run startup form")
         (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))))
+
+(defun %probe-project ()
+  "A temp project directory with one system, cl-repo-190-probe. → the directory."
+  (let ((dir (uiop:ensure-directory-pathname
+              (format nil "~a/cl-repo-190-~36r/" (uiop:temporary-directory)
+                      (random (expt 36 6) (make-random-state t))))))
+    (ensure-directories-exist dir)
+    (with-open-file (o (merge-pathnames "cl-repo-190-probe.asd" dir)
+                       :direction :output :if-exists :supersede)
+      (write-line "(defsystem \"cl-repo-190-probe\" :version \"0.0.1\")" o))
+    dir))
+
+(deftest issue-190-startup-forms-have-no-sbcl-only-syntax
+  "cl-repository#190, #203: the startup form of `cl-repo run` and the test
+   image's forms were printed readably, so SBCL wrote each base-string (every
+   namestring) as #A((n) BASE-CHAR . \"…\"), which ECL, CCL and ABCL cannot
+   read. They print strings as \"…\" now, and read back to the same form."
+  (let ((dir (%probe-project)))
+    (unwind-protect
+        (let ((run (cl-repository-client/project::run-startup-form dir))
+              (image (cl-repository-client/project::test-image-forms "x" nil nil)))
+          (ok (not (search "#A" run)) "run startup form: no #A")
+          (ok (every (lambda (f) (not (search "#A" f))) image) "test image forms: no #A")
+          (ok (search "fasl-lock.lisp\"" run) "the fasl lock path is a plain string")
+          (ok (search (format nil "~s" (namestring dir)) run)
+              "the project tree is a plain string")
+          (ok (with-standard-io-syntax
+                  (let ((*read-eval* nil))
+                    (consp (read-from-string run))))
+              "reads back under standard syntax"))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))
+  (let ((base (coerce "/a \"b\"\\c/" 'simple-base-string)))
+    (ok (equal "\"/a \\\"b\\\"\\\\c/\""
+               (cl-repository-client/project::with-portable-print-syntax
+                   (format nil "~s" base)))
+        "a base-string prints as an escaped string literal")))
+
+(defun %run-startup-probe (program rest)
+  "Run PROGRAM with the startup form of `cl-repo run` for a probe project, as
+   LISP-STARTUP builds it, then REST (the user's options, which print the
+   probe line). → its output, stdout and stderr together."
+  (let ((dir (%probe-project)))
+    (unwind-protect
+        (uiop:run-program (cons program
+                                (cl-repository-client/project::lisp-startup
+                                 program (cl-repository-client/project::run-startup-form dir)
+                                 rest))
+                          :output :string :error-output :output :input nil
+                          :ignore-error-status t)
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(defparameter *probe-form*
+  "(progn (format t \"~&CLREPO-190 ~a ~a~%\" (lisp-implementation-type) (if (asdf:find-system \"cl-repo-190-probe\" nil) \"found\" \"missing\")) (finish-output) (uiop:quit 0))"
+  "The user's form in the cross-implementation probes: it runs after the
+   startup form, so ASDF and the project registry are there.")
+
+(defun %ros-has-impl-p (impl)
+  "True when Roswell is on PATH and has IMPL (ccl-bin, abcl-bin) installed."
+  (let ((out (ignore-errors
+               (uiop:run-program '("ros" "list" "installed") :output :string
+                                                             :error-output nil
+                                                             :ignore-error-status t))))
+    (and out (search (format nil "~a/" impl) out))))
+
+#-windows
+(deftest issue-190-203-other-lisps-read-the-startup-form
+  "cl-repository#190 (`cl-repo run -- ecl`) and #203 (`cl-repo ros -L
+   ccl-bin` / `-L abcl-bin`): each Lisp found here reads and runs the startup
+   form an SBCL client writes, and then finds the project's system. A Lisp
+   that is not installed is skipped."
+  (flet ((on-path-p (program)
+           (zerop (nth-value 2 (uiop:run-program (list "sh" "-c" (format nil "command -v ~a" program))
+                                                 :output nil :error-output nil
+                                                 :ignore-error-status t))))
+         (check (label program rest)
+           (let* ((out (%run-startup-probe program rest))
+                  (at (search "CLREPO-190" out))
+                  (line (and at (subseq out at (or (position #\Newline out :start at)
+                                                   (length out))))))
+             (ok (and line (search " found" line))
+                 (format nil "~a runs the startup form and finds the project (~a)"
+                         label (or line (subseq out (max 0 (- (length out) 600)))))))))
+    (if (on-path-p "ecl")
+        (check "ecl" "ecl" (list "-eval" *probe-form*))
+        (skip "ecl: not on PATH"))
+    (if (on-path-p "abcl")
+        (check "abcl" "abcl" (list "--noinform" "--eval" *probe-form*))
+        (skip "abcl: not on PATH"))
+    (dolist (impl '("ccl-bin" "abcl-bin"))
+      (if (%ros-has-impl-p impl)
+          (check (format nil "ros -L ~a" impl) "ros" (list "-L" impl "-e" *probe-form* "-q"))
+          (skip (format nil "ros -L ~a: not installed" impl))))))
 
 #+(and sbcl (not win32))
 (deftest a-fasl-lock-holds-off-another-image
