@@ -661,6 +661,81 @@
       (asdf:clear-system "cl-rc-demo")
       (asdf:initialize-source-registry saved)
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(deftest issue-180-a-bundled-copy-gives-way-to-the-projects-with-its-secondaries
+  "cl-repository#180: the client image runs encoding-protocol 0.3.0 from its
+   own tree, pinned for the sync. The project needs
+   (:version \"encoding-protocol\" \"0.4.0\") and encoding-protocol/cjk, new
+   in 0.4.0, which the install tree holds and the registry gives a fresh
+   image. The walk asked ASDF, which answered from the pinned 0.3.0: no
+   /cjk, and the lookup reloaded 0.3.0's .asd, so the primary stopped being
+   loaded and failed too (\"0.4.0 is installed but below the required
+   0.4.0\"). The registry's copy decides now, its secondary systems and their
+   dependencies included, and the running copy is left alone."
+  (let* ((tmp (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-180-~36r/" (uiop:temporary-directory)
+                       (random (expt 36 6) (make-random-state t)))))
+         (own (merge-pathnames "own/" tmp))
+         (root (merge-pathnames "systems/" tmp))
+         (project (merge-pathnames "project/" tmp))
+         (saved asdf/source-registry:*source-registry-parameter*)
+         (cl-repository-client/installer::*systems-root* root)
+         (cl-repository-client/asdf-integration:*locked-versions* nil)
+         (names '("cl-bs-root" "cl-bs-demo" "cl-bs-demo/cjk" "cl-bs-new")))
+    (flet ((write-file (path text)
+             (ensure-directories-exist path)
+             (with-open-file (out path :direction :output :if-exists :supersede)
+               (write-string text out)))
+           (use-registry (&rest trees)
+             (asdf:initialize-source-registry
+              `(:source-registry ,@(mapcar (lambda (d) (list :tree (namestring d))) trees)
+                :ignore-inherited-configuration))))
+      (write-file (merge-pathnames "cl-bs-demo.asd" own)
+                  "(defsystem \"cl-bs-demo\" :version \"0.3.0\")")
+      (write-file (merge-pathnames "cl-bs-demo/0.4.0/cl-bs-demo.asd" root)
+                  "(defsystem \"cl-bs-demo\" :version \"0.4.0\")
+(defsystem \"cl-bs-demo/cjk\" :depends-on (\"cl-bs-demo\" \"cl-bs-new\"))")
+      (write-file (merge-pathnames "cl-bs-root.asd" project)
+                  "(defsystem \"cl-bs-root\"
+  :depends-on ((:version \"cl-bs-demo\" \"0.4.0\") \"cl-bs-demo/cjk\"))")
+      (unwind-protect
+          (let ((asdf/session:*asdf-session* nil))
+            (use-registry own)
+            (let ((*standard-output* (make-broadcast-stream)))
+              (asdf:load-system "cl-bs-demo"))
+            (use-registry project root own)
+            (let ((cl-oci-client/pin::*pinned* nil))
+              (cl-oci-client/pin:with-loaded-systems-pinned (:except (list project)
+                                                             :warn-shadowing nil)
+                (ok (equal "0.3.0" (asdf:component-version (asdf:find-system "cl-bs-demo")))
+                    "this image answers with its own copy")
+                (ok (cl-repository-client/dep-satisfy:system-satisfied-p "cl-bs-demo" "0.4.0")
+                    "the registry's 0.4.0 meets the floor")
+                (ok (cl-repository-client/dep-satisfy:system-satisfied-p "cl-bs-demo/cjk")
+                    "the secondary the bundled copy lacks is found in the registry's copy")
+                (ok (equal '("cl-bs-new") (collect-missing-asdf-deps '("cl-bs-root")))
+                    "only the secondary's own new dependency is missing")
+                (ok (asdf:component-loaded-p "cl-bs-demo")
+                    "the running copy is still loaded: its .asd was not read again")
+                (write-file (merge-pathnames "cl-bs-new/0.1.0/cl-bs-new.asd" root)
+                            "(defsystem \"cl-bs-new\" :version \"0.1.0\")")
+                (use-registry project root own)
+                (asdf:clear-system "cl-bs-new")
+                (ok (null (collect-missing-asdf-deps '("cl-bs-root")))
+                    "satisfied once it is installed")
+                (use-registry project own)
+                (ng (cl-repository-client/dep-satisfy:system-satisfied-p "cl-bs-demo/cjk")
+                    "without the install on the registry the bundled copy decides")
+                (let ((message (cl-repository-client/quickload::still-missing-message
+                                '("cl-bs-demo") '(("cl-bs-demo" . "0.4.0")))))
+                  (ok (search "ASDF resolves cl-bs-demo to" message) message)
+                  (ok (search "(0.3.0)" message) message)
+                  (ng (search "below the required" message) message))))
+            (ok (equal "0.3.0" (asdf:component-version (asdf:registered-system "cl-bs-demo")))
+                "the client's copy stays registered"))
+        (dolist (s names) (asdf:clear-system s))
+        (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+        (uiop:delete-directory-tree tmp :validate t :if-does-not-exist :ignore)))))
 ;;; #120 / #132: a registry that fails to answer is not one without the package.
 ;;; A fake transport (an http-protocol backend scripted per URL) stands in for
 ;;; ghcr.io.
