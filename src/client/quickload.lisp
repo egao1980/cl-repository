@@ -510,36 +510,48 @@
    .asd is not in the version directory was not produced by the install (a
    provides link sent it elsewhere, #124). With nothing installed, it is not
    in the registry, unless the registry has it below MINIMUM: then that is
-   what it says, with the published versions (#165)."
+   what it says, with the published versions (#165). An install that meets
+   MINIMUM, or defines TARGET, while the check still fails names the copy
+   ASDF resolves instead (RESOLVED-COPY): \"0.4.0 is installed but below the
+   required 0.4.0\" reported the install and hid that copy (#180)."
   (let* ((primary (asdf:primary-system-name target))
          (version (installed-system-version primary))
          (dir (when version
                 (ignore-errors
                   (truename (merge-pathnames (format nil "~a/~a/" primary version)
                                              (systems-root)))))))
-    (cond
-      ((and (null dir) minimum)
-       (let ((published (handler-case (sort (copy-list (published-versions primary)) #'version<)
-                          (system-lookup-error (e) e))))
-         (cond
-           ((typep published 'condition)
-            (format nil "system ~a ~a or later is not installed, and the registry could not ~
-                         be asked for its versions (~a)" target minimum published))
-           (published
-            (format nil "~a ~a or later is required; the registry has ~a (published versions: ~{~a~^, ~})"
-                    target minimum (car (last published)) published))
-           (t (format nil "system ~a is not in the registry" target)))))
-      ((null dir)
-       (format nil "system ~a is not in the registry" target))
-      ((not (probe-file (merge-pathnames (format nil "~a.asd" primary) dir)))
-       (format nil "the install of ~a ~a did not produce ~a.asd (in ~a)"
-               primary version primary (uiop:native-namestring dir)))
-      (minimum
-       (format nil "system ~a ~a is installed (~a) but below the required ~a"
-               target version (uiop:native-namestring dir) minimum))
-      (t
-       (format nil "system ~a is installed (~a) but ASDF does not find it"
-               target (uiop:native-namestring dir))))))
+    (flet ((resolved-elsewhere (what)
+             (multiple-value-bind (file resolved) (cl-repository-client/dep-satisfy:resolved-copy target)
+               (if (and file (not (uiop:subpathp (uiop:truename* file) dir)))
+                   (format nil "system ~a ~a is installed (~a) and ~a, but ASDF resolves ~a to ~a~@[ (~a)~]"
+                           primary version (uiop:native-namestring dir) what
+                           primary (uiop:native-namestring file) resolved)
+                   (format nil "system ~a ~a is installed (~a) and ~a, but ASDF does not find ~a"
+                           primary version (uiop:native-namestring dir) what target)))))
+      (cond
+        ((and (null dir) minimum)
+         (let ((published (handler-case (sort (copy-list (published-versions primary)) #'version<)
+                            (system-lookup-error (e) e))))
+           (cond
+             ((typep published 'condition)
+              (format nil "system ~a ~a or later is not installed, and the registry could not ~
+                           be asked for its versions (~a)" target minimum published))
+             (published
+              (format nil "~a ~a or later is required; the registry has ~a (published versions: ~{~a~^, ~})"
+                      target minimum (car (last published)) published))
+             (t (format nil "system ~a is not in the registry" target)))))
+        ((null dir)
+         (format nil "system ~a is not in the registry" target))
+        ((not (probe-file (merge-pathnames (format nil "~a.asd" primary) dir)))
+         (format nil "the install of ~a ~a did not produce ~a.asd (in ~a)"
+                 primary version primary (uiop:native-namestring dir)))
+        ((and minimum (tag-older-than-p version minimum))
+         (format nil "system ~a ~a is installed (~a) but below the required ~a"
+                 target version (uiop:native-namestring dir) minimum))
+        (minimum
+         (resolved-elsewhere (format nil "meets the required ~a for ~a" minimum target)))
+        (t
+         (resolved-elsewhere (format nil "is where ~a should come from" target)))))))
 
 (define-condition unsatisfied-dependencies (error)
   ((systems :initarg :systems :reader unsatisfied-dependencies-systems
@@ -606,33 +618,45 @@
              nil))))))
 
 (defun asd-literal-dep-specs (file name)
-  "(name . minimum) specs of system NAME's literal :DEPENDS-ON in FILE, read
-   without evaluating anything. Second value NIL when no DEFSYSTEM form for
-   NAME could be read."
-  (let ((form (asd-defsystem-form file name)))
-    (if (and form (listp (getf (cddr form) :depends-on)))
-        (values (loop for dep in (getf (cddr form) :depends-on)
+  "(name . minimum) specs of system NAME's literal :DEPENDS-ON and
+   :DEFSYSTEM-DEPENDS-ON in FILE, read without evaluating anything. Second
+   value NIL when no DEFSYSTEM form for NAME could be read, or its
+   :DEPENDS-ON is not a literal list."
+  (let* ((form (asd-defsystem-form file name))
+         (options (and form (cddr form))))
+    (if (and form
+             (listp (getf options :depends-on))
+             (listp (getf options :defsystem-depends-on)))
+        (values (loop for dep in (append (getf options :defsystem-depends-on)
+                                         (getf options :depends-on))
                       for (dep-name minimum) = (multiple-value-list (asdf-dep-spec dep))
                       when dep-name collect (cons dep-name minimum))
                 t)
         (values nil nil))))
 
 (defun shadowed-installed-dep-specs (name)
-  "When this image runs NAME and a newer NAME is installed, the dep specs of
-   the installed copy: the project is tested in a fresh image, which loads
-   that one, so its new dependencies must be installed too (#129). ASDF
-   answers for NAME with the loaded copy, whose :depends-on are older.
+  "When this image runs NAME and the project's fresh image gets another copy,
+   the dep specs of that copy: the project is tested in a fresh image, which
+   loads it, so its dependencies must be installed too (#129). ASDF answers
+   for NAME with the loaded copy, whose :depends-on are older.
+   The copy is the one the source registry gives NAME's pinned primary
+   (SHADOWED-REGISTRY-ASD), a secondary system included (#180); outside a
+   pin scope, the newest installed copy when it is newer than the loaded one.
    Second value NIL when the loaded copy is what the project gets."
   (let* ((n (string-downcase (string name)))
-         (sys (and (asdf:component-loaded-p n) (asdf:registered-system n)))
-         (loaded (and sys (ignore-errors (asdf:component-version sys))))
-         (have (and loaded (installed-system-version (asdf:primary-system-name n))))
-         (file (and have
-                    (version< (princ-to-string loaded) (princ-to-string have))
-                    (installed-asd-file n))))
-    (if file
-        (asd-literal-dep-specs file n)
-        (values nil nil))))
+         (shadowing (cl-repository-client/dep-satisfy:shadowed-registry-asd n)))
+    (multiple-value-bind (specs found) (and shadowing (asd-literal-dep-specs shadowing n))
+      (when found
+        (return-from shadowed-installed-dep-specs (values specs t))))
+    (let* ((sys (and (asdf:component-loaded-p n) (asdf:registered-system n)))
+           (loaded (and sys (ignore-errors (asdf:component-version sys))))
+           (have (and loaded (installed-system-version (asdf:primary-system-name n))))
+           (file (and have
+                      (version< (princ-to-string loaded) (princ-to-string have))
+                      (installed-asd-file n))))
+      (if file
+          (asd-literal-dep-specs file n)
+          (values nil nil)))))
 
 (defun collect-missing-asdf-deps (local-roots &optional extras)
   "Walk ASDF :depends-on from LOCAL-ROOTS. Return names that are not satisfied.
