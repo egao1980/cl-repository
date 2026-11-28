@@ -315,7 +315,7 @@ jobs:
           FASL: ${{ steps.dep-cache.outputs.fasl }}
         run: |
           echo "key=${KEY} fasl=${FASL} XDG_CACHE_HOME=${XDG_CACHE_HOME:-}"
-          [[ "${KEY}" =~ ^${RUNNER_OS}-${RUNNER_ARCH}-cl-deps-v1-sbcl-client-${CL_REPOSITORY_CLIENT_VERSION}-[0-9]{8}-[0-9a-f]{16}$ ]] \
+          [[ "${KEY}" =~ ^${RUNNER_OS}-${RUNNER_ARCH}-cl-deps-v1-sbcl-client-${CL_REPOSITORY_CLIENT_VERSION}-image-[0-9A-Za-z-]+-[0-9]{8}-[0-9a-f]{16}$ ]] \
             || { echo "unexpected dep-cache key"; exit 1; }
           [[ -n "${XDG_CACHE_HOME:-}" && "${FASL}" == "${XDG_CACHE_HOME}/common-lisp" ]] \
             || { echo "XDG_CACHE_HOME not exported"; exit 1; }

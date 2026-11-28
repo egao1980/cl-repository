@@ -98,8 +98,14 @@ if [[ "${ros_home}" != "${CI_HOME}/.roswell" && ! -e "${CI_HOME}/.roswell" ]]; t
   ln -sfn "${ros_home}" "${CI_HOME}/.roswell"
 fi
 
+# A new value per image build: dep-cache keys include it, so a rebuilt image
+# never restores fasls compiled against the previous image's client tree
+# (cl-repository#217: a poisoned cffi fasl survived the rebuild that fixed it).
+image_build="$(date -u +%Y%m%dT%H%M%SZ)-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+
 cat > "${CI_HOME}/image.env" <<EOF
 CL_CI_IMAGE=1
+CL_CI_IMAGE_BUILD=${image_build}
 CL_CI_SBCL_VERSION=${SBCL_VERSION}
 CL_CI_ROSWELL_VERSION=${ROSWELL_VERSION}
 CL_CI_ROSWELL_DIR=${ros_home}
