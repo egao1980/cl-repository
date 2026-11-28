@@ -126,7 +126,23 @@
                            (uiop:subpathp found-true root-true)
                            (not (uiop:subpathp found-true sys-dir))
                            (own-install-file name sys-dir locked))
-            when own collect (cons name (namestring own))))))
+            when (and own (not (redundant-copy-p found-true own)))
+              collect (cons name (namestring own))))))
+
+(defun %file-octets (file)
+  (with-open-file (in file :element-type '(unsigned-byte 8))
+    (let ((v (make-array (file-length in) :element-type '(unsigned-byte 8))))
+      (read-sequence v in)
+      v)))
+
+(defun redundant-copy-p (found own)
+  "True when loading FOUND instead of OWN changes nothing: the .asd files are
+   byte-identical and OWN's install has no native/ overlay (natives install
+   into the system's own directory, not into the bundles). Such entries are
+   dropped from *OWN-COPIES*, which a fresh image gets on its command line
+   (#212: ~500 installs made it ~12 KB, a third of Windows' limit)."
+  (and (not (probe-file (merge-pathnames "native/" (uiop:pathname-directory-pathname own))))
+       (equalp (%file-octets found) (%file-octets own))))
 
 (defvar *own-copies* '()
   "OWN-INSTALL-COPIES of the current source registry (REFRESH-OWN-COPIES).")
