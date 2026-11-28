@@ -198,7 +198,8 @@
   (asdf:initialize-source-registry
    (source-registry-form (project-registry-directories directory)
                          :locked cl-repository-client/asdf-integration:*locked-versions*
-                         :extra (explicit-source-registry-entries))))
+                         :extra (explicit-source-registry-entries)))
+  (cl-repository-client/asdf-integration:refresh-own-copies))
 
 (defun top-level-asds (directory)
   (directory (merge-pathnames "*.asd" (uiop:ensure-directory-pathname directory))))
@@ -1005,6 +1006,7 @@ install tree, since the project's .asd is read in this image."
                       (when lock (format nil "~S" lock)))
                     (format nil "(asdf:initialize-source-registry '~S)"
                             (namestrings asdf/source-registry:*source-registry-parameter*))
+                    (cl-repository-client/asdf-integration:own-copies-form)
                     (when extras
                       (format nil "(dolist (s '~S) (asdf:load-system s))" extras))
                     (when pre-test-file
@@ -1127,12 +1129,14 @@ install tree, since the project's .asd is read in this image."
    and the project's source registry. Printed so that any Lisp reads it
    (WITH-PORTABLE-PRINT-SYNTAX): ECL, CCL and ABCL could not (#190, #203)."
   (with-portable-print-syntax
-      (format nil "(progn (require \"asdf\") ~s ~s (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s))"
+      (format nil "(progn (require \"asdf\") ~s ~s (funcall (find-symbol \"INITIALIZE-SOURCE-REGISTRY\" \"ASDF\") '~s) ~a)"
               (output-translations-form)
               (fasl-lock-form)
               (namestrings (source-registry-form (project-registry-directories directory)
                                                  :locked (locked-versions directory)
-                                                 :extra (explicit-source-registry-entries))))))
+                                                 :extra (explicit-source-registry-entries)))
+              ;; The sync before this registered the same project (#199).
+              (or (cl-repository-client/asdf-integration:own-copies-form) ""))))
 
 (defun cmd-run (argv &key (directory (uiop:getcwd)) system overlay)
   "Sync (SYSTEM, else every project system), then exec ARGV. A lisp

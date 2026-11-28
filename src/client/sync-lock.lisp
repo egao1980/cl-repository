@@ -17,6 +17,7 @@
                 #:lockfile-entry-system #:lockfile-entry-version
                 #:lockfile-entry-index-digest #:lockfile-entry-registry)
   (:import-from :cl-repository-client/protected-systems #:implementation-system-p)
+  (:import-from :cl-repository-client/asdf-integration #:registry-search)
   (:import-from :cl-repository-client/config-store #:stored-entry)
   (:import-from :cl-repository-client/digest-cache
                 #:*installed-digests* #:load-digest-cache #:record-installed-digest)
@@ -108,7 +109,7 @@
     (dolist (name names)
       (unless (implementation-system-p name)
         (multiple-value-bind (package version)
-            (installed-package (asdf/source-registry:sysdef-source-registry-search name))
+            (installed-package (registry-search name))
           (when (and package (not (assoc package packages :test #'string=)))
             (push (cons package version) packages)))))
     (sort packages #'string< :key #'car)))

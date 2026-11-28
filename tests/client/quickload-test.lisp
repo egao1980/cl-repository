@@ -887,3 +887,74 @@
       (setf (fdefinition plan-sym) orig-plan
             (fdefinition install-sym) orig-install)
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))
+
+(deftest issue-199-a-bundled-asd-does-not-shadow-the-own-install
+  "cl-repository#199: an old multi-system image (sql-backend-postgres:0.1.0)
+   carries a stale sql-protocol.asd 0.1.0. A registry entry before the
+   install tree (a preferred version tree) scans it first, so ASDF resolved
+   sql-protocol there although sql-protocol/0.2.0/ is installed. The own
+   install wins now; a system that exists only bundled still resolves to the
+   bundle, and a project checkout still shadows installed copies."
+  (let* ((tmp (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-199-~36r/" (uiop:temporary-directory)
+                       (random (expt 36 6) (make-random-state t)))))
+         (root (merge-pathnames "systems/" tmp))
+         (bundle (merge-pathnames "cl-repo-199-bundler/0.1.0/" root))
+         (own-dir (merge-pathnames "cl-repo-199-proto/0.2.0/" root))
+         (project (merge-pathnames "project/" tmp))
+         (saved asdf/source-registry:*source-registry-parameter*)
+         (cl-repository-client/installer::*systems-root* root)
+         (cl-repository-client/asdf-integration:*locked-versions* '())
+         (cl-repository-client/asdf-integration:*own-copies* '())
+         (asdf:*system-definition-search-functions* (copy-list asdf:*system-definition-search-functions*)))
+    (flet ((write-asd (dir name version)
+             (ensure-directories-exist dir)
+             (with-open-file (o (merge-pathnames (format nil "~a.asd" name) dir)
+                                :direction :output :if-exists :supersede)
+               (format o "(defsystem ~s :version ~s)~%(defsystem ~s :version ~s)~%"
+                       name version (format nil "~a/tests" name) version)))
+           (registry (&rest dirs)
+             (asdf:initialize-source-registry
+              `(:source-registry ,@(mapcar (lambda (d) (list :tree (namestring d))) dirs)
+                                 :ignore-inherited-configuration)))
+           (true (p) (and p (uiop:truename* p))))
+      (write-asd bundle "cl-repo-199-bundler" "0.1.0")
+      (write-asd bundle "cl-repo-199-proto" "0.1.0")
+      (write-asd bundle "cl-repo-199-only" "0.1.0")
+      (write-asd own-dir "cl-repo-199-proto" "0.2.0")
+      (write-asd project "cl-repo-199-proto" "0.3.0")
+      (unwind-protect
+           (let ((own (true (merge-pathnames "cl-repo-199-proto.asd" own-dir))))
+             (registry bundle root)
+             (ok (uiop:subpathp (true (asdf/source-registry:sysdef-source-registry-search
+                                       "cl-repo-199-proto"))
+                                (true bundle))
+                 "precondition: the source registry alone resolves the bundled copy")
+             (cl-repository-client/asdf-integration:refresh-own-copies root)
+             (ok (equal '("cl-repo-199-proto")
+                        (mapcar #'car cl-repository-client/asdf-integration:*own-copies*))
+                 "only the shadowed system is mapped")
+             (ok (equal own (true (cl-repository-client/asdf-integration:registry-search
+                                   "cl-repo-199-proto"))))
+             (ok (equal own (true (cl-repository-client/asdf-integration:registry-search
+                                   "cl-repo-199-proto/tests")))
+                 "a secondary system follows its primary")
+             (ok (uiop:subpathp (true (cl-repository-client/asdf-integration:registry-search
+                                       "cl-repo-199-only"))
+                                (true bundle))
+                 "a system with no own install keeps the bundled copy")
+             (asdf:clear-system "cl-repo-199-proto")
+             (ok (equal "0.2.0" (asdf:component-version (asdf:find-system "cl-repo-199-proto")))
+                 "ASDF loads the own install")
+             (let* ((form (read-from-string (cl-repository-client/asdf-integration:own-copies-form)))
+                    (asdf:*system-definition-search-functions* '()))
+               (eval form)
+               (ok (equal own (true (funcall (first asdf:*system-definition-search-functions*)
+                                             "cl-repo-199-proto/tests")))
+                   "the fresh-image form maps the same way"))
+             (registry project bundle root)
+             (ok (null (cl-repository-client/asdf-integration:refresh-own-copies root))
+                 "a project checkout still shadows installed copies"))
+        (asdf:clear-system "cl-repo-199-proto")
+        (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+        (uiop:delete-directory-tree tmp :validate t :if-does-not-exist :ignore)))))

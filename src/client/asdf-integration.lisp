@@ -4,6 +4,12 @@
   (:import-from :cl-repository-client/version-utils #:select-preferred-version)
   (:export #:configure-asdf-source-registry
            #:preferred-install-trees
+           #:own-install-copies
+           #:*own-copies*
+           #:refresh-own-copies
+           #:own-copy-search
+           #:registry-search
+           #:own-copies-form
            #:*locked-versions*
            #:load-system-init-files
            #:output-translations-form
@@ -82,6 +88,80 @@
                                    (select-preferred-version versions))))
                     (list :tree (namestring (merge-pathnames (format nil "~a/" want) sys-dir))))))
 
+;;; Bundled .asd files (#199). An image packed from a multi-system repo
+;;; carries every .asd of that repo, so an old sql-backend-postgres:0.1.0
+;;; install also holds sql-protocol.asd 0.1.0. ASDF takes the first .asd a
+;;; :tree scan meets, and a source-registry form selects directories, not
+;;; files, so no entry order can prefer sql-protocol/0.2.0/sql-protocol.asd
+;;; for one system and keep the bundled sibling .asd files for the others
+;;; (babel-tests.asd lives only in babel/). A search function before the
+;;; source registry maps exactly the systems that resolve into another
+;;; install directory back to their own install.
+
+(defun own-install-file (name sys-dir locked)
+  "NAME.asd in the version of SYS-DIR (NAME's install directory) that LOCKED
+   names, else the newest. NIL when that version has no NAME.asd."
+  (let* ((versions (mapcar #'dir-leaf (uiop:subdirectories sys-dir)))
+         (locked-version (cdr (assoc name locked :test #'string-equal)))
+         (want (if (member locked-version versions :test #'equal)
+                   locked-version
+                   (and versions (select-preferred-version versions)))))
+    (and want (probe-file (merge-pathnames (format nil "~a/~a.asd" want name) sys-dir)))))
+
+(defun own-install-copies (root &optional locked)
+  "Alist primary system name → namestring of its own installed .asd, for each
+   system under ROOT that the current source registry resolves to a .asd
+   inside another install directory. A system resolved outside ROOT (the
+   project checkout, CL_SOURCE_REGISTRY trees) is left alone: those shadow
+   installed copies on purpose."
+  (let ((root-true (uiop:truename* root)))
+    (when root-true
+      (loop for sys-dir in (uiop:subdirectories root-true)
+            for name = (dir-leaf sys-dir)
+            for found = (asdf/source-registry:sysdef-source-registry-search name)
+            for found-true = (and found (uiop:truename* found))
+            for own = (and found-true
+                           (uiop:subpathp found-true root-true)
+                           (not (uiop:subpathp found-true sys-dir))
+                           (own-install-file name sys-dir locked))
+            when own collect (cons name (namestring own))))))
+
+(defvar *own-copies* '()
+  "OWN-INSTALL-COPIES of the current source registry (REFRESH-OWN-COPIES).")
+
+(defun own-copy-search (name)
+  "ASDF search function: the own install of NAME's primary system when
+   *OWN-COPIES* has one, else NIL (the source registry decides)."
+  (let ((file (cdr (assoc (asdf:primary-system-name name) *own-copies* :test #'string=))))
+    (and file (probe-file file))))
+
+(defun registry-search (name)
+  "The .asd a fresh image with the current registry loads for NAME:
+   SYSDEF-SOURCE-REGISTRY-SEARCH with *OWN-COPIES* applied."
+  (or (own-copy-search name)
+      (asdf/source-registry:sysdef-source-registry-search name)))
+
+(defun refresh-own-copies (&optional (root (systems-root)) (locked *locked-versions*))
+  "Recompute *OWN-COPIES* for the current source registry and put
+   OWN-COPY-SEARCH first among ASDF's search functions. Call after every
+   INITIALIZE-SOURCE-REGISTRY."
+  (setf *own-copies* (and (probe-file root) (own-install-copies root locked)))
+  (setf asdf:*system-definition-search-functions*
+        (cons 'own-copy-search
+              (remove 'own-copy-search asdf:*system-definition-search-functions*)))
+  *own-copies*)
+
+(defun own-copies-form ()
+  "A form string, readable before ASDF is loaded (it names ASDF only through
+   FIND-SYMBOL), that gives a fresh image the same own-install mapping as
+   *OWN-COPIES*. NIL when there is nothing to map. Printed without
+   *PRINT-READABLY*: SBCL base-strings print as #A(...) otherwise (#190)."
+  (when *own-copies*
+    (with-standard-io-syntax
+      (let ((*print-readably* nil))
+        (format nil "(let ((s (find-symbol \"*SYSTEM-DEFINITION-SEARCH-FUNCTIONS*\" \"ASDF\")) (table (quote ~S))) (setf (symbol-value s) (cons (lambda (name) (let ((file (cdr (assoc (funcall (find-symbol \"PRIMARY-SYSTEM-NAME\" \"ASDF\") name) table :test (function string=))))) (and file (probe-file file)))) (symbol-value s))))"
+                *own-copies*)))))
+
 (defun under-root-tree-p (entry root)
   "ENTRY is a (:tree DIR) strictly inside ROOT: a preference entry."
   (and (consp entry) (eq (first entry) :tree)
@@ -127,7 +207,8 @@
                  (t
                   `(:source-registry ,@(preferred-install-trees root *locked-versions*)
                                      (:tree ,root-str) :inherit-configuration)))))
-        (asdf:initialize-source-registry new-config)))))
+        (asdf:initialize-source-registry new-config)
+        (refresh-own-copies root)))))
 
 (defun load-system-init-files ()
   "Deprecated no-op, kept for one release for callers' scripts.
