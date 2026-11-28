@@ -474,7 +474,7 @@
   (let ((found '()))
     (dolist (name names)
       (unless (implementation-system-p name)
-        (let ((file (asdf/source-registry:sysdef-source-registry-search name)))
+        (let ((file (cl-repository-client/asdf-integration:registry-search name)))
           (multiple-value-bind (package version where)
               (multiple-value-bind (package version) (installed-package file)
                 (if package

@@ -3,6 +3,7 @@
   (:import-from :cl-repository-client/version-utils #:version<)
   (:import-from :cl-repository-client/protected-systems #:implementation-system-p)
   (:import-from :cl-oci-client/pin #:pinned-system-p)
+  (:import-from :cl-repository-client/asdf-integration #:registry-search)
   (:export #:asdf-dep-spec
            #:system-direct-dep-specs
            #:quicklisp-source-p
@@ -87,7 +88,7 @@
     (when (pinned-system-p primary)
       (let* ((sys (asdf:registered-system primary))
              (own (and sys (ignore-errors (asdf:system-source-file sys))))
-             (file (ignore-errors (asdf/source-registry:sysdef-source-registry-search primary))))
+             (file (ignore-errors (registry-search primary))))
         (when (and file
                    (or (null own)
                        (not (equal (uiop:truename* file) (uiop:truename* own)))))
@@ -112,7 +113,7 @@
   (let* ((primary (asdf:primary-system-name (string-downcase (string name))))
          (sys (and (pinned-system-p primary) (asdf:registered-system primary)))
          (file (or (and sys (ignore-errors (asdf:system-source-file sys)))
-                   (ignore-errors (asdf/source-registry:sysdef-source-registry-search primary)))))
+                   (ignore-errors (registry-search primary)))))
     (values file (and file (asd-form-version file primary)))))
 
 (defun registry-copy-version (name sys)
@@ -123,7 +124,7 @@
    test` children get the installed copy (#119). NIL when the registry has
    the same file, has none, or the copy's :version is not a literal string."
   (let* ((n (string-downcase (string name)))
-         (file (ignore-errors (asdf/source-registry:sysdef-source-registry-search n)))
+         (file (ignore-errors (registry-search n)))
          (own (ignore-errors (asdf:system-source-file sys))))
     (when (and file own
                (not (equal (uiop:truename* file) (uiop:truename* own))))
