@@ -958,3 +958,43 @@
         (asdf:clear-system "cl-repo-199-proto")
         (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
         (uiop:delete-directory-tree tmp :validate t :if-does-not-exist :ignore)))))
+
+(deftest issue-212-identical-bundled-copies-are-not-mapped
+  "cl-repository#212: an entry whose bundled .asd is byte-identical to the own
+   install, with no native/ overlay there, changes nothing and only bloats a
+   fresh image's command line. Identical but with natives, or different: kept."
+  (let* ((tmp (uiop:ensure-directory-pathname
+               (format nil "~a/cl-repo-212-~36r/" (uiop:temporary-directory)
+                       (random (expt 36 6) (make-random-state t)))))
+         (root (merge-pathnames "systems/" tmp))
+         (bundle (merge-pathnames "cl-repo-212-bundler/0.1.0/" root))
+         (saved asdf/source-registry:*source-registry-parameter*)
+         (cl-repository-client/installer::*systems-root* root)
+         (cl-repository-client/asdf-integration:*locked-versions* '())
+         (cl-repository-client/asdf-integration:*own-copies* '())
+         (asdf:*system-definition-search-functions* (copy-list asdf:*system-definition-search-functions*)))
+    (flet ((write-asd (dir name version)
+             (ensure-directories-exist dir)
+             (with-open-file (o (merge-pathnames (format nil "~a.asd" name) dir)
+                                :direction :output :if-exists :supersede)
+               (format o "(defsystem ~s :version ~s)~%" name version))))
+      (write-asd bundle "cl-repo-212-bundler" "0.1.0")
+      (dolist (spec '(("cl-repo-212-same" "1.0" "1.0" nil)
+                      ("cl-repo-212-native" "1.0" "1.0" t)
+                      ("cl-repo-212-newer" "1.0" "2.0" nil)))
+        (destructuring-bind (name bundled own native) spec
+          (let ((own-dir (merge-pathnames (format nil "~a/~a/" name own) root)))
+            (write-asd bundle name bundled)
+            (write-asd own-dir name own)
+            (when native (ensure-directories-exist (merge-pathnames "native/x" own-dir))))))
+      (unwind-protect
+           (progn
+             (asdf:initialize-source-registry
+              `(:source-registry (:tree ,(namestring bundle)) (:tree ,(namestring root))
+                                 :ignore-inherited-configuration))
+             (let ((mapped (mapcar #'car (cl-repository-client/asdf-integration:refresh-own-copies root))))
+               (ok (not (member "cl-repo-212-same" mapped :test #'string=)) "identical, no natives: dropped")
+               (ok (member "cl-repo-212-native" mapped :test #'string=) "identical but natives in the own install: kept")
+               (ok (member "cl-repo-212-newer" mapped :test #'string=) "different .asd: kept")))
+        (if saved (asdf:initialize-source-registry saved) (asdf:clear-source-registry))
+        (uiop:delete-directory-tree tmp :validate t :if-does-not-exist :ignore)))))
