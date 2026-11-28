@@ -2,6 +2,8 @@
   (:use :cl)
   (:import-from :cl-repository-client/installer #:systems-root)
   (:import-from :cl-repository-client/version-utils #:select-preferred-version)
+  (:import-from :cl-repository-client/client-tree
+                #:client-tree-copies #:uninstall-client-tree-search)
   (:export #:configure-asdf-source-registry
            #:preferred-install-trees
            #:own-install-copies
@@ -141,11 +143,37 @@
   (or (own-copy-search name)
       (asdf/source-registry:sysdef-source-registry-search name)))
 
-(defun refresh-own-copies (&optional (root (systems-root)) (locked *locked-versions*))
+(defun running-client-directories ()
+  "The running client's own directories (CL_REPOSITORY_CLIENT_DIR, the
+   source directory of cl-repository-client): CLIENT-TREE-COPIES leaves what
+   they provide alone, so the client's systems stay one release."
+  (remove-duplicates
+   (remove nil
+           (list (uiop:getenv-absolute-directory "CL_REPOSITORY_CLIENT_DIR")
+                 (let ((system (asdf:registered-system "cl-repository-client")))
+                   (and system (asdf:system-source-directory system)))))
+   :test #'uiop:pathname-equal))
+
+(defun default-client-tree ()
+  "The client tree, CL_REPOSITORY_DEST (NAME-VERSION directories), or NIL."
+  (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST"))
+
+(defun refresh-own-copies (&optional (root (systems-root)) (locked *locked-versions*)
+                                     (client-tree (default-client-tree)))
   "Recompute *OWN-COPIES* for the current source registry and put
    OWN-COPY-SEARCH first among ASDF's search functions. Call after every
-   INITIALIZE-SOURCE-REGISTRY."
-  (setf *own-copies* (and (probe-file root) (own-install-copies root locked)))
+   INITIALIZE-SOURCE-REGISTRY. *OWN-COPIES* maps the install tree under ROOT
+   (OWN-INSTALL-COPIES) and the client tree CLIENT-TREE (CLIENT-TREE-COPIES,
+   newest release; cl-repository#207). The launcher's own client tree
+   mapping (INSTALL-CLIENT-TREE-SEARCH) is dropped: it was computed for the
+   launcher's registry, not this one."
+  (uninstall-client-tree-search)
+  (setf *own-copies*
+        (append (and (probe-file root) (own-install-copies root locked))
+                (and client-tree
+                     (not (uiop:pathname-equal (uiop:ensure-directory-pathname client-tree)
+                                               (uiop:ensure-directory-pathname root)))
+                     (client-tree-copies client-tree :keep (running-client-directories)))))
   (setf asdf:*system-definition-search-functions*
         (cons 'own-copy-search
               (remove 'own-copy-search asdf:*system-definition-search-functions*)))
