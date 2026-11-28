@@ -81,7 +81,9 @@ runs:
                      \( -name '*.asd' -o -name cl-repo.lock -o -name cl-repo.conf \) -type f -print0 \
                    | LC_ALL=C sort -z | xargs -0 cat 2>/dev/null || true; } \
                  | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-16)"
-        prefix="${RUNNER_OS}-${RUNNER_ARCH}-cl-deps-v1-${IMPL}-client-${CL_REPOSITORY_CLIENT_VERSION:-unknown}-${day}-"
+        # CL_CI_IMAGE_BUILD (ci-base job containers): a rebuilt image starts a new
+        # cache line, so it never restores fasls of the image before (#217).
+        prefix="${RUNNER_OS}-${RUNNER_ARCH}-cl-deps-v1-${IMPL}-client-${CL_REPOSITORY_CLIENT_VERSION:-unknown}-image-${CL_CI_IMAGE_BUILD:-none}-${day}-"
         {
           echo "prefix=${prefix}"
           echo "key=${prefix}${hash}"

@@ -44,6 +44,7 @@ if [[ -f "${CI_HOME}/ok" && -f "${CI_HOME}/image.env" ]]; then
 
   {
     printf 'CL_CI_IMAGE=1\n'
+    printf 'CL_CI_IMAGE_BUILD=%s\n' "${CL_CI_IMAGE_BUILD:-}"
     printf 'CL_REPOSITORY_CLIENT_DIR=%s\n' "${client_dir}"
     printf 'CL_REPOSITORY_CLIENT_VERSION=%s\n' "${CL_REPOSITORY_CLIENT_VERSION}"
     printf 'CL_REPOSITORY_DEST=%s\n' "${dest}"
