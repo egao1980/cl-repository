@@ -34,6 +34,23 @@ exec ros +Q -- $0 "$@"
        `(:source-registry (:also-exclude ".qlot" ".cl-repository")
                           ,@(mapcar (lambda (tree) `(:tree ,(namestring tree))) trees)
          :ignore-inherited-configuration))
+      ;; CL_REPOSITORY_DEST holds NAME-VERSION/ directories, several releases
+      ;; of one dependency after additive upgrades. ASDF alone takes the
+      ;; first .asd in path order, the oldest (cl-repository#207): map each
+      ;; such system to its newest release before the client loads. The
+      ;; client's own directory keeps what it provides. The two files are
+      ;; plain CL + ASDF, loaded as source here and compiled with the client.
+      (let ((dest (uiop:getenv-absolute-directory "CL_REPOSITORY_DEST"))
+            (client (first trees)))
+        (when (and dest (not (uiop:pathname-equal dest client)))
+          (handler-case
+              (let ((*standard-output* (make-broadcast-stream)))
+                (dolist (file '("src/client/version-utils.lisp" "src/client/client-tree.lisp"))
+                  (load (merge-pathnames file client) :verbose nil :print nil))
+                (funcall (find-symbol "INSTALL-CLIENT-TREE-SEARCH" "CL-REPOSITORY-CLIENT/CLIENT-TREE")
+                         dest :keep (list client)))
+            (error (e)
+              (format *error-output* "~&cl-repo: newest releases of ~A not preferred: ~A~%" dest e)))))
       ;; cl-repo's own fasl root, <XDG_CACHE_HOME>/common-lisp/cl-repo/<impl>/:
       ;; fasls a Quicklisp image compiled (#+quicklisp code) broke cl-repo
       ;; images through the shared cache (#121). Same form as

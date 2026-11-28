@@ -32,6 +32,7 @@
                (:file "sync-lock-test")
                (:file "registry-auth-test")
                (:file "offline-test")
+               (:file "client-tree-test")
                (:file "all"))
   :perform (test-op (o c)
             (unless (symbol-call :rove :run c)
